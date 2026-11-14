@@ -20,7 +20,7 @@
 --                       on a finished row)
 --   nudged_at           last webhook nudge (at most one per 5 s)
 --
--- story_projects.runner_ticked_at: when the cron last picked the project, so
+-- story_projects.runner_ticked_at: when the cron last ticked the project, so
 -- story_pending_projects rotates instead of always serving the oldest.
 --
 -- story_claim_jobs takes the clock as p_now (rounded to milliseconds, so the
@@ -141,10 +141,10 @@ $$;
 
 -- Distinct project ids (null = account-level jobs) with work the cron should
 -- tick: a due queued job or a running job, leaving out p_skip_kinds (worker
--- kinds, which the cron does not run). Projects the cron picked least
--- recently come first (account-level jobs first of all); the returned
--- projects are stamped with runner_ticked_at = p_now, so the next call
--- rotates to the others.
+-- kinds, which the cron does not run). Projects the cron ticked least
+-- recently come first (never ticked, and account-level jobs, first), then by
+-- oldest work. Read-only: runCron stamps story_projects.runner_ticked_at for
+-- each project it actually ticks, so the order rotates.
 create function public.story_pending_projects(
   p_now timestamptz default now(),
   p_limit integer default 200,
@@ -157,9 +157,9 @@ set search_path = public, pg_temp
 as $$
 declare
   v_now timestamptz := date_trunc('milliseconds', coalesce(p_now, now()));
-  v_ids uuid[];
 begin
-  select array_agg(t.project_id order by t.ord_ticked, t.first_at) into v_ids from (
+  return query
+  select t.project_id from (
     select w.project_id, coalesce(p.runner_ticked_at, '-infinity'::timestamptz) as ord_ticked, w.first_at
       from (
         select j.project_id, min(j.created_at) as first_at
@@ -170,12 +170,9 @@ begin
          group by j.project_id
       ) w
       left join story_projects p on p.id = w.project_id
-     order by 2, 3
-     limit greatest(coalesce(p_limit, 0), 0)
-  ) t;
-
-  update story_projects set runner_ticked_at = v_now where id = any (coalesce(v_ids, '{}'::uuid[]));
-  return query select u.id from unnest(coalesce(v_ids, '{}'::uuid[])) with ordinality as u(id, n) order by u.n;
+  ) t
+  order by t.ord_ticked, t.first_at, t.project_id
+  limit greatest(coalesce(p_limit, 0), 0);
 end;
 $$;
 

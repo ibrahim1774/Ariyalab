@@ -9,7 +9,7 @@ import { existsSync } from 'node:fs';
 import { getImage, submitImage } from '../../lib/providers/image.js';
 
 // mirrorUrl is the real mock-mode copy unless a test makes it fail or slow.
-const mirror = vi.hoisted(() => ({ fail: 0, failWith: null, calls: [], delayMs: 0, inFlight: 0, maxInFlight: 0, hang: false, before: null, deleted: [] }));
+const mirror = vi.hoisted(() => ({ fail: 0, failWith: null, calls: [], delayMs: 0, inFlight: 0, maxInFlight: 0, hang: false, before: null, deleted: [], aborted: 0 }));
 vi.mock('../../lib/providers/storage.js', async (importOriginal) => {
   const real = await importOriginal();
   return {
@@ -20,7 +20,9 @@ vi.mock('../../lib/providers/storage.js', async (importOriginal) => {
       mirror.maxInFlight = Math.max(mirror.maxInFlight, mirror.inFlight);
       try {
         if (mirror.before) await mirror.before(args);
-        if (mirror.hang) await new Promise(() => {});
+        if (mirror.hang) {
+          await new Promise((_, reject) => args.signal?.addEventListener('abort', () => { mirror.aborted += 1; reject(args.signal.reason); }));
+        }
         if (mirror.delayMs) await new Promise((r) => setTimeout(r, mirror.delayMs));
         if (mirror.fail > 0) {
           mirror.fail -= 1;
@@ -52,11 +54,18 @@ vi.mock('../../lib/credits.js', async (importOriginal) => {
       }
       return real.releaseHold(args);
     },
+    // Dev-time guard (R7): inside onDone/onFail, a handler must settle through settleJob.
+    settleHold: async (args) => {
+      const scope = globalThis.__runnerScope?.();
+      if (scope?.inHandler && !scope.inSettleJob) throw new Error('handlers must settle through settleJob');
+      return real.settleHold(args);
+    },
   };
 });
 
 const { setCreditsDb, grantCredits, holdCredits, settleHold, getBalance } = await import('../../lib/credits.js');
 const runner = await import('../../lib/story/runner.js');
+globalThis.__runnerScope = runner._handlerCallScope;
 const {
   enqueue, tick, sweep, handleProviderCallback, registerHandler, _resetHandlers, registeredKinds,
   activeJobs, callbackUrl, callbackSignature, runWorkerJob, runCron, RUNNER_CONFIG, JOB_KINDS, settleJob,
@@ -81,7 +90,8 @@ afterAll(async () => {
 let logSpy;
 let warnSpy;
 beforeEach(async () => {
-  Object.assign(mirror, { fail: 0, failWith: null, calls: [], delayMs: 0, inFlight: 0, maxInFlight: 0, hang: false, before: null, deleted: [] });
+  Object.assign(mirror, { fail: 0, failWith: null, calls: [], delayMs: 0, inFlight: 0, maxInFlight: 0, hang: false, before: null, deleted: [], aborted: 0 });
+  runner._resetConfig();
   Object.assign(credit, { releaseFail: 0, releases: [] });
   logSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -444,6 +454,19 @@ describe('submit outcomes', () => {
     expect(calls.submit).toHaveLength(1);
   });
 
+  it('an ambiguous submit is final even when it also says rate_limited (R6)', async () => {
+    const project = await newProject();
+    const err = new ProviderError('rate_limited');
+    err.ambiguous = true;
+    const { handler, calls } = fakeAsync({ submit: async () => { throw err; } });
+    registerHandler('clip', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'clip' });
+    await tick({ projectId: project.id, now: T0 });
+    await tick({ projectId: project.id, now: at(MIN) });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed' });
+    expect(calls.submit).toHaveLength(1);
+  });
+
   it('a non-rate-limit re-queue clears rate_limited_since', async () => {
     const project = await newProject();
     let n = 0;
@@ -639,6 +662,53 @@ describe('slow provider tasks', () => {
     expect(warnSpy.mock.calls.some((c) => c.join(' ').includes(job.id) && c.join(' ').includes(taskId))).toBe(true);
   });
 
+  it('a job past its cap that no tick reaches is ended by cron-style sweeps alone (R2)', async () => {
+    const project = await newProject();
+    const holdId = await withHold(project);
+    const { handler, calls } = fakeAsync();
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 20 });
+    await tick({ projectId: project.id, now: T0 });
+    const taskId = (await jobRow(job.id)).provider_task_id;
+    await sweep({ now: at(20 * MIN), deadline: Date.now() + 5_000 }); // within the grace, no time for a poll
+    expect(await jobRow(job.id)).toMatchObject({ status: 'running' });
+    expect(calls.poll.length).toBe(0);
+    await sweep({ now: at(26 * MIN), deadline: Date.now() + 15_000 }); // past cap + 10 min grace: final, no poll
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.' });
+    expect(calls.poll.length).toBe(0);
+    expect(calls.submit).toHaveLength(1);
+    expect(await held(project)).toBe(40);
+    expect(warnSpy.mock.calls.some((c) => c.join(' ').includes(job.id) && c.join(' ').includes(taskId))).toBe(true);
+    expect(RUNNER_CONFIG.capGraceMinutes).toBe(10);
+    expect(RUNNER_CONFIG.capPollTimeoutMs).toBe(8_000);
+  });
+
+  it('inside the grace, a sweep with time for it polls once more and keeps a finished result (R2)', async () => {
+    const project = await newProject();
+    let ready = false;
+    const { handler, calls } = fakeAsync({ poll: async () => (ready ? { status: 'done', url: MOCK_URLS.still, error: null } : { status: 'pending', url: null, error: null }) });
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: T0 });
+    ready = true;
+    await sweep({ now: at(20 * MIN), deadline: Date.now() + 15_000 });
+    expect((await jobRow(job.id)).status).toBe('done');
+    expect(calls.poll).toHaveLength(1);
+  });
+
+  it('a sweep poll inside the grace is cut off after its short timeout (R2)', async () => {
+    const project = await newProject();
+    runner._configure({ capPollTimeoutMs: 100 });
+    const { handler } = fakeAsync({ poll: () => new Promise(() => {}) });
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: T0 });
+    const started = Date.now();
+    await sweep({ now: at(20 * MIN), deadline: Date.now() + 15_000 });
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', lease_until: null }); // past its cap, no answer: final
+  });
+
   it('does not start a sweep poll when less time is left than the provider timeout (N9)', async () => {
     const project = await newProject();
     const { handler, calls } = fakeAsync();
@@ -720,10 +790,40 @@ describe('mirror failures', () => {
     const job = await enqueue({ projectId: project.id, kind: 'still' });
     await tick({ projectId: project.id, now: T0 });
     mirror.hang = true;
+    runner._configure({ mirrorMinMs: { image: 100, video: 100, audio: 100 } });
     const started = Date.now();
     await tick({ projectId: project.id, now: at(15), deadline: Date.now() + RUNNER_CONFIG.mirrorDeadlineMarginMs + 300 });
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(await jobRow(job.id)).toMatchObject({ status: 'running', mirror_tries: 1 });
+    expect(mirror.aborted).toBe(1); // the download itself was stopped (R5)
+    expect(mirror.inFlight).toBe(0);
+  });
+
+  it('a status-route tick (5 s left) never starts a video mirror nor counts a try; the cron mirrors it (R3)', async () => {
+    const project = await newProject();
+    const { handler, calls } = fakeAsync({ poll: doneWith(MOCK_URLS.clip) });
+    registerHandler('clip', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'clip' });
+    await tick({ projectId: project.id, now: T0, runSync: false, deadline: Date.now() + 5_000 });
+    await tick({ projectId: project.id, now: at(15), runSync: false, deadline: Date.now() + 5_000 });
+    let row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'running', mirror_tries: 0, lease_until: null });
+    expect(mirror.calls).toHaveLength(0);
+    expect(RUNNER_CONFIG.mirrorMinMs).toEqual({ video: 25_000, image: 8_000, audio: 10_000 });
+    await runCron({ now: at(16), deadline: Date.now() + 45_000 });
+    row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'done', mirror_tries: 1 });
+    expect(calls.submit).toHaveLength(1);
+  });
+
+  it('a sync result is not copied with less than its media minimum left (no 200 ms fallback) (R3)', async () => {
+    const project = await newProject();
+    runner._configure({ syncMinSeconds: { default: 0, render: 0 } });
+    registerHandler('narration', { sync: true, run: async () => ({ url: MOCK_URLS.voice }) });
+    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    await tick({ projectId: project.id, now: T0, deadline: Date.now() + 3_000 });
+    expect(mirror.calls).toHaveLength(0);
+    expect(await jobRow(job.id)).toMatchObject({ status: 'queued', attempts: 1 });
   });
 
   it('deletes our copy when the mirror finished but the job was ended meanwhile (N10)', async () => {
@@ -808,7 +908,7 @@ describe('applying results', () => {
     const holdId = await withHold(project, { grant: 100, hold: 50 });
     const { handler, calls } = fakeAsync({
       poll: doneWith(MOCK_URLS.still),
-      onDone: async (job) => { await settleJob(job, { reason: 'shot' }); throw new Error('bug after settling'); },
+      onDone: async (job) => { await settleJob(job); throw new Error('bug after settling'); },
     });
     registerHandler('still', handler);
     const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 25 });
@@ -831,12 +931,39 @@ describe('applying results', () => {
     const project = await newProject();
     const holdId = await withHold(project, { hold: 50 });
     const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 20 });
-    await settleJob(job, { reason: 'shot' });
-    await settleJob(job, { reason: 'shot' });
+    await settleJob(job);
+    await settleJob(job);
     expect(await held(project)).toBe(30);
     const { rows } = await raw.query(`select count(*)::int as n from credit_ledger where hold_id = $1 and ref = $2 and op = 'settle'`, [holdId, `job:${job.id}:settle`]);
     expect(rows[0].n).toBe(1);
-    await expect(settleJob(await enqueue({ projectId: project.id, kind: 'still' }), { reason: 'shot' })).resolves.toBeNull();
+    await expect(settleJob(await enqueue({ projectId: project.id, kind: 'still' }))).resolves.toBeNull();
+    const { rows: reasons } = await raw.query(`select reason from credit_ledger where hold_id = $1 and op = 'settle'`, [holdId]);
+    expect(reasons.map((r) => r.reason)).toEqual(['story_still']); // the reason is fixed by the runner (R7)
+  });
+
+  it('settleJob does not settle again when the job ref is already in the ledger under another reason (R7)', async () => {
+    const project = await newProject();
+    const holdId = await withHold(project, { hold: 50 });
+    const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 20 });
+    await settleHold({ holdId, amount: 20, reason: 'legacy_reason', ref: `job:${job.id}:settle` });
+    expect(await settleJob(job)).toBeNull();
+    expect(await held(project)).toBe(30);
+  });
+
+  it('a handler that calls settleHold directly inside onDone is caught by the test guard (R7)', async () => {
+    const project = await newProject();
+    const holdId = await withHold(project, { hold: 50 });
+    const { handler } = fakeAsync({
+      poll: doneWith(MOCK_URLS.still),
+      onDone: async (job) => settleHold({ holdId: job.hold_id, amount: job.cost_credits, reason: 'x', ref: 'y' }),
+    });
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 20 });
+    await tick({ projectId: project.id, now: T0 });
+    await tick({ projectId: project.id, now: at(15) });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'done', applied_at: null, apply_tries: 1 });
+    expect(logSpy.mock.calls.some((c) => c.join(' ').includes('handlers must settle through settleJob'))).toBe(true);
+    expect(await held(project)).toBe(50);
   });
 
   it('counts an apply try before running onDone, and gives up without running it when the tries are used (N5)', async () => {
@@ -1122,6 +1249,26 @@ describe('handleProviderCallback (nudge only)', () => {
     await inFlight;
   });
 
+  it('a nudge does not shorten a mirror or poll-error backoff (R7b)', async () => {
+    let mode = 'error';
+    const { project, job } = await submitted({ poll: async () => {
+      if (mode === 'error') throw new ProviderError('failed', undefined, { cause: { status: 200, code: 500, message: 'x' } });
+      return { status: 'done', url: MOCK_URLS.clip, error: null };
+    } });
+    await tick({ projectId: project.id, now: at(20) }); // poll error: next poll at +15 s
+    await tick({ projectId: project.id, now: at(35) }); // second error: next poll at +30 s
+    const before = await jobRow(job.id);
+    expect(await call(before, { now: at(40) })).toEqual({ ok: true, ignored: true });
+    expect((await jobRow(job.id)).locked_until.getTime()).toBe(before.locked_until.getTime());
+    mode = 'done';
+    mirror.fail = 1;
+    await tick({ projectId: project.id, now: at(65) }); // mirror fails: retry in 30 s
+    const backoff = await jobRow(job.id);
+    expect(backoff.mirror_tries).toBe(1);
+    expect(await call(backoff, { now: at(70) })).toEqual({ ok: true, ignored: true });
+    expect((await jobRow(job.id)).locked_until.getTime()).toBe(backoff.locked_until.getTime());
+  });
+
   it('never trusts status or url from the callback body', async () => {
     const { project, job, calls } = await submitted({ poll: doneWith(MOCK_URLS.clip) });
     await call(job, { body: kieBody(job.provider_task_id) }); // says success with an attacker URL
@@ -1175,8 +1322,8 @@ describe('handleProviderCallback (nudge only)', () => {
     await tick({ projectId: project.id, now: at(30) }); // attempt 2 submitted
     const now2 = await jobRow(job.id);
     expect(now2.attempts).toBe(2);
-    expect(await call(now2, { sig: oldSig })).toEqual({ ok: false, reason: 'unauthorized' });
-    expect(await call(now2)).toMatchObject({ ok: true, nudged: true });
+    expect(await call(now2, { sig: oldSig, now: at(31) })).toEqual({ ok: false, reason: 'unauthorized' });
+    expect(await call(now2, { now: at(31) })).toMatchObject({ ok: true, nudged: true });
   });
 
   it('ignores a callback whose task id is not the current one, with a warning naming the task', async () => {
@@ -1266,17 +1413,32 @@ describe('runCron', () => {
     expect(rows.map((r) => r.project_id).sort()).toEqual([p.id, null].sort());
   });
 
-  it('rotates: projects ticked last come after the others (N8)', async () => {
+  it('rotates: when each run only reaches one project, three runs tick P0, P1, P2 in turn (R1)', async () => {
     const ps = [await newProject(), await newProject(), await newProject()];
-    for (const p of ps) await enqueue({ projectId: p.id, kind: 'clip' });
-    const first = (await storyDb().rpc('story_pending_projects', { p_now: T0.toISOString(), p_limit: 2 })).map((r) => r.project_id);
-    expect(first).toHaveLength(2);
-    const second = (await storyDb().rpc('story_pending_projects', { p_now: at(60).toISOString(), p_limit: 2 })).map((r) => r.project_id);
-    const left = ps.map((p) => p.id).find((id) => !first.includes(id));
-    expect(second[0]).toBe(left);
-     // bookkeeping only: the projects' updated_at does not move
-    const { rows } = await raw.query(`select updated_at, created_at from story_projects where id = any($1)`, [ps.map((p) => p.id)]);
-    for (const r of rows) expect(r.updated_at.getTime()).toBe(r.created_at.getTime());
+    const owner = {};
+    let i = 0;
+    for (const p of ps) {
+      const j = await enqueue({ projectId: p.id, kind: 'still' });
+      owner[j.id] = p.id;
+      await raw.query(`update story_jobs set created_at = now() + ($2 || ' seconds')::interval where id = $1`, [j.id, String(i++)]);
+    }
+    const ticked = [];
+    registerHandler('still', {
+      submit: async (job) => { ticked.push(owner[job.id]); await new Promise((r) => setTimeout(r, 200)); return { provider: 'mock', taskId: `r-${job.id}` }; },
+      poll: async () => ({ status: 'pending', url: null, error: null }),
+    });
+    for (const t of [0, 60, 120]) await runCron({ now: at(t), deadline: Date.now() + 100 + 50, sweepMs: 50 });
+    expect(ticked).toEqual(ps.map((p) => p.id));
+    // the listing alone stamps nothing, and the stamp does not move updated_at
+    const { rows } = await raw.query(`select updated_at, created_at, runner_ticked_at from story_projects where id = any($1)`, [ps.map((p) => p.id)]);
+    for (const r of rows) {
+      expect(r.updated_at.getTime()).toBe(r.created_at.getTime());
+      expect(r.runner_ticked_at).not.toBeNull();
+    }
+    const p4 = await newProject();
+    await enqueue({ projectId: p4.id, kind: 'still' });
+    await storyDb().rpc('story_pending_projects', { p_now: at(200).toISOString(), p_limit: 10 });
+    expect((await raw.query(`select runner_ticked_at from story_projects where id = $1`, [p4.id])).rows[0].runner_ticked_at).toBeNull();
   });
 
   it('leaves out worker-kind jobs (no worker route yet) (N11)', async () => {
