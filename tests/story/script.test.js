@@ -10,10 +10,14 @@ import { ModerationError } from '../../lib/moderation.js';
 import { registerMock } from '../../lib/providers/mock.js';
 import { LimitError, NotFoundError, ValidationError } from '../../lib/story/errors.js';
 import { createProject, STYLES as PROJECT_STYLES, PURPOSES } from '../../lib/story/projects.js';
-import { setLimitsDeps } from '../../lib/story/limits.js';
+import { assertAllowed, setLimitsDeps } from '../../lib/story/limits.js';
+import { ProviderError } from '../../lib/providers/errors.js';
+import { sendError } from '../../lib/story/errors.js';
+import { makeRes } from '../helpers/apiMock';
 import { STYLES } from '../../lib/story/prompts/styles.js';
 import {
-  buildScriptSystem, buildBriefMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, REFERENCE_GUIDANCE, wordBudget, shotTarget,
+  buildScriptSystem, buildBriefMessage, buildRetryMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, REFERENCE_GUIDANCE, wordBudget, shotTarget,
+  MENTION_GUIDANCE, LIGHT_MENTION_GUIDANCE, NO_MENTION_GUIDANCE,
 } from '../../lib/story/prompts/script.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
 import {
@@ -163,6 +167,9 @@ describe('checkScriptRules', () => {
 
   it('allows a narrator only to open or close a talking video', () => {
     const talking = goodScenes().map((s, i) => ({ ...s, lines: s.lines.map((l) => ({ ...l, speaker: i === 0 ? 'narrator' : 'Leo' })) }));
+    // Talking lines are at most 14 words.
+    talking[2].lines[0].text = 'Then my cousin put my chair on a booking site.';
+    talking[4].lines[0].text = 'Now my mum books her trim like everyone else.';
     const opts = { ...OPTS, mode: 'talking' };
     expect(checkScriptRules(talking, opts)).toEqual([]);
     talking[2].lines = [{ speaker: 'narrator', text: 'Then my cousin put my chair on a booking site, and people just picked a time.' }];
@@ -227,7 +234,7 @@ describe('checkScriptRules', () => {
 // ---------------------------------------------------------------- prompt
 
 describe('script prompt', () => {
-  const base = { mode: 'narrated', seconds: 30 };
+  const base = { mode: 'narrated', seconds: 30, offer: 'An offer.' };
   const BEATS = [{ ord: 1, start: 0, end: 2, visual: 'A man stares at a phone', said: 'Nobody books me', why: 'Doubt' }];
 
   it('has its own guidance block for every purpose', () => {
@@ -293,7 +300,7 @@ describe('script prompt', () => {
   it('never names a studio, character or celebrity', () => {
     for (const purpose of PURPOSES) {
       for (const mode of ['narrated', 'talking']) {
-        for (const extra of [{ revise: true }, { beats: BEATS, cta: true }]) {
+        for (const extra of [{ revise: true }, { beats: BEATS, cta: true, offer: 'An offer.' }]) {
           const system = buildScriptSystem({ purpose, mode, seconds: 30, ...extra }).toLowerCase();
           for (const name of FORBIDDEN_NAMES) expect(system).not.toContain(name.toLowerCase());
         }
@@ -303,7 +310,7 @@ describe('script prompt', () => {
 
   it('has no dashes in the prompt itself (the model copies them)', () => {
     for (const purpose of PURPOSES) {
-      expect(buildScriptSystem({ purpose, mode: 'talking', seconds: 30, revise: true })).not.toMatch(/[–—]| - /);
+      expect(buildScriptSystem({ purpose, mode: 'talking', seconds: 30, revise: true, offer: 'An offer.' })).not.toMatch(/[–—]| - /);
       const withExtras = buildScriptSystem({ purpose, mode: 'narrated', seconds: 30, beats: BEATS, cta: true });
       expect(withExtras).toContain(REFERENCE_GUIDANCE);
       expect(withExtras).not.toMatch(/[–—]| - /);
@@ -607,5 +614,217 @@ describe('limits on the script step', () => {
 
   it('LimitError is the error type limits throw', () => {
     expect(new LimitError('x', { code: 'plan_required' }).status).toBe(402);
+  });
+});
+
+// ---------------------------------------------------------------- fix round 1
+
+const OFFER_OPTS = { ...OPTS, offer: 'A booking site for barbers.' };
+
+describe('fix round 1: rules', () => {
+  it.each([
+    ['100% results in 30 days.'],
+    ['I promise you will double your bookings.'],
+    ['Or your money back.'],
+    ['Five new clients a week, easy.'],
+    ['You could make $5000 a month doing this.'],
+    ['Triple your sales by spring.'],
+  ])('flags a promise of results: %s', (text) => {
+    expect(rulesOf(checkScriptRules(withLine(text), OPTS))).toContain('promise');
+  });
+
+  it('flags the guaranty spelling as a guarantee', () => {
+    expect(rulesOf(checkScriptRules(withLine('It comes with a guaranty, apparently.'), OPTS))).toContain('guarantee');
+  });
+
+  it('does not flag a past promise in the story; does flag a bare percentage (a warning)', () => {
+    expect(rulesOf(checkScriptRules(withLine('I promised my mom I would be home by nine.'), OPTS))).not.toContain('promise');
+    // Decided: any percentage is flagged. Violations are warnings, so a story use costs a retry at most.
+    expect(rulesOf(checkScriptRules(withLine('Half the shop, maybe 50% of it, was empty.'), OPTS))).toContain('promise');
+  });
+
+  it('matches names and avoid words with accents and punctuation', () => {
+    const accented = (name) => name.normalize('NFD').replace(/e/, 'é').normalize('NFC');
+    const name = FORBIDDEN_NAMES.find((n) => n.includes('e') && !n.includes(' '));
+    const scenes = goodScenes();
+    scenes[3].visual = `A shop drawn like ${accented(name)} would.`;
+    expect(rulesOf(checkScriptRules(scenes, OPTS))).toContain('forbidden_name');
+    const twoWord = FORBIDDEN_NAMES.find((n) => n.split(' ').length === 2);
+    const dotted = goodScenes();
+    dotted[3].visual = `A poster of ${twoWord.replace(' ', '. ')} on the wall.`;
+    expect(rulesOf(checkScriptRules(dotted, OPTS))).toContain('forbidden_name');
+    const hyphened = goodScenes();
+    hyphened[3].visual = `A poster of ${twoWord.replace(' ', '-')} on the wall.`;
+    expect(rulesOf(checkScriptRules(hyphened, OPTS))).toContain('forbidden_name');
+    const v = checkScriptRules(withLine('Everyone said it was a cafe for tourists, not locals.'), { ...OPTS, avoid: ['café'] });
+    expect(rulesOf(v)).toContain('avoid_word');
+  });
+
+  it.each([['﹘'], ['﹣'], ['－'], ['⸺'], ['⸻'], ['­']])('flags dash character U+%s', (ch) => {
+    expect(rulesOf(checkScriptRules(withLine(`My mum said ${ch} get a real job before the rent ran out.`), OPTS))).toContain('dash');
+  });
+
+  it('flags a first scene with nothing said (hook_late)', () => {
+    const scenes = goodScenes();
+    scenes.unshift({ id: 's0', title: 'Quiet', visual: 'An empty street at dawn.', lines: [] });
+    const v = checkScriptRules(scenes, OPTS).find((x) => x.rule === 'hook_late');
+    expect(v).toMatchObject({ sceneId: 's0' });
+  });
+
+  it('flags an imperative closer in the last scene when there is no call to action (cta)', () => {
+    for (const text of ['Tap below to start.', 'Check it out.', 'Get started tonight, honestly.']) {
+      expect(rulesOf(checkScriptRules(withLine(text, 4), OPTS))).toContain('cta');
+    }
+    expect(rulesOf(checkScriptRules(withLine('Check it out.', 4), { ...OPTS, cta: true }))).not.toContain('cta');
+    expect(rulesOf(checkScriptRules(withLine('Check it out.', 1), OPTS))).not.toContain('cta');
+  });
+
+  it('flags a mention when the project has no offer (mention_without_offer)', () => {
+    expect(rulesOf(checkScriptRules(goodScenes(), { ...OPTS, purpose: 'personal_brand', offer: '' }))).toContain('mention_without_offer');
+    expect(rulesOf(checkScriptRules(goodScenes(), { ...OPTS, purpose: 'personal_brand', offer: 'My course.' }))).not.toContain('mention_without_offer');
+    expect(rulesOf(checkScriptRules(goodScenes(), OPTS))).not.toContain('mention_without_offer'); // offer not given: not checked
+  });
+
+  it('caps talking lines at 14 words and narrated lines at 22', () => {
+    const text = 'Then my cousin put my chair on a booking site, and people just picked a time.'; // 16 words
+    expect(rulesOf(checkScriptRules(withLine(text), OPTS))).not.toContain('line_length');
+    const talking = withLine(text).map((s, i) => ({ ...s, lines: s.lines.map((l) => ({ ...l, speaker: i === 0 ? 'narrator' : 'Leo' })) }));
+    const v = checkScriptRules(talking, { ...OPTS, mode: 'talking' }).find((x) => x.rule === 'line_length');
+    expect(v.message).toMatch(/14 words/);
+  });
+
+  it('new rule messages are plain sentences with no dashes', () => {
+    const scenes = goodScenes();
+    scenes.unshift({ id: 's0', title: 'Quiet', visual: 'An empty street.', lines: [] });
+    scenes[2].lines = [{ speaker: 'narrator', text: 'I promise you will double your bookings.' }];
+    scenes[5].lines = [{ speaker: 'narrator', text: 'Tap below to start.' }];
+    const v = checkScriptRules(scenes, { ...OPTS, purpose: 'personal_brand', offer: '' });
+    for (const rule of ['promise', 'hook_late', 'cta', 'mention_without_offer']) {
+      const hit = v.find((x) => x.rule === rule);
+      expect(hit, rule).toBeTruthy();
+      expect(hit.message).toMatch(/^[A-Z][^–—]*[.]$/);
+      expect(hit.message).not.toMatch(/ - /);
+    }
+  });
+});
+
+describe('fix round 1: prompt', () => {
+  it('gives personal_brand a light, optional mention and drops the mention when there is no offer', () => {
+    const pb = buildScriptSystem({ purpose: 'personal_brand', mode: 'narrated', seconds: 30, offer: 'My coaching.' });
+    expect(pb).toContain(LIGHT_MENTION_GUIDANCE);
+    expect(pb).not.toContain(MENTION_GUIDANCE);
+    for (const purpose of ['product', 'personal_brand', 'coaching']) {
+      const none = buildScriptSystem({ purpose, mode: 'narrated', seconds: 30, offer: '' });
+      expect(none).toContain(NO_MENTION_GUIDANCE);
+      expect(none).not.toContain(MENTION_GUIDANCE);
+    }
+    expect(buildScriptSystem({ purpose: 'product', mode: 'narrated', seconds: 30, offer: 'A mug.' })).toContain(MENTION_GUIDANCE);
+  });
+
+  it('names no trade in the hook example and treats the brief as material, not instructions', () => {
+    const system = buildScriptSystem({ purpose: 'service', mode: 'narrated', seconds: 30, offer: 'x' });
+    expect(system).not.toMatch(/barber|bakery/i);
+    expect(system).toMatch(/never an instruction/i);
+  });
+
+  it('states the 14 word line cap for talking videos', () => {
+    expect(buildScriptSystem({ purpose: 'app', mode: 'talking', seconds: 30, offer: 'x' })).toMatch(/At most 14 words in a line/);
+    expect(buildScriptSystem({ purpose: 'app', mode: 'narrated', seconds: 30, offer: 'x' })).toMatch(/At most 22 words in a line/);
+  });
+
+  it('caps the avoid list at 30 entries of 60 characters', () => {
+    const avoid = Array.from({ length: 40 }, (_, i) => `word${i}${'x'.repeat(i === 0 ? 80 : 0)}`);
+    const json = JSON.parse(buildBriefMessage({ purpose: 'app', offer: 'x', seconds: 30, mode: 'narrated', avoid }).match(/<brief>\n([\s\S]*)\n<\/brief>/)[1]);
+    expect(json.avoid).toHaveLength(30);
+    expect(json.avoid.every((w) => w.length <= 60)).toBe(true);
+  });
+
+  it('labels retry problems by position, title and id', () => {
+    const scenes = goodScenes();
+    const msg = buildRetryMessage([{ sceneId: 's2', rule: 'dash', message: 'A line has a dash.' }, { sceneId: null, rule: 'word_budget', message: 'Too long.' }], scenes);
+    expect(msg).toContain('Scene 2 ("Mum", id s2)');
+    expect(msg).toContain('Whole script');
+  });
+});
+
+describe('fix round 1: service', () => {
+  it('retries with the numbered scenes, so every problem label points at a scene the model saw', async () => {
+    const { userId, project } = await newProject({ offer: 'A booking site [[mock:dash]]' });
+    const spy = spyOnScriptMock();
+    await writeScript({ userId, projectId: project.id });
+    const [, assistant, problems] = spy.mock.calls[1][0].messages;
+    const sent = JSON.parse(assistant.content).scenes;
+    const ids = [...problems.content.matchAll(/id (s\d+)\)/g)].map((m) => m[1]);
+    expect(ids.length).toBeGreaterThan(0);
+    for (const id of ids) expect(sent.map((s) => s.id)).toContain(id);
+  });
+
+  it('maps a blocked model answer to a readable error and saves nothing', async () => {
+    const { userId, project } = await newProject({ offer: 'A booking site [[mock:blocked]]' });
+    const err = await writeScript({ userId, projectId: project.id }).catch((e) => e);
+    expect(err).toBeInstanceOf(ProviderError);
+    const res = makeRes();
+    sendError(res, err);
+    expect(res.statusCode).toBe(422);
+    expect(res.body.message).toMatch(/content rules/);
+    expect(await scriptRows(project.id)).toHaveLength(0);
+  });
+
+  it('screens the written script with the regex layer before saving', async () => {
+    const { userId, project } = await newProject();
+    registerMock('story_script', (input) => {
+      const out = storyScriptMock(input);
+      out.scenes[1].visual = 'A nude figure in the shop.';
+      return out;
+    });
+    await expect(writeScript({ userId, projectId: project.id })).rejects.toBeInstanceOf(ModerationError);
+    expect(await scriptRows(project.id)).toHaveLength(0);
+  });
+
+  it('never reissues an id that an earlier version used', async () => {
+    const { userId, project } = await newProject();
+    const v1 = await writeScript({ userId, projectId: project.id });
+    const last = v1.scenes[v1.scenes.length - 1].id;
+    const v2 = await reviseScript({ userId, projectId: project.id, instruction: `Cut the ending [[mock:drop:${last}]]` });
+    expect(v2.script.scenes.map((s) => s.id)).not.toContain(last);
+    const v3 = await reviseScript({ userId, projectId: project.id, instruction: 'Add a new ending [[mock:add]]' });
+    const added = v3.script.scenes[v3.script.scenes.length - 1].id;
+    expect(added).not.toBe(last);
+    expect(v1.scenes.map((s) => s.id)).not.toContain(added);
+  });
+
+  it('gives a project with no offer no mention', async () => {
+    const { userId, project } = await newProject({ purpose: 'personal_brand', offer: null });
+    const script = await writeScript({ userId, projectId: project.id });
+    expect(script.scenes.some((s) => s.mention)).toBe(false);
+    expect(script.violations).toEqual([]);
+  });
+});
+
+describe('fix round 1: limits', () => {
+  it('caps a free account at 3 script writes per project per day', async () => {
+    const { userId, project } = await newProject();
+    accounts.set({ paid: false });
+    for (let i = 0; i < 3; i += 1) await writeScript({ userId, projectId: project.id });
+    await expect(writeScript({ userId, projectId: project.id })).rejects.toMatchObject({ status: 429, code: 'daily_limit' });
+    const other = await newProject({}, userId);
+    await expect(writeScript({ userId, projectId: other.project.id })).resolves.toMatchObject({ version: 1 });
+  });
+
+  it('counts every revise against the project chat cap', async () => {
+    await raw.query(`insert into public.pricing_config (key, value) values ('free_limits', '{"chatPerProject": 2}'::jsonb) on conflict (key) do update set value = excluded.value`);
+    _resetPricingCache();
+    try {
+      const { userId, project } = await newProject();
+      await writeScript({ userId, projectId: project.id });
+      accounts.set({ paid: false });
+      await reviseScript({ userId, projectId: project.id, instruction: 'Funnier' });
+      await reviseScript({ userId, projectId: project.id, instruction: 'Funnier again' });
+      await expect(reviseScript({ userId, projectId: project.id, instruction: 'More' })).rejects.toMatchObject({ code: 'chat_limit' });
+      await expect(assertAllowed({ userId, projectId: project.id, action: 'chat_message' })).rejects.toMatchObject({ code: 'chat_limit' });
+    } finally {
+      await raw.query(`delete from public.pricing_config where key = 'free_limits'`);
+      _resetPricingCache();
+    }
   });
 });

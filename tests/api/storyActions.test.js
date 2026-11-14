@@ -20,7 +20,10 @@ const { createProject } = await import('../../lib/story/projects.js');
 const { registerAction, getActionMethods } = await import('../../lib/story/actions.js');
 const { assertAllowed } = await import('../../lib/story/limits.js');
 const route = await import('../../pages/api/story/projects/[id]/[action].js');
-const handler = route.default;
+const scriptRoute = await import('../../pages/api/story/projects/[id]/script.js');
+const reviseRoute = await import('../../pages/api/story/projects/[id]/revise.js');
+// Next serves the static files before [action]: script and revise have their own.
+const ROUTES = { script: scriptRoute.default, revise: reviseRoute.default };
 
 useRegexOnlyModeration();
 const accounts = useTestAccounts();
@@ -51,7 +54,8 @@ beforeEach(() => {
 
 const call = async ({ id, action, method = 'POST', body = {} }) => {
   const res = makeRes();
-  await handler(makeReq({ method, body, query: { id, action } }), res);
+  const handler = ROUTES[action] || route.default;
+  await handler(makeReq({ method, body, query: ROUTES[action] ? { id } : { id, action } }), res);
   return res;
 };
 
@@ -61,8 +65,32 @@ const newProject = (userId = ALICE.id, input = {}) =>
 const scripts = (projectId) => storyDb().select('story_scripts', { project_id: projectId });
 
 describe('/api/story/projects/[id]/[action]', () => {
-  it('caps the request body', () => {
-    expect(route.config.api.bodyParser.sizeLimit).toBeTruthy();
+  it('caps the request body, and only the model routes get a long duration', () => {
+    expect(route.config.api.bodyParser.sizeLimit).toBe('64kb');
+    expect(route.config.maxDuration).toBeUndefined();
+    for (const r of [scriptRoute, reviseRoute]) {
+      expect(r.config.api.bodyParser.sizeLimit).toBe('64kb');
+      expect(r.config.maxDuration).toBe(120);
+    }
+  });
+
+  it('authenticates before resolving the action (401, not 404 or 405)', async () => {
+    currentUser = null;
+    expect((await call({ id: randomUUID(), action: 'teleport' })).statusCode).toBe(401);
+    expect((await call({ id: randomUUID(), action: 'revise', method: 'DELETE' })).statusCode).toBe(401);
+  });
+
+  it("checks project ownership before any handler runs", async () => {
+    const spy = vi.fn(async () => ({ ok: true }));
+    registerAction('test-no-check', { method: 'POST', handler: spy });
+    const bobs = await newProject(BOB.id);
+    const res = await call({ id: bobs.id, action: 'test-no-check' });
+    expect(res.statusCode).toBe(404);
+    expect((await call({ id: 'not-a-uuid', action: 'test-no-check' })).statusCode).toBe(404);
+    expect(spy).not.toHaveBeenCalled();
+    const mine = await newProject();
+    expect((await call({ id: mine.id, action: 'test-no-check' })).statusCode).toBe(200);
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ projectId: mine.id, project: expect.objectContaining({ id: mine.id }) }));
   });
 
   it('returns 401 without a session for every registered action', async () => {

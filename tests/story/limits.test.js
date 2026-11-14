@@ -111,7 +111,7 @@ describe('assertAllowed', () => {
   it('uses the session user when one is passed instead of looking the account up', async () => {
     const getUser = vi.fn();
     setLimitsDeps({ isPaidUser: async () => false, getUser });
-    await assertAllowed({ userId: randomUUID(), action: 'script_write', user: { email: 'x@example.test', email_confirmed_at: '2026-01-01T00:00:00Z' } });
+    await assertAllowed({ userId: randomUUID(), action: 'script_write', projectId: randomUUID(), user: { email: 'x@example.test', email_confirmed_at: '2026-01-01T00:00:00Z' } });
     expect(getUser).not.toHaveBeenCalled();
   });
 
@@ -168,10 +168,63 @@ describe('isPaidUser', () => {
 
   it('reads the credit balance when billing v2 is on', async () => {
     await setConfig('billing_v2', true);
-    entitlement.value = { tier: 'monthly', status: 'active' };
+    entitlement.value = { tier: 'none' };
     const userId = randomUUID();
     expect(await isPaidUser(userId, {})).toBe(false);
     await grantCredits({ userId, currency: 'video', amount: 5, bucket: 'topup', reason: 'test', ref: randomUUID() });
     expect(await isPaidUser(userId, {})).toBe(true);
+  });
+
+  it('counts an active or trialing subscriber at zero balance as paid under billing v2', async () => {
+    await setConfig('billing_v2', true);
+    for (const status of ['active', 'trialing']) {
+      entitlement.value = { tier: 'creator', status };
+      expect(await isPaidUser(randomUUID(), { email: 'x@example.test' })).toBe(true);
+    }
+  });
+});
+
+describe('fix round 1', () => {
+  it('gives the daily project count back when the insert fails', async () => {
+    free();
+    const userId = randomUUID();
+    const { storyDb } = await import('../../lib/story/db.js');
+    const db = storyDb();
+    const insert = db.insert;
+    let failNext = true;
+    const spy = vi.spyOn(db, 'insert').mockImplementation(async (table, rows) => {
+      if (table === 'story_projects' && failNext) {
+        failNext = false;
+        throw new Error('insert failed');
+      }
+      return insert.call(db, table, rows);
+    });
+    try {
+      await expect(createProject({ userId, input })).rejects.toThrow('insert failed');
+      for (let i = 0; i < 3; i += 1) await createProject({ userId, input });
+      await expect(createProject({ userId, input })).rejects.toMatchObject({ code: 'daily_limit' });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('releaseAllowance never takes a count below zero', async () => {
+    const { releaseAllowance } = await import('../../lib/story/limits.js');
+    const userId = randomUUID();
+    await releaseAllowance({ userId, action: 'project_create' });
+    const { rows } = await raw.query('select count from story_usage where user_id = $1', [userId]);
+    expect(rows.every((r) => r.count >= 0)).toBe(true);
+  });
+
+  it('caps script_write per project, not per account, and needs a projectId', async () => {
+    free();
+    const userId = randomUUID();
+    const a = randomUUID();
+    for (let i = 0; i < 3; i += 1) await assertAllowed({ userId, action: 'script_write', projectId: a });
+    await expect(assertAllowed({ userId, action: 'script_write', projectId: a })).rejects.toMatchObject({ code: 'daily_limit' });
+    await assertAllowed({ userId, action: 'script_write', projectId: randomUUID() });
+    await expect(assertAllowed({ userId, action: 'script_write' })).rejects.toThrow(/projectId/);
+    accounts.set({ paid: true });
+    await assertAllowed({ userId, action: 'script_write', projectId: a });
   });
 });
