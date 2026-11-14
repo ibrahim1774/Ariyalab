@@ -137,6 +137,11 @@ export async function middleware(req) {
   return res;
 }
 
+// Not matched on purpose (they do their own auth, with no Supabase session):
+// /api/oauth/* and /.well-known/oauth-* (MCP connector OAuth server, which
+// authenticates clients by PKCE and tokens), /oauth/consent (redirects to
+// sign-in itself, keeping the authorization request), and /api/mcp (Bearer
+// tokens; Task 26). Keep them out of the matcher and of privateApiPrefixes.
 export const config = {
   matcher: [
     '/dashboard/:path*',

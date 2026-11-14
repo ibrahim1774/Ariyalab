@@ -56,6 +56,7 @@ describe('story schema', () => {
     const { rows } = await db.query(
       `select table_name from information_schema.tables
         where table_schema = 'public' and table_type = 'BASE TABLE' and table_name like 'story\\_%'
+          and table_name not like 'story\\_oauth\\_%'
         order by table_name`
     );
     expect(rows.map((r) => r.table_name)).toEqual([

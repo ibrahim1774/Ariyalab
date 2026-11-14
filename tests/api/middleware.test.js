@@ -61,4 +61,21 @@ describe('middleware', () => {
     tabsEnabled = true;
     expect((await run('/face-swap')).headers.get('location')).toBeNull();
   });
+
+  it('leaves the OAuth server, its discovery documents and the consent page to their own auth', async () => {
+    const { config } = await import('../../middleware.js');
+    const { pathToRegexp } = await import('next/dist/compiled/path-to-regexp');
+    const paths = [
+      '/api/oauth/token', '/api/oauth/register', '/api/oauth/authorize',
+      '/.well-known/oauth-authorization-server', '/.well-known/oauth-protected-resource/api/mcp',
+      '/oauth/consent', '/api/mcp',
+    ];
+    expect(config.matcher.some((m) => pathToRegexp(m).test('/api/story/billing'))).toBe(true);
+    for (const path of paths) {
+      expect(config.matcher.some((m) => pathToRegexp(m).test(path)), path).toBe(false);
+      const res = await run(path);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get('location'), path).toBeNull();
+    }
+  });
 });
