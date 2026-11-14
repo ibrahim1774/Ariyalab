@@ -91,8 +91,9 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'This checkout is not for an Ariya Lab plan or pack.' });
     }
 
+    let linkPlan;
     try {
-      await assertCanLink(session.user.id, customerId, { via: ownedVia });
+      linkPlan = await assertCanLink(session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -110,6 +111,17 @@ export default async function handler(req, res) {
       grant = { granted: false, inProgress: true };
     }
     const creditsAdded = grant.granted && grant.kind === 'topup' ? grant.amount : 0;
+
+    // The grant is still being written by another path. Moving the profile
+    // off its old customer now would write to the same Stripe customer at
+    // the same moment (legacy grants write the whole metadata object), so
+    // the merge waits: the caller retries.
+    if (grant.inProgress && linkPlan.relinkFrom) {
+      return res.status(409).json({
+        error: 'Your payment is still being processed. Try again in a couple of minutes.',
+        retryable: true,
+      });
+    }
 
     // Bind Stripe customer <-> Supabase profile (authoritative link).
     try {

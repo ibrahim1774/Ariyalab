@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from '../helpers/db.js';
 
 // ---- in-memory Stripe (never the live account) ----------------------
@@ -111,7 +111,7 @@ const S = vi.hoisted(() => {
   return { state, api };
 });
 
-const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false, users: [] }));
+const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false, users: [], endlessUsers: false }));
 
 vi.mock('../../lib/stripe', async (importOriginal) => {
   const actual = await importOriginal();
@@ -127,7 +127,18 @@ vi.mock('../../lib/supabaseServer', () => {
   // Writes profile links into the PGlite profiles table.
   const profileClient = {
     // pages/api/admin/heal-topups.js finds the account by email.
-    auth: { admin: { listUsers: async () => ({ data: { users: auth.users }, error: null }) } },
+    auth: {
+      admin: {
+        // Paginated like Supabase: `perPage` users per page, pages from 1.
+        listUsers: async ({ page = 1, perPage = 50 } = {}) => {
+          if (auth.endlessUsers) {
+            const users = Array.from({ length: perPage }, (_, i) => ({ id: `filler-${page}-${i}`, email: `filler-${page}-${i}@example.test` }));
+            return { data: { users }, error: null };
+          }
+          return { data: { users: auth.users.slice((page - 1) * perPage, page * perPage) }, error: null };
+        },
+      },
+    },
     from: () => ({
       select: () => ({
         eq: (_col, id) => ({
@@ -1598,15 +1609,21 @@ async function healAs(body) {
   process.env.ADMIN_EMAILS = ADMIN.email;
   auth.user = ADMIN;
   const res = makeRes();
+  // The route logs every ownership override; keep the test output quiet
+  // unless the test is watching console.warn itself.
+  const quiet = vi.isMockFunction(console.warn) ? null : vi.spyOn(console, 'warn').mockImplementation(() => {});
   try {
     await heal({ method: 'POST', body, headers: {}, query: {}, cookies: {} }, res);
   } finally {
+    quiet?.mockRestore();
     if (prev === undefined) delete process.env.ADMIN_EMAILS;
     else process.env.ADMIN_EMAILS = prev;
   }
   return res;
 }
-const knownAccount = (user) => auth.users.push({ id: user.id, email: user.email });
+const OVERRIDE = { overrideOwnership: true, reason: 'ticket 1234: customer sent the Stripe receipt' };
+const knownAccount = (user) =>
+  auth.users.push({ id: user.id, email: user.email, email_confirmed_at: user.email_confirmed_at });
 
 describe('round 4: relink_mode reader', () => {
   afterAll(() => setRelinkMode('support'));
@@ -1714,7 +1731,7 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
         expect((await pending()).rows).toEqual([{ claimed_by: null }]);
         expect((await getBalance(user.id)).available).toBe(0);
 
-        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false });
+        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
         expect(merged.statusCode).toBe(200);
         expect(await profileOf(user.id)).toBe(fresh);
         expect(String((await pending()).rows[0].claimed_by)).toBe(user.id);
@@ -1730,11 +1747,12 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
         expect(dry.body.dryRun).toBe(true);
         expect(await profileOf(user.id)).toBe(old);
 
-        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false });
+        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
         expect(merged.statusCode).toBe(200);
         expect(await profileOf(user.id)).toBe(fresh);
         expect(mdOf(old)[KEY.credits]).toBe('0');
-        expect(mdOf(fresh)[KEY.credits]).toBe('100');
+        // The merge seeds the plan this session paid for, then moves the 100 over.
+        expect(mdOf(fresh)[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
         expect(mdOf(fresh)[KEY.relinkedFrom]).toBe(old);
 
         // The plan paid for on the new customer shows up on the next read:
@@ -1801,7 +1819,8 @@ describe("round 4: relink_mode 'auto', billing_v2 off", () => {
     const merged = await healAs({ sessionId: session.id, dryRun: false });
     expect(merged.statusCode).toBe(200);
     expect(await profileOf(user.id)).toBe(fresh);
-    expect(sumOf(KEY.credits, [old, fresh])).toBe(100);
+    expect(mdOf(old)[KEY.credits]).toBe('0');
+    expect(mdOf(fresh)[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
   });
 
   it('NB2: two relinks of one user to two new customers, forced to overlap: one wins, the balance exists once', async () => {
@@ -2052,5 +2071,326 @@ describe('round 4: NB3, NB6, NB7', () => {
     });
     expect(other.statusCode).toBe(200);
     expect(cookieValue(other, 'ugc2_claim_nonce')).toBe(''); // nothing left: cleared
+  });
+});
+
+// =====================================================================
+// Review fix round 5: the admin merge path (B1 to B4)
+// =====================================================================
+describe('round 5: admin merge grants first (B1)', () => {
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('support');
+  });
+  afterAll(() => setBillingV2(false));
+
+  it('B1 legacy: merge, then the customer re-opens the claim link before any dashboard load: the moved credits survive', async () => {
+    const { user, old, fresh } = await returningBuyer();
+    knownAccount(user);
+    const { session, cookies } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
+    expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(409);
+    const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
+    expect(merged.statusCode).toBe(200);
+    // The merge granted this session itself, so a later re-hit finds it done.
+    expect(await recorded(`checkout:${session.id}:done`)).toBe(true);
+    expect(mdOf(fresh)[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
+    expect(mdOf(old)[KEY.credits]).toBe('0');
+
+    S.state.subs.get(session.subscription.id).customer = fresh;
+    const again = await callRoute(claimTicket, { user, cookies });
+    expect(again.statusCode).toBe(200);
+    expect(again.body.alreadyProcessed).toBe(true);
+    expect(mdOf(fresh)[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
+    const ent = await getEntitlement({ supabase: getSupabaseAdmin(), userId: user.id, email: user.email });
+    expect(ent.creditsRemaining).toBe(PLANS.monthly.cap + 100);
+  });
+
+  it('B1 legacy: a plan seeded after a merge that ran without the grant adds the allotment to the moved credits', async () => {
+    const { user, fresh } = await returningBuyer();
+    const { session, cookies } = ticketSub(fresh);
+    // Merge without a checkout session (nothing seeds the plan): 100 credits move.
+    await linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, fresh, { via: 'admin' });
+    expect(mdOf(fresh)[KEY.credits]).toBe('100');
+    const res = await callRoute(claimTicket, { user, cookies });
+    expect(res.statusCode).toBe(200);
+    expect(mdOf(fresh)[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
+    S.state.subs.get(session.subscription.id).customer = fresh;
+    const ent = await getEntitlement({ supabase: getSupabaseAdmin(), userId: user.id, email: user.email });
+    expect(ent.creditsRemaining).toBe(PLANS.monthly.cap + 100);
+  });
+
+  it('B1 v2: the merge grants a top-up at once, and re-hitting /confirm or the webhook adds nothing', async () => {
+    await setBillingV2(true);
+    try {
+      const { user, fresh } = await returningBuyer();
+      knownAccount(user);
+      const session = topupSession({ customer: fresh, buyer: user });
+      expect((await confirmAs(user, session.id)).statusCode).toBe(409);
+      const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false });
+      expect(merged.statusCode).toBe(200);
+      expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S);
+      expect((await confirmAs(user, session.id)).statusCode).toBe(200);
+      expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+      expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S);
+      const rows = await db.query('select 1 from public.credit_ledger where ref = $1', [`checkout:${session.id}`]);
+      expect(rows.rows).toHaveLength(1);
+    } finally {
+      await setBillingV2(false);
+    }
+  });
+
+  it('B1 v2: a parked subscription invoice is delivered by the merge once; re-opening the claim link adds nothing', async () => {
+    await setBillingV2(true);
+    try {
+      const { user, fresh } = await returningBuyer();
+      knownAccount(user);
+      const invoice = paidInvoice({ customer: fresh, subId: newSub(fresh) });
+      await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
+      const { session, cookies } = ticketSub(fresh, { email: user.email });
+      expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(409);
+      expect((await healAs({ sessionId: session.id, dryRun: false })).statusCode).toBe(200);
+      expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+      expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(200);
+      expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+    } finally {
+      await setBillingV2(false);
+    }
+  });
+});
+
+describe('round 5: admin route finds the account and shows the evidence (B2)', () => {
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('support');
+  });
+  afterEach(() => {
+    auth.endlessUsers = false;
+  });
+
+  it('B2a: finds an account beyond the first 1,000 users', async () => {
+    const saved = auth.users.splice(0);
+    try {
+      for (let i = 0; i < 1500; i += 1) auth.users.push({ id: `u-${i}`, email: `bulk-${i}@example.test` });
+      const { user, fresh } = await returningBuyer();
+      knownAccount(user); // position 1,501
+      const { session } = ticketSub(fresh, { email: user.email });
+      const dry = await healAs({ sessionId: session.id });
+      expect(dry.statusCode).toBe(200);
+      expect(dry.body.supabaseUserId).toBe(user.id);
+    } finally {
+      auth.users.splice(0, auth.users.length, ...saved);
+    }
+  });
+
+  it('B2a: an account that does not exist is 404 only after every page was read; a search that hits the cap says so', async () => {
+    const { fresh } = await returningBuyer();
+    const { session } = ticketSub(fresh, { email: 'nobody-here@example.test' });
+    const none = await healAs({ sessionId: session.id });
+    expect(none.statusCode).toBe(404);
+
+    auth.endlessUsers = true;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const capped = await healAs({ sessionId: session.id });
+      expect(capped.statusCode).toBe(503);
+      expect(capped.body.error).toMatch(/search incomplete/i);
+      expect(capped.body.error).not.toMatch(/No Supabase user/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('B2b: the dry run shows the payment, the account and the ownership proof', async () => {
+    const { user, old, fresh } = await returningBuyer();
+    knownAccount(user);
+    const { session } = ticketSub(fresh, { email: 'Paid-With-Another@example.test' });
+    const dry = await healAs({ sessionId: session.id, email: user.email });
+    expect(dry.statusCode).toBe(200);
+    expect(dry.body.dryRun).toBe(true);
+    expect(dry.body.payment).toEqual({
+      sessionId: session.id,
+      email: 'paid-with-another@example.test',
+      paymentStatus: 'paid',
+      clientReferenceId: null,
+      metadataSupabaseUserId: null,
+      hasClaimTicket: true,
+    });
+    expect(dry.body.account).toEqual({ id: user.id, email: user.email, emailConfirmed: true });
+    expect(dry.body.ownershipProof).toBe('none');
+    expect(dry.body.needsOverride).toBe(true);
+    expect(await profileOf(user.id)).toBe(old);
+
+    const byRef = topupSession({ customer: newCustomer(), buyer: user, email: 'other@example.test' });
+    expect((await healAs({ sessionId: byRef.id, email: user.email })).body.ownershipProof).toBe('client_reference_id');
+    const byMeta = topupSession({ customer: newCustomer(), buyer: user, email: 'other@example.test', extra: { client_reference_id: null } });
+    expect((await healAs({ sessionId: byMeta.id, email: user.email })).body.ownershipProof).toBe('metadata');
+    const byEmail = ticketSub(newCustomer(), { email: user.email });
+    const emailDry = await healAs({ sessionId: byEmail.session.id });
+    expect(emailDry.body.ownershipProof).toBe('email');
+    expect(emailDry.body.needsOverride).toBe(false);
+  });
+
+  it('B2b: an unconfirmed account email is not an email proof', async () => {
+    const { user, fresh } = await returningBuyer();
+    auth.users.push({ id: user.id, email: user.email, email_confirmed_at: null });
+    const { session } = ticketSub(fresh, { email: user.email });
+    const dry = await healAs({ sessionId: session.id });
+    expect(dry.body.account.emailConfirmed).toBe(false);
+    expect(dry.body.ownershipProof).toBe('none');
+    expect(dry.body.needsOverride).toBe(true);
+  });
+
+  it('B2b: refuses an unpaid session, and refuses a merge without proof unless overridden with a recorded reason', async () => {
+    const { user, old, fresh, expectUntouched } = await returningBuyer();
+    knownAccount(user);
+    const { session } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
+
+    S.state.sessions.get(session.id).payment_status = 'unpaid';
+    const unpaid = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
+    expect(unpaid.statusCode).toBe(400);
+    expect(unpaid.body.error).toMatch(/not paid/i);
+    await expectUntouched();
+    S.state.sessions.get(session.id).payment_status = 'paid';
+
+    const refused = await healAs({ sessionId: session.id, email: user.email, dryRun: false });
+    expect(refused.statusCode).toBe(409);
+    expect(refused.body.needsOverride).toBe(true);
+    expect(refused.body.ownershipProof).toBe('none');
+    const noReason = await healAs({ sessionId: session.id, email: user.email, dryRun: false, overrideOwnership: true, reason: '  ' });
+    expect(noReason.statusCode).toBe(409);
+    await expectUntouched();
+
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
+      expect(merged.statusCode).toBe(200);
+      expect(warns.mock.calls.some((c) => c.join(' ').includes(OVERRIDE.reason))).toBe(true);
+    } finally {
+      warns.mockRestore();
+    }
+    expect(await profileOf(user.id)).toBe(fresh);
+    expect(mdOf(fresh).ariyalab_admin_override_reason).toBe(OVERRIDE.reason);
+    expect(mdOf(old).ariyalab_admin_override_reason).toBeUndefined();
+  });
+
+  it('B2c: the admin must have a confirmed email, ADMIN_EMAILS must be set, and a 500 is generic', async () => {
+    const { user, fresh } = await returningBuyer();
+    knownAccount(user);
+    const { session } = ticketSub(fresh, { email: user.email });
+    const call = async (adminUser, env) => {
+      const prev = process.env.ADMIN_EMAILS;
+      if (env === undefined) delete process.env.ADMIN_EMAILS;
+      else process.env.ADMIN_EMAILS = env;
+      auth.user = adminUser;
+      const res = makeRes();
+      try {
+        await heal({ method: 'POST', body: { sessionId: session.id }, headers: {}, query: {}, cookies: {} }, res);
+      } finally {
+        if (prev === undefined) delete process.env.ADMIN_EMAILS;
+        else process.env.ADMIN_EMAILS = prev;
+      }
+      return res;
+    };
+    expect((await call(ADMIN, ADMIN.email)).statusCode).toBe(200);
+    expect((await call({ ...ADMIN, email_confirmed_at: null }, ADMIN.email)).statusCode).toBe(403);
+    // No hardcoded fallback: without ADMIN_EMAILS the route is off for everyone.
+    const fallback = { id: randomUUID(), email: 'ibrahim3709@gmail.com', email_confirmed_at: '2026-11-01T00:00:00Z' };
+    expect((await call(fallback, undefined)).statusCode).toBe(503);
+    expect((await call(fallback, '  ')).statusCode).toBe(503);
+
+    S.state.failSessionRetrieves = 1;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const failed = await call(ADMIN, ADMIN.email);
+      expect(failed.statusCode).toBe(500);
+      expect(failed.body.error).not.toMatch(/stripe unavailable/);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+});
+
+describe('round 5: B3 and B4, billing_v2 off', () => {
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('auto');
+  });
+  afterAll(() => setRelinkMode('support'));
+
+  it('B3: /confirm that loses the grant lock does not go on to merge; it answers the retryable 409', async () => {
+    const { user, fresh, expectUntouched } = await returningBuyer();
+    const session = topupSession({ customer: fresh, buyer: user });
+    await lockRow(`checkout:${session.id}`); // the webhook is granting right now
+    const res = await confirmAs(user, session.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.retryable).toBe(true);
+    expect(res.body.error).toMatch(/couple of minutes/);
+    await expectUntouched();
+
+    // Without a merge to do, losing the lock is still the 200 "in progress".
+    const plain = newUser();
+    const customer = newCustomer();
+    const own = topupSession({ customer, buyer: plain });
+    await lockRow(`checkout:${own.id}`);
+    const ok = await confirmAs(plain, own.id);
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body.inProgress).toBe(true);
+  });
+
+  it('B4: an unfinished earlier merge is named to the admin, and can be abandoned only when its target is gone or no longer points back', async () => {
+    const user = newUser();
+    knownAccount(user);
+    const a = newCustomer({ [KEY.credits]: '100' });
+    const b = newCustomer();
+    const c = newCustomer();
+    await link(user.id, a);
+    S.state.failUpdatesFor.set(b, 1); // A is zeroed, crediting B fails
+    await expect(linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, b, { via: 'admin' })).rejects.toThrow('stripe unavailable');
+    const { session } = ticketSub(c, { email: user.email });
+    const body = { sessionId: session.id, dryRun: false };
+
+    const blocked = await healAs(body);
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.body.error).toContain(a);
+    expect(blocked.body.error).toContain(b);
+    expect(blocked.body.unfinishedMerge).toEqual({ from: a, to: b, carry: '100:0', canAbandon: false });
+
+    // B still exists and was simply never credited: finishing that merge is the fix, not abandoning it.
+    const forcedTooEarly = await healAs({ ...body, forceAbandonEarlierMerge: true });
+    expect(forcedTooEarly.statusCode).toBe(409);
+    expect(mdOf(a)[KEY.relinkCarry]).toBe('100:0');
+    expect(await profileOf(user.id)).toBe(a);
+
+    // B is deleted in Stripe: the earlier merge can never finish.
+    S.state.customers.get(b).deleted = true;
+    const stillBlocked = await healAs(body);
+    expect(stillBlocked.statusCode).toBe(409);
+    expect(stillBlocked.body.unfinishedMerge.canAbandon).toBe(true);
+    const warns = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const forced = await healAs({ ...body, forceAbandonEarlierMerge: true });
+      expect(forced.statusCode).toBe(200);
+    } finally {
+      warns.mockRestore();
+    }
+    expect(await profileOf(user.id)).toBe(c);
+    expect(mdOf(a)[KEY.relinkAbandoned]).toBe(`${b}:100:0`);
+    expect(mdOf(a)[KEY.relinkedTo]).toBe(c);
+    expect(mdOf(c)[KEY.relinkAbandoned]).toBeUndefined();
+  });
+
+  it('B4: a customer-triggered path cannot abandon an earlier merge and keeps the customer-facing message', async () => {
+    const user = newUser();
+    const a = newCustomer({ [KEY.credits]: '100' });
+    const b = newCustomer();
+    await link(user.id, a);
+    S.state.failUpdatesFor.set(b, 1);
+    await expect(linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, b, { via: 'admin' })).rejects.toThrow('stripe unavailable');
+    S.state.customers.get(b).deleted = true;
+    const c = newCustomer();
+    await expect(
+      linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, c, { via: 'ticket', forceAbandonEarlierMerge: true })
+    ).rejects.toThrow('Your account is already linked to a different billing profile. Contact support so we can merge your new purchase.');
+    expect(mdOf(a)[KEY.relinkCarry]).toBe('100:0');
   });
 });
