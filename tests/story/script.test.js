@@ -13,7 +13,7 @@ import { createProject, STYLES as PROJECT_STYLES, PURPOSES } from '../../lib/sto
 import { setLimitsDeps } from '../../lib/story/limits.js';
 import { STYLES } from '../../lib/story/prompts/styles.js';
 import {
-  buildScriptSystem, buildBriefMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, wordBudget, shotTarget,
+  buildScriptSystem, buildBriefMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, REFERENCE_GUIDANCE, wordBudget, shotTarget,
 } from '../../lib/story/prompts/script.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
 import {
@@ -173,6 +173,11 @@ describe('checkScriptRules', () => {
     expect(rulesOf(checkScriptRules(goodScenes(), { ...OPTS, mode: 'talking' }))).toContain('no_dialogue');
   });
 
+  it('does not flag an ordinary word that is part of a studio name', () => {
+    const text = 'She could only marvel at the full calendar that week.';
+    expect(rulesOf(checkScriptRules(withLine(text), OPTS))).not.toContain('forbidden_name');
+  });
+
   it('flags studio, character and celebrity names anywhere in a scene', () => {
     expect(FORBIDDEN_NAMES.length).toBeGreaterThan(10);
     for (const name of FORBIDDEN_NAMES.slice(0, 5)) {
@@ -223,6 +228,7 @@ describe('checkScriptRules', () => {
 
 describe('script prompt', () => {
   const base = { mode: 'narrated', seconds: 30 };
+  const BEATS = [{ ord: 1, start: 0, end: 2, visual: 'A man stares at a phone', said: 'Nobody books me', why: 'Doubt' }];
 
   it('has its own guidance block for every purpose', () => {
     expect(Object.keys(PURPOSE_GUIDANCE).sort()).toEqual([...PURPOSES].sort());
@@ -287,8 +293,10 @@ describe('script prompt', () => {
   it('never names a studio, character or celebrity', () => {
     for (const purpose of PURPOSES) {
       for (const mode of ['narrated', 'talking']) {
-        const system = buildScriptSystem({ purpose, mode, seconds: 30, revise: true }).toLowerCase();
-        for (const name of FORBIDDEN_NAMES) expect(system).not.toContain(name.toLowerCase());
+        for (const extra of [{ revise: true }, { beats: BEATS, cta: true }]) {
+          const system = buildScriptSystem({ purpose, mode, seconds: 30, ...extra }).toLowerCase();
+          for (const name of FORBIDDEN_NAMES) expect(system).not.toContain(name.toLowerCase());
+        }
       }
     }
   });
@@ -296,6 +304,9 @@ describe('script prompt', () => {
   it('has no dashes in the prompt itself (the model copies them)', () => {
     for (const purpose of PURPOSES) {
       expect(buildScriptSystem({ purpose, mode: 'talking', seconds: 30, revise: true })).not.toMatch(/[–—]| - /);
+      const withExtras = buildScriptSystem({ purpose, mode: 'narrated', seconds: 30, beats: BEATS, cta: true });
+      expect(withExtras).toContain(REFERENCE_GUIDANCE);
+      expect(withExtras).not.toMatch(/[–—]| - /);
     }
   });
 });
