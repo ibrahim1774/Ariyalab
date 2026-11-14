@@ -11,7 +11,8 @@
 --                       hold release + onFail); null on a finished job means the
 --                       sweeper must re-apply them
 --   apply_tries         failed side-effect runs
---   mirror_tries        failed copies of a finished result into our storage
+--   mirror_tries        copies of a finished result into our storage, counted
+--                       before each starts
 --   poll_errors         provider errors in a row while polling
 --   no_handler_rounds   claims that found no registered handler
 --   rate_limited_since  first rate limit of the current wait
@@ -19,6 +20,11 @@
 --                       locked_until stays "next poll due" (or the apply lease
 --                       on a finished row)
 --   nudged_at           last webhook nudge (at most one per 5 s)
+--   provider_result     a finished provider answer still waiting for its copy
+--                       into our storage ({ url } of an async task, or a sync
+--                       run's value); the copy is retried from it, so the task
+--                       is not polled and a sync run is not repeated for it.
+--                       Cleared when the job is done or re-queued
 --
 -- story_projects.runner_ticked_at: when the cron last ticked the project, so
 -- story_pending_projects rotates instead of always serving the oldest.
@@ -40,7 +46,8 @@ alter table public.story_jobs
   add column no_handler_rounds integer not null default 0 check (no_handler_rounds >= 0),
   add column rate_limited_since timestamptz,
   add column lease_until timestamptz,
-  add column nudged_at timestamptz;
+  add column nudged_at timestamptz,
+  add column provider_result jsonb;
 
 alter table public.story_projects add column runner_ticked_at timestamptz;
 

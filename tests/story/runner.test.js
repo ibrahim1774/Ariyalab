@@ -577,7 +577,9 @@ describe('tick: polling', () => {
     expect(row.locked_until.getTime()).toBe(at(35 + 30).getTime()); // backs off
     for (let t = 65; t < 45 * MIN; t += 300) await tick({ projectId: project.id, now: at(t) });
     expect(await jobRow(job.id)).toMatchObject({ status: 'running', attempts: 1 });
-    await tick({ projectId: project.id, now: at(45 * MIN + 300) }); // the first poll due after the cap
+    await tick({ projectId: project.id, now: at(45 * MIN + 300) }); // the first poll due after the cap: an error says nothing
+    expect(await jobRow(job.id)).toMatchObject({ status: 'running', attempts: 1 }); // waits inside the grace (round 4 N3)
+    await sweep({ now: at(55 * MIN + 300) }); // past cap + grace: the sweep ends it without polling
     expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.' });
     expect(calls.submit).toHaveLength(1);
     expect(await held(project)).toBe(30);
@@ -706,7 +708,78 @@ describe('slow provider tasks', () => {
     const started = Date.now();
     await sweep({ now: at(20 * MIN), deadline: Date.now() + 15_000 });
     expect(Date.now() - started).toBeLessThan(2_000);
-    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', lease_until: null }); // past its cap, no answer: final
+    // No answer is not an answer: it waits (backoff) inside the grace (round 4 N3) ...
+    const row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'running', lease_until: null, poll_errors: 1 });
+    expect(row.locked_until.getTime()).toBe(at(20 * MIN + 15).getTime());
+    // ... and the sweep ends it at cap + grace.
+    await sweep({ now: at(26 * MIN), deadline: Date.now() + 15_000 });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.' });
+  });
+
+  it('a poll error inside the grace waits with a backoff the next sweep respects; a pending answer there still ends the job (round 4 N3)', async () => {
+    const project = await newProject();
+    let mode = 'error';
+    const { handler, calls } = fakeAsync({
+      poll: async () => {
+        if (mode === 'error') throw new ProviderError('failed', undefined, { cause: { status: 500, message: 'oops' } });
+        return { status: 'pending', url: null, error: null };
+      },
+    });
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: T0 });
+    await sweep({ now: at(20 * MIN), deadline: Date.now() + 15_000 });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'running', poll_errors: 1 });
+    expect(calls.poll).toHaveLength(1);
+    await sweep({ now: at(20 * MIN + 5), deadline: Date.now() + 15_000 }); // inside the 15 s backoff: not polled
+    expect(calls.poll).toHaveLength(1);
+    mode = 'pending';
+    await sweep({ now: at(20 * MIN + 20), deadline: Date.now() + 15_000 });
+    expect(calls.poll).toHaveLength(2);
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.' });
+    expect(calls.submit).toHaveLength(1);
+  });
+
+  it('a grace poll that finds the task done with too little copy time keeps the result, and the cap + grace step copies it instead of failing it (round 4 N4)', async () => {
+    const project = await newProject();
+    const holdId = await withHold(project);
+    const { handler, calls } = fakeAsync({ poll: doneWith(MOCK_URLS.clip) });
+    registerHandler('clip', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'clip', holdId, costCredits: 30 });
+    await tick({ projectId: project.id, now: T0 });
+    await sweep({ now: at(50 * MIN), deadline: Date.now() + 15_000 }); // time for the poll, not for a video copy
+    let row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'running', mirror_tries: 0, lease_until: null });
+    expect(row.provider_result).toEqual({ url: MOCK_URLS.clip });
+    expect(calls.poll).toHaveLength(1);
+    await sweep({ now: at(56 * MIN), deadline: Date.now() + 5_000 }); // past cap + grace, still no copy time: kept, not failed
+    expect(await jobRow(job.id)).toMatchObject({ status: 'running', mirror_tries: 0 });
+    await sweep({ now: at(57 * MIN), deadline: Date.now() + 40_000 }); // time to copy: copied from the kept result, no new poll
+    row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'done', mirror_tries: 1, provider_result: null });
+    expect(row.result.key).toBe(`story/${project.id}/clip/${job.id}.mp4`);
+    expect(calls.poll).toHaveLength(1);
+    expect(calls.done).toHaveLength(1);
+    expect(calls.submit).toHaveLength(1);
+  });
+
+  it('a kept result whose copies keep failing ends final after the mirror tries, with an operator line (round 4 N4)', async () => {
+    const project = await newProject();
+    const holdId = await withHold(project);
+    const { handler, calls } = fakeAsync({ poll: doneWith(MOCK_URLS.still) });
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 20 });
+    await tick({ projectId: project.id, now: T0 });
+    await raw.query(`update story_jobs set provider_result = $2 where id = $1`, [job.id, JSON.stringify({ url: MOCK_URLS.still })]);
+    mirror.fail = 10;
+    for (const t of [26, 30, 35, 40, 45]) await sweep({ now: at(t * MIN), deadline: Date.now() + 15_000 });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', mirror_tries: 4, error: 'We could not save the generated file. Please try again.' });
+    expect(mirror.calls).toHaveLength(4);
+    expect(calls.poll).toHaveLength(0);
+    expect(calls.submit).toHaveLength(1);
+    expect(await held(project)).toBe(40);
+    expect(logSpy.mock.calls.some((c) => c.join(' ').includes('OPERATOR') && c.join(' ').includes(job.id))).toBe(true);
   });
 
   it('does not start a sweep poll when less time is left than the provider timeout (N9)', async () => {
@@ -810,20 +883,55 @@ describe('mirror failures', () => {
     expect(row).toMatchObject({ status: 'running', mirror_tries: 0, lease_until: null });
     expect(mirror.calls).toHaveLength(0);
     expect(RUNNER_CONFIG.mirrorMinMs).toEqual({ video: 25_000, image: 8_000, audio: 10_000 });
+    expect(row.provider_result).toEqual({ url: MOCK_URLS.clip }); // round 4 N4: the finished answer is kept
+    expect(calls.poll).toHaveLength(1);
     await runCron({ now: at(16), deadline: Date.now() + 45_000 });
     row = await jobRow(job.id);
     expect(row).toMatchObject({ status: 'done', mirror_tries: 1 });
     expect(calls.submit).toHaveLength(1);
+    expect(calls.poll).toHaveLength(1); // copied from the kept result, not polled again
   });
 
-  it('a sync result is not copied with less than its media minimum left (no 200 ms fallback) (R3)', async () => {
+  it('a sync result is not copied with less than its media minimum left; it is kept and copied later, never run again (R3, round 4 N5)', async () => {
     const project = await newProject();
     runner._configure({ syncMinSeconds: { default: 0, render: 0 } });
-    registerHandler('narration', { sync: true, run: async () => ({ url: MOCK_URLS.voice }) });
+    let runs = 0;
+    const done = [];
+    registerHandler('narration', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.voice, seconds: 30 }; }, onDone: async (j, r) => done.push(r) });
     const job = await enqueue({ projectId: project.id, kind: 'narration' });
     await tick({ projectId: project.id, now: T0, deadline: Date.now() + 3_000 });
     expect(mirror.calls).toHaveLength(0);
-    expect(await jobRow(job.id)).toMatchObject({ status: 'queued', attempts: 1 });
+    const row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'running', attempts: 1, mirror_tries: 0, provider_result: { url: MOCK_URLS.voice, seconds: 30 } });
+    await sweep({ now: at(11 * MIN) }); // a kept result is not a stuck sync run: not re-run
+    await tick({ projectId: project.id, now: at(11 * MIN) });
+    expect(runs).toBe(1);
+    const key = `story/${project.id}/narration/${job.id}.mp3`;
+    expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 1, provider_result: null });
+    expect(done).toEqual([{ url: `/api/mock/storage/${key}`, key, seconds: 30 }]);
+  });
+
+  it('a sync result whose copy fails is kept and copied again after a backoff, never run again; the tries are bounded (round 4 N5)', async () => {
+    const project = await newProject();
+    let runs = 0;
+    registerHandler('narration', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.voice }; } });
+    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    mirror.fail = 1;
+    await tick({ projectId: project.id, now: T0 });
+    let row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'running', mirror_tries: 1, provider_result: { url: MOCK_URLS.voice } });
+    expect(row.locked_until.getTime()).toBe(at(30).getTime());
+    await tick({ projectId: project.id, now: at(10) }); // inside the backoff
+    expect(mirror.calls).toHaveLength(1);
+    await tick({ projectId: project.id, now: at(30) });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 2 });
+    expect(runs).toBe(1);
+
+    const other = await enqueue({ projectId: project.id, kind: 'narration' });
+    mirror.fail = 10;
+    for (const t of [100, 200, 300, 500, 800]) await tick({ projectId: project.id, now: at(t) });
+    expect(await jobRow(other.id)).toMatchObject({ status: 'failed', mirror_tries: 4 });
+    expect(runs).toBe(2);
   });
 
   it('deletes our copy when the mirror finished but the job was ended meanwhile (N10)', async () => {
@@ -1092,12 +1200,19 @@ describe('sweep', () => {
     expect(await jobRow(job.id)).toMatchObject({ status: 'queued', attempts: 1 });
   });
 
-  it('does nothing once its deadline has passed', async () => {
+  it('past its deadline it does no provider work, but still runs the database-only repairs (round 4 N1)', async () => {
     const project = await newProject();
-    const job = await enqueue({ projectId: project.id, kind: 'clip' });
+    const crashed = await enqueue({ projectId: project.id, kind: 'clip' });
     await storyDb().rpc('story_claim_jobs', { p_project: project.id, p_limit: 1, p_now: T0.toISOString() });
-    await sweep({ now: at(10 * MIN), deadline: Date.now() - 1 });
-    expect((await jobRow(job.id)).status).toBe('running');
+    const { handler, calls } = fakeAsync({ poll: doneWith(MOCK_URLS.still) });
+    registerHandler('still', handler);
+    const graced = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: T0, runSync: false, limit: 1 });
+    expect((await jobRow(graced.id)).status).toBe('running');
+    await sweep({ now: at(20 * MIN), deadline: Date.now() - 1 });
+    expect(await jobRow(crashed.id)).toMatchObject({ status: 'queued', attempts: 0 }); // database only: done
+    expect(await jobRow(graced.id)).toMatchObject({ status: 'running' }); // a grace poll needs provider time: not started
+    expect(calls.poll).toHaveLength(0);
   });
 
   it('a job with no handler is put back for 5 minutes, outside the submit budget, and fails after 5 rounds', async () => {
@@ -1455,6 +1570,64 @@ describe('runCron', () => {
     await enqueue({ projectId: project.id, kind: 'clip' });
     await runCron({ now: T0, deadline: Date.now() - 1 });
     expect(calls.submit).toHaveLength(0);
+  });
+
+  it('a tick that overruns the deadline does not skip ending an over-cap job in the same run (round 4 N1)', async () => {
+    const capped = await newProject();
+    const busy = await newProject();
+    const holdId = await withHold(capped);
+    const { handler: stillHandler, calls: stillCalls } = fakeAsync();
+    registerHandler('still', stillHandler);
+    const job = await enqueue({ projectId: capped.id, kind: 'still', holdId, costCredits: 20 });
+    await tick({ projectId: capped.id, now: T0 });
+    // Not due for a poll, so no tick can be what ends it.
+    await raw.query(`update story_jobs set locked_until = $2 where id = $1`, [job.id, at(24 * 3600)]);
+    registerHandler('clip', {
+      submit: async (j) => { await new Promise((r) => setTimeout(r, 400)); return { provider: 'mock', taskId: `slow-${j.id}` }; },
+      poll: async () => ({ status: 'pending', url: null, error: null }),
+    });
+    await enqueue({ projectId: busy.id, kind: 'clip' });
+    await runCron({ now: at(26 * MIN), deadline: Date.now() + 200, sweepMs: 50 });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.' });
+    expect(await held(capped)).toBe(40);
+    expect(stillCalls.poll).toHaveLength(0);
+  });
+
+  it('copies started by cron ticks end before the tick deadline; only sweep copies get the extra time (round 4 N1)', async () => {
+    const project = await newProject();
+    runner._configure({ cronMirrorExtraMs: 1_500, mirrorDeadlineMarginMs: 200, mirrorMinMs: { image: 100, video: 100, audio: 100 } });
+    const { handler } = fakeAsync({ poll: doneWith(MOCK_URLS.still) });
+    registerHandler('still', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: T0 });
+    mirror.hang = true;
+    let abortedAt = null;
+    mirror.before = async (args) => { args.signal?.addEventListener('abort', () => { abortedAt = Date.now(); }); };
+    const deadline = Date.now() + 1_500;
+    const sweepMs = 500;
+    await runCron({ now: at(15), deadline, sweepMs });
+    expect(abortedAt).not.toBeNull();
+    expect(abortedAt).toBeLessThanOrEqual(deadline - sweepMs);
+    expect(await jobRow(job.id)).toMatchObject({ status: 'running', mirror_tries: 1 });
+  });
+
+  it('a project whose tick throws is still stamped, so it does not stay first every run (round 4 N7)', async () => {
+    const broken = await newProject();
+    await enqueue({ projectId: broken.id, kind: 'still' });
+    const { handler } = fakeAsync();
+    registerHandler('still', handler);
+    const base = createPgAdapter(raw);
+    setStoryDb({
+      ...base,
+      // The running-jobs listing for this project comes back malformed, so its tick throws.
+      select: async (table, match, opts) => (table === 'story_jobs' && match?.project_id === broken.id && match?.status === 'running'
+        ? null
+        : base.select(table, match, opts)),
+    });
+    await runCron({ now: T0, deadline: Date.now() + 5_000, sweepMs: 1_000 });
+    expect(logSpy.mock.calls.some((c) => c.join(' ').includes(broken.id))).toBe(true);
+    const { rows } = await raw.query(`select runner_ticked_at from story_projects where id = $1`, [broken.id]);
+    expect(rows[0].runner_ticked_at).not.toBeNull();
   });
 });
 

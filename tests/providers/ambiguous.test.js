@@ -106,6 +106,22 @@ describe('kie createTask answers that do not prove no task was made (R4)', () =>
     expect(await submitClip(args).catch((e) => e)).toMatchObject({ code: 'failed', ambiguous: false });
   });
 
+  it.each([
+    ['a body code 429', JSON.stringify({ code: 429, msg: 'too many requests' })],
+    ['a content-refusal body code 422', JSON.stringify({ code: 422, msg: 'flagged by content moderation' })],
+  ])('an HTTP 500 from createTask with %s is an ambiguous failure, never a re-submittable rate limit (round 4 N2)', async (_name, body) => {
+    useRealMode();
+    answer(body, 500);
+    const err = await submitClip(args).catch((e) => e);
+    expect(err).toMatchObject({ code: 'failed', ambiguous: true });
+  });
+
+  it('a status call answering HTTP 500 with body code 429 is still a plain rate limit (polls only wait) (round 4 N2)', async () => {
+    useRealMode();
+    answer(JSON.stringify({ code: 429, msg: 'too many requests' }), 500);
+    expect(await getClip({ provider: 'kie', taskId: 't1' }).catch((e) => e)).toMatchObject({ code: 'rate_limited' });
+  });
+
   it('a status call (getClip) with code 500 is not marked: only submits are', async () => {
     useRealMode();
     answer(JSON.stringify({ code: 500, msg: 'server error' }), 200);

@@ -3,14 +3,15 @@ import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const s3 = vi.hoisted(() => ({ sent: [], configs: [] }));
+const s3 = vi.hoisted(() => ({ sent: [], configs: [], options: [] }));
 const blob = vi.hoisted(() => ({ put: [], del: [] }));
 
 vi.mock('@aws-sdk/client-s3', () => {
   class S3Client {
     constructor(config) { s3.configs.push(config); }
-    async send(cmd) {
+    async send(cmd, options) {
       s3.sent.push(cmd);
+      s3.options.push(options);
       if (cmd.kind === 'DeleteObjects') {
         return { Deleted: cmd.input.Delete.Objects.map((o) => ({ Key: o.Key })) };
       }
@@ -75,6 +76,7 @@ function publicDns() {
 beforeEach(() => {
   s3.sent.length = 0;
   s3.configs.length = 0;
+  s3.options.length = 0;
   blob.put.length = 0;
   blob.del.length = 0;
 });
@@ -124,6 +126,41 @@ describe('backend selection', () => {
     realMode({ BLOB_READ_WRITE_TOKEN: 't' });
     await expect(putObject({ key: '../etc/passwd', body: 'x' })).rejects.toMatchObject({ code: 'failed' });
     await expect(putObject({ key: '/abs.png', body: 'x' })).rejects.toMatchObject({ code: 'failed' });
+  });
+});
+
+describe('putObject abort signal (round 4 N6)', () => {
+  it('passes the signal to the R2 upload', async () => {
+    realMode(R2_ENV);
+    const controller = new AbortController();
+    await putObject({ key: 'projects/p1/still.png', body: PNG, signal: controller.signal });
+    expect(s3.options[0]).toMatchObject({ abortSignal: controller.signal });
+  });
+
+  it('passes the signal to the Blob upload', async () => {
+    realMode({ BLOB_READ_WRITE_TOKEN: 'blob-token' });
+    const controller = new AbortController();
+    await putObject({ key: 'projects/p1/a.mp4', body: MP4, signal: controller.signal });
+    expect(blob.put[0].opts.abortSignal).toBe(controller.signal);
+  });
+
+  it('mirrorUrl hands its signal to the upload', async () => {
+    realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    publicDns();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(MP4, {
+      status: 200, headers: { 'content-type': 'video/mp4', 'content-length': String(MP4.length) },
+    })));
+    const controller = new AbortController();
+    await mirrorUrl({ srcUrl: 'https://cdn.example.com/x.mp4', key: 'projects/p/sig.mp4', signal: controller.signal });
+    expect(blob.put[0].opts.abortSignal).toBe(controller.signal);
+  });
+
+  it('an aborted signal stops a mock upload before the key is written', async () => {
+    const controller = new AbortController();
+    controller.abort(new Error('time is up'));
+    const key = `tests/aborted-put-${Date.now()}.png`;
+    await expect(putObject({ key, body: PNG, signal: controller.signal })).rejects.toThrow();
+    expect(existsSync(mockStoragePath(key))).toBe(false);
   });
 });
 
