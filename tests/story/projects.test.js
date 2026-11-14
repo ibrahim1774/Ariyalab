@@ -268,6 +268,28 @@ describe('duplicateProject', () => {
     expect(copiedRef.beat_sheet).toHaveLength(1);
   });
 
+  it('shares files with the source until it expires, then drops them', async () => {
+    const userId = userA();
+    const src = await createProject({ userId, input: BRIEF });
+    await storyDb().update('story_projects', { id: src.id }, {
+      files_expire_at: '2026-12-14T00:00:00.000Z', narration_url: 'n.mp3', narration_key: 'k/n.mp3',
+    });
+    await seedChildren(src);
+    await storyDb().update('story_shots', { project_id: src.id }, { still_key: 'k/s.png', clip_key: 'k/c.mp4' });
+    const live = await duplicateProject({ userId, id: src.id });
+    expect(live).toMatchObject({ files_expire_at: '2026-12-14T00:00:00.000Z', narration_key: 'k/n.mp3' });
+    const liveShots = await storyDb().select('story_shots', { project_id: live.id }, { order: 'ord' });
+    expect(liveShots.map((s) => [s.still_key, s.clip_key])).toEqual([['k/s.png', null], ['k/s.png', null]]);
+
+    await storyDb().update('story_projects', { id: src.id }, { status: 'expired' });
+    const dead = await duplicateProject({ userId, id: src.id });
+    expect(dead).toMatchObject({ status: 'draft', files_expire_at: null, narration_url: null, narration_key: null });
+    const deadShots = await storyDb().select('story_shots', { project_id: dead.id }, { order: 'ord' });
+    expect(deadShots.map((s) => [s.still_url, s.still_key, s.status])).toEqual([[null, null, 'draft'], [null, null, 'draft']]);
+    const deadCast = await storyDb().select('story_cast', { project_id: dead.id }, { order: 'ord' });
+    expect(deadCast.map((c) => [c.image_url, c.candidates, c.status])).toEqual([[null, [], 'draft'], [null, [], 'draft']]);
+  });
+
   it("refuses another user's project", async () => {
     const src = await createProject({ userId: userA(), input: BRIEF });
     await expect(duplicateProject({ userId: userA(), id: src.id })).rejects.toBeInstanceOf(NotFoundError);

@@ -160,11 +160,31 @@ describe('story schema', () => {
       'story_shots.footage:jsonb',
       'story_shots.inset:jsonb',
       'story_assets.in_brand_kit:boolean',
+      'story_projects.files_expire_at:timestamp with time zone',
+      'story_projects.narration_key:text',
+      'story_projects.music_key:text',
+      'story_projects.thumbnail_key:text',
+      'story_shots.still_key:text',
+      'story_shots.clip_key:text',
+      'story_cast.image_key:text',
+      'story_renders.storage_key:text',
+      'story_references.storage_key:text',
+      'story_assets.storage_key:text',
     ]) expect(cols, c).toContain(c);
     expect(cols.some((c) => c.startsWith('story_assets.project_id:'))).toBe(false);
   });
 
-  it('keeps updated_at current on update', async () => {
+  it('allows status expired and indexes the retention query', async () => {
+    const p = await one(
+      `insert into story_projects (user_id, status, files_expire_at) values ($1, 'expired', now() - interval '1 day') returning status`,
+      [USER_A]
+    );
+    expect(p.status).toBe('expired');
+    const idx = await one(`select indexdef from pg_indexes where indexname = 'story_projects_files_expire_idx'`);
+    expect(idx.indexdef).toMatch(/\(files_expire_at\) WHERE \(\(files_expire_at IS NOT NULL\) AND \(status <> 'expired'/);
+  });
+
+    it('keeps updated_at current on update', async () => {
     const { project } = await seedProject(USER_A);
     await db.query(`update story_projects set updated_at = now() - interval '1 day' where id = $1`, [project.id]);
     await db.query(`update story_projects set title = 'New' where id = $1`, [project.id]);

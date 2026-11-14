@@ -48,9 +48,15 @@ create table public.story_projects (
   step text not null default 'brief' check (step in (
     'brief', 'breakdown', 'script', 'cast', 'storyboard', 'audio', 'generate', 'review', 'done'
   )),
-  status text not null default 'draft' check (status in ('draft', 'generating', 'finished', 'failed')),
+  -- 'expired': the retention job removed the project's files (spec 10.10).
+  status text not null default 'draft' check (status in ('draft', 'generating', 'finished', 'failed', 'expired')),
   -- Voice, music and captions choices: { voice, music, captions, ... }.
+  -- Generated or uploaded tracks are stored in the columns below, not here.
   audio_plan jsonb not null default '{}'::jsonb,
+  narration_url text,
+  narration_key text,
+  music_url text,
+  music_key text,
   fee_charged boolean not null default false,
   rerolls_used integer not null default 0 check (rerolls_used >= 0),
   -- Included-allowance counters (spec 8): narration and music generations
@@ -60,6 +66,12 @@ create table public.story_projects (
   chat_used integer not null default 0 check (chat_used >= 0),
   reference_id uuid,
   thumbnail_url text,
+  thumbnail_key text,
+  -- File retention (spec 10.10): set when the first file is stored, to
+  -- that time + retentionDays. The retention job deletes every *_key /
+  -- storage_key of the project (and the { url, key } entries in
+  -- story_cast.candidates and .sheet), then sets status 'expired'.
+  files_expire_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   -- Talking videos use the video model's own voices, which only pro_talking has.
@@ -67,6 +79,9 @@ create table public.story_projects (
 );
 
 create index story_projects_owner_idx on public.story_projects (user_id, updated_at desc);
+-- The retention job: projects whose files_expire_at has passed, not yet expired.
+create index story_projects_files_expire_idx on public.story_projects (files_expire_at)
+  where files_expire_at is not null and status <> 'expired';
 
 -- Customer uploads, owned by the user. in_brand_kit marks the ones shown in
 -- the brand kit (spec 7.4); projects attach assets through
@@ -103,7 +118,8 @@ create table public.story_references (
   source_url text,
   asset_id uuid references public.story_assets (id) on delete set null,
   platform text,
-  file_url text,
+  file_url text,                                   -- the stored source file (upload or fetched link)
+  storage_key text,
   duration_seconds real check (duration_seconds >= 0),
   status text not null default 'pending' check (status in ('pending', 'ready', 'failed')),
   error text,
@@ -139,11 +155,13 @@ create table public.story_cast (
   name text not null,
   description text,
   status text not null default 'draft' check (status in ('draft', 'pending', 'ready', 'failed', 'blocked')),
-  candidates jsonb not null default '[]'::jsonb,   -- [{ url, prompt }]
+  candidates jsonb not null default '[]'::jsonb,   -- [{ url, key, prompt }]
   chosen_index integer,
   image_url text,                                  -- the picked image
+  image_key text,
   asset_id uuid references public.story_assets (id) on delete set null,  -- customer's own reference
-  sheet jsonb not null default '{}'::jsonb,        -- { front, three_quarter, face }
+  -- { front: { url, key }, three_quarter: { url, key }, face: { url, key } }
+  sheet jsonb not null default '{}'::jsonb,
   regens_used integer not null default 0 check (regens_used >= 0),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
@@ -168,7 +186,9 @@ create table public.story_shots (
   cast_ids uuid[] not null default '{}',           -- story_cast rows in this shot
   ref_asset_ids uuid[] not null default '{}',      -- product/mascot images used as references
   still_url text,
+  still_key text,
   clip_url text,
+  clip_key text,
   status text not null default 'draft' check (status in (
     'draft', 'still_pending', 'still_ready', 'queued', 'generating', 'ready', 'failed', 'blocked'
   )),
@@ -251,6 +271,7 @@ create table public.story_renders (
   status text not null default 'queued' check (status in ('queued', 'running', 'done', 'failed')),
   job_id uuid references public.story_jobs (id) on delete set null,
   file_url text,
+  storage_key text,
   duration_seconds real,
   settings jsonb not null default '{}'::jsonb,     -- captions, music level, cut list used
   warnings jsonb not null default '[]'::jsonb,     -- [{ code, message }] shown with the result
