@@ -217,6 +217,31 @@ describe('getClip (real mode)', () => {
   });
 });
 
+describe('kie calls for the story pipeline', () => {
+  beforeEach(useRealMode);
+
+  it('read the endpoint from config and carry a timeout signal', async () => {
+    const { PROVIDER_CONFIG } = await import('../../lib/providers/config.js');
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      calls.push({ url, init });
+      return kieOk({ taskId: 't', state: 'success', resultJson: JSON.stringify({ videos: [{ url: 'https://cdn/v0.mp4' }] }) });
+    }));
+    await submitClip({ quality: 'standard', imageUrl: 'https://x/a.png', prompt: 'p', seconds: 5 });
+    expect(calls[0].url).toBe(`${PROVIDER_CONFIG.kie.baseUrl}${PROVIDER_CONFIG.kie.createPath}`);
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
+    // shares the legacy result-url extractor, including the videos[0] shape
+    expect(await getClip({ provider: 'kie', taskId: 't' })).toMatchObject({ status: 'done', url: 'https://cdn/v0.mp4' });
+    expect(calls[1].url).toBe(`${PROVIDER_CONFIG.kie.baseUrl}${PROVIDER_CONFIG.kie.recordPath}?taskId=t`);
+    expect(calls[1].init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('does not treat a technical "violates" failure as a content block', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => kieOk({ taskId: 't', state: 'fail', failCode: '422', failMsg: 'image size violates minimum dimensions' })));
+    expect((await getClip({ provider: 'kie', taskId: 't' })).status).toBe('failed');
+  });
+});
+
 describe('parseCallback', () => {
   it('maps a kie success payload', () => {
     const body = {
@@ -271,7 +296,7 @@ describe('mock mode', () => {
     expect(a).toEqual({ provider: 'mock', taskId: 'mock-clip-1' });
     expect(b).toEqual({ provider: 'mock', taskId: 'mock-clip-2' });
     expect(await getClip(a)).toMatchObject({ status: 'pending', url: null });
-    expect(await getClip(a)).toMatchObject({ status: 'done', url: '/mock/clip.mp4' });
+    expect(await getClip(a)).toMatchObject({ status: 'done', url: '/api/mock/fixtures/clip.mp4' });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

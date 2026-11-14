@@ -6,20 +6,21 @@
  *   node scripts/make-fixtures.mjs
  *
  * Writes tests/fixtures/{clip.mp4, still.png, voice.mp3, music.mp3,
- * reference.mp4} and copies them to public/mock/ so mock URLs such as
- * /mock/clip.mp4 resolve in the dev server. Output is deterministic enough
- * to commit; re-run only when a fixture's spec changes.
+ * reference.mp4, reference-silent.mp4}. In dev, mock URLs such as
+ * /api/mock/fixtures/clip.mp4 are served from here by a dev-only API route
+ * (nothing is copied into public/, so fixtures never ship to production).
+ * Output is deterministic enough to commit; re-run only when a fixture's
+ * spec changes.
  */
 
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, statSync } from 'node:fs';
+import { mkdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixturesDir = path.join(root, 'tests', 'fixtures');
-const publicDir = path.join(root, 'public', 'mock');
 const W = 432;
 const H = 768;
 
@@ -34,7 +35,6 @@ const out = (name) => path.join(fixturesDir, name);
 const x264 = ['-c:v', 'libx264', '-preset', 'veryslow', '-crf', '40', '-pix_fmt', 'yuv420p', '-movflags', '+faststart'];
 
 mkdirSync(fixturesDir, { recursive: true });
-mkdirSync(publicDir, { recursive: true });
 
 // clip.mp4: 3 s, 432x768, 24 fps, silent colour bars.
 ffmpeg(['-f', 'lavfi', '-i', `smptebars=size=${W}x${H}:rate=24:duration=3`, ...x264, '-an', out('clip.mp4')]);
@@ -65,11 +65,14 @@ ffmpeg([
   out('reference.mp4'),
 ]);
 
+// reference-silent.mp4: the same 12 s video with no audio track, for the
+// "silent reel + separate audio" path ([[mock:silent-reel]]).
+ffmpeg(['-i', out('reference.mp4'), '-c:v', 'copy', '-an', out('reference-silent.mp4')]);
+
 let total = 0;
-for (const name of ['clip.mp4', 'still.png', 'voice.mp3', 'music.mp3', 'reference.mp4']) {
-  copyFileSync(out(name), path.join(publicDir, name));
+for (const name of ['clip.mp4', 'still.png', 'voice.mp3', 'music.mp3', 'reference.mp4', 'reference-silent.mp4']) {
   const size = statSync(out(name)).size;
   total += size;
   console.log(`${name.padEnd(14)} ${(size / 1024).toFixed(1)} KB`);
 }
-console.log(`total          ${(total / 1024).toFixed(1)} KB (x2 with public/mock copies)`);
+console.log(`total          ${(total / 1024).toFixed(1)} KB`);

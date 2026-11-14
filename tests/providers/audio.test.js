@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const rep = vi.hoisted(() => ({ runs: [], output: null, error: null }));
@@ -54,6 +55,9 @@ describe('mock mode (no network)', () => {
     const voices = listVoices();
     expect(voices.length).toBeGreaterThanOrEqual(3);
     for (const v of voices) expect(Object.keys(v).sort()).toEqual(['gender', 'id', 'name', 'sampleUrl']);
+    // sampleUrl may be null (no preview yet); the mock includes one so UI code handles it
+    expect(voices.filter((v) => v.sampleUrl === null)).toHaveLength(1);
+    expect(voices.filter((v) => v.sampleUrl === '/api/mock/fixtures/voice.mp3').length).toBe(voices.length - 1);
 
     const m = await generateMusic({ prompt: 'warm acoustic', seconds: 30 });
     expect(m.mime).toBe('audio/mpeg');
@@ -61,6 +65,27 @@ describe('mock mode (no network)', () => {
 
     expect(fetchSpy).not.toHaveBeenCalled();
     expect(rep.runs).toHaveLength(0);
+  });
+});
+
+describe('transcribe file checks', () => {
+  it('mock mode fails on a missing file like the real path', async () => {
+    await expect(transcribe({ filePath: 'tests/fixtures/nope.mp3' })).rejects.toMatchObject({ code: 'failed' });
+  });
+
+  it('caps Replicate input at 25 MB', async () => {
+    vi.stubEnv('STORY_MOCK', '0');
+    vi.stubEnv('GROQ_API_KEY', '');
+    vi.stubEnv('REPLICATE_API_TOKEN', 'r8');
+    const os = await import('node:os');
+    const fsp = await import('node:fs/promises');
+    const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'stt-big-'));
+    const big = path.join(dir, 'big.mp3');
+    await fsp.writeFile(big, '');
+    await fsp.truncate(big, 26 * 1024 * 1024);
+    await expect(transcribe({ filePath: big })).rejects.toMatchObject({ code: 'failed' });
+    expect(rep.runs).toHaveLength(0);
+    await fsp.rm(dir, { recursive: true, force: true });
   });
 });
 

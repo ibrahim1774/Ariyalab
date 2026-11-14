@@ -61,7 +61,7 @@ describe('mock mode', () => {
     const t = await submitImage({ prompt: 'a cast sheet' });
     expect(t).toEqual({ provider: 'mock', taskId: 'mock-image-1' });
     expect((await getImage(t)).status).toBe('pending');
-    expect(await getImage(t)).toEqual({ status: 'done', url: '/mock/still.png', error: null });
+    expect(await getImage(t)).toEqual({ status: 'done', url: '/api/mock/fixtures/still.png', error: null });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

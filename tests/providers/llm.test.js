@@ -67,6 +67,23 @@ describe('completeJSON (mock mode)', () => {
     expect(sdk.constructed).toHaveLength(0);
   });
 
+  it('validates name and schema in mock mode exactly like the real path', async () => {
+    registerMock('story_title', () => ({ title: 'x' }));
+    await expect(completeJSON({ tier: 'fast', name: 'story_title', messages: [] })).rejects.toMatchObject({ code: 'failed' });
+    await expect(completeJSON({ tier: 'fast', name: 'story_title', schema: { type: 'string' }, messages: [] })).rejects.toMatchObject({ code: 'failed' });
+    await expect(completeJSON({ tier: 'fast', schema, messages: [] })).rejects.toMatchObject({ code: 'failed' });
+  });
+
+  it('throws blocked for [[mock:blocked]] in completeJSON and chatWithTools', async () => {
+    registerMock('story_title', () => ({ title: 'x' }));
+    await expect(completeJSON({
+      tier: 'fast', name: 'story_title', schema, messages: [{ role: 'user', content: 'x [[mock:blocked]]' }],
+    })).rejects.toMatchObject({ code: 'blocked' });
+    await expect(chatWithTools({
+      tools: [], onToolCall: vi.fn(), messages: [{ role: 'user', content: [{ type: 'text', text: '[[mock:blocked]]' }] }],
+    })).rejects.toMatchObject({ code: 'blocked' });
+  });
+
   it('throws a clear error naming a missing mock', async () => {
     await expect(completeJSON({ tier: 'fast', name: 'nope_schema', schema, messages: [] }))
       .rejects.toThrow(/nope_schema/);
@@ -159,6 +176,29 @@ describe('chatWithTools', () => {
       content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: '{"ok":true,"name":"update_scene","id":"s1"}' }],
     });
     expect(messages[3].content[0].text).toBe('Done.');
+  });
+
+  it('runs several tool calls one at a time, in order', async () => {
+    vi.stubEnv('STORY_MOCK', '0');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'sk-test');
+    sdk.responses.push({
+      stop_reason: 'tool_use',
+      content: [
+        { type: 'tool_use', id: 'a', name: 'update_scene', input: { id: 's1' } },
+        { type: 'tool_use', id: 'b', name: 'update_scene', input: { id: 's2' } },
+      ],
+    });
+    sdk.responses.push(text('Done.'));
+    const log = [];
+    const onToolCall = async ({ id }) => {
+      log.push(`start ${id}`);
+      await new Promise((r) => setTimeout(r, id === 'a' ? 20 : 0));
+      log.push(`end ${id}`);
+      return 'ok';
+    };
+    const { messages } = await chatWithTools({ tools, onToolCall, messages: [{ role: 'user', content: 'x' }] });
+    expect(log).toEqual(['start a', 'end a', 'start b', 'end b']);
+    expect(messages[2].content.map((r) => r.tool_use_id)).toEqual(['a', 'b']);
   });
 
   it('reports a failing tool back to the model as an error result', async () => {

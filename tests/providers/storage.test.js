@@ -1,4 +1,6 @@
+import dns from 'node:dns';
 import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const s3 = vi.hoisted(() => ({ sent: [], configs: [] }));
@@ -28,15 +30,27 @@ vi.mock('@vercel/blob', () => ({
   del: vi.fn(async (keys) => { blob.del.push(keys); }),
 }));
 
+// Guarded downloads use undici's fetch; route it to the stubbed global fetch.
+vi.mock('undici', async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetch: (...args) => globalThis.fetch(...args),
+}));
+
 import {
   assertPublicHttpUrl,
   deleteObject,
   deleteObjects,
+  localPathFor,
   mirrorUrl,
   mockStoragePath,
   putObject,
   storageBackend,
+  toAbsoluteUrl,
 } from '../../lib/providers/storage.js';
+
+const FIX = (f) => readFileSync(path.join('tests', 'fixtures', f));
+const PNG = FIX('still.png');
+const MP4 = FIX('clip.mp4');
 
 const R2_ENV = {
   R2_ACCOUNT_ID: 'acct',
@@ -51,6 +65,13 @@ function realMode(extra = {}) {
   for (const [k, v] of Object.entries(extra)) vi.stubEnv(k, v);
 }
 
+function publicDns() {
+  return vi.spyOn(dns, 'lookup').mockImplementation((host, opts, cb) => {
+    const callback = typeof opts === 'function' ? opts : cb;
+    process.nextTick(() => (opts?.all ? callback(null, [{ address: '93.184.216.34', family: 4 }]) : callback(null, '93.184.216.34', 4)));
+  });
+}
+
 beforeEach(() => {
   s3.sent.length = 0;
   s3.configs.length = 0;
@@ -61,13 +82,14 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('backend selection', () => {
   it('uses R2 when every R2_* variable is set', async () => {
     realMode(R2_ENV);
     expect(storageBackend()).toBe('r2');
-    const out = await putObject({ key: 'projects/p1/still.png', body: Buffer.from('x'), contentType: 'image/png' });
+    const out = await putObject({ key: 'projects/p1/still.png', body: PNG, contentType: 'image/png' });
     expect(out).toEqual({ url: 'https://media.example.com/projects/p1/still.png', key: 'projects/p1/still.png' });
     expect(s3.configs[0]).toMatchObject({
       region: 'auto',
@@ -75,13 +97,14 @@ describe('backend selection', () => {
       credentials: { accessKeyId: 'akid', secretAccessKey: 'secret' },
     });
     expect(s3.sent[0].input).toMatchObject({ Bucket: 'story', Key: 'projects/p1/still.png', ContentType: 'image/png' });
+    expect(s3.sent[0].input).not.toHaveProperty('ContentDisposition');
     expect(blob.put).toHaveLength(0);
   });
 
   it('uses Vercel Blob when any R2_* variable is missing', async () => {
     realMode({ ...R2_ENV, R2_BUCKET: '', BLOB_READ_WRITE_TOKEN: 'blob-token' });
     expect(storageBackend()).toBe('blob');
-    const out = await putObject({ key: 'projects/p1/a.mp4', body: Buffer.from('x'), contentType: 'video/mp4' });
+    const out = await putObject({ key: 'projects/p1/a.mp4', body: MP4, contentType: 'video/mp4' });
     expect(out).toEqual({
       url: 'https://store.public.blob.vercel-storage.com/projects/p1/a.mp4',
       key: 'projects/p1/a.mp4',
@@ -92,7 +115,7 @@ describe('backend selection', () => {
 
   it('throws config naming BLOB_READ_WRITE_TOKEN when Blob has no token', async () => {
     realMode({ BLOB_READ_WRITE_TOKEN: '' });
-    await expect(putObject({ key: 'a.png', body: Buffer.from('x') })).rejects.toMatchObject({
+    await expect(putObject({ key: 'a.png', body: PNG })).rejects.toMatchObject({
       code: 'config', message: expect.stringContaining('BLOB_READ_WRITE_TOKEN'),
     });
   });
@@ -101,6 +124,49 @@ describe('backend selection', () => {
     realMode({ BLOB_READ_WRITE_TOKEN: 't' });
     await expect(putObject({ key: '../etc/passwd', body: 'x' })).rejects.toMatchObject({ code: 'failed' });
     await expect(putObject({ key: '/abs.png', body: 'x' })).rejects.toMatchObject({ code: 'failed' });
+  });
+});
+
+describe('content-type allowlist (stored XSS guard)', () => {
+  it('derives the stored type from the key and ignores the caller type', async () => {
+    realMode(R2_ENV);
+    await putObject({ key: 'p/still.png', body: PNG, contentType: 'text/html' });
+    expect(s3.sent[0].input.ContentType).toBe('image/png');
+  });
+
+  it.each(['p/page.html', 'p/icon.svg', 'p/script.js', 'p/noext'])('rejects key %s', async (key) => {
+    realMode(R2_ENV);
+    await expect(putObject({ key, body: '<script>alert(1)</script>' })).rejects.toMatchObject({ code: 'failed' });
+    expect(s3.sent).toHaveLength(0);
+  });
+
+  it('rejects bytes that do not match the extension', async () => {
+    realMode(R2_ENV);
+    await expect(putObject({ key: 'p/fake.png', body: Buffer.from('<html><script>x</script></html>') }))
+      .rejects.toMatchObject({ code: 'failed' });
+    await expect(putObject({ key: 'p/fake.mp4', body: PNG })).rejects.toMatchObject({ code: 'failed' });
+    expect(s3.sent).toHaveLength(0);
+  });
+
+  it('stores json/text as attachments', async () => {
+    realMode(R2_ENV);
+    await putObject({ key: 'p/transcript.json', body: '{"a":1}' });
+    expect(s3.sent[0].input).toMatchObject({ ContentType: 'application/json', ContentDisposition: 'attachment' });
+  });
+
+  it('mirrorUrl rejects an html page served as .mp4', async () => {
+    realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    publicDns();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('<html><body>hi</body></html>', {
+      status: 200, headers: { 'content-type': 'text/html' },
+    })));
+    await expect(mirrorUrl({ srcUrl: 'https://cdn.example.com/x.mp4', key: 'p/x.mp4' })).rejects.toMatchObject({ code: 'failed' });
+    expect(blob.put).toHaveLength(0);
+  });
+
+  it('mirrorUrl only accepts media keys', async () => {
+    realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    await expect(mirrorUrl({ srcUrl: 'https://cdn.example.com/x.json', key: 'p/x.json' })).rejects.toMatchObject({ code: 'failed' });
   });
 });
 
@@ -157,8 +223,21 @@ describe('mirrorUrl SSRF guard', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('refuses a hostname that resolves to a private address, without fetching', async () => {
+    realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    vi.spyOn(dns, 'lookup').mockImplementation((host, opts, cb) => {
+      const callback = typeof opts === 'function' ? opts : cb;
+      process.nextTick(() => callback(null, [{ address: '10.0.0.5', family: 4 }]));
+    });
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('fetch', fetchSpy);
+    await expect(mirrorUrl({ srcUrl: 'https://internal.example.com/x.mp4', key: 'x.mp4' })).rejects.toMatchObject({ code: 'failed' });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it('refuses a redirect to a private address without fetching it', async () => {
     realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    publicDns();
     const fetchSpy = vi.fn(async () => new Response(null, {
       status: 302, headers: { location: 'http://127.0.0.1/x.mp4' },
     }));
@@ -168,7 +247,8 @@ describe('mirrorUrl SSRF guard', () => {
     expect(blob.put).toHaveLength(0);
   });
 
-  it('follows a public redirect and drops auth headers across origins', async () => {
+  it('follows a public redirect, pins the connection and drops auth headers across origins', async () => {
+    publicDns();
     const { downloadToFile } = await import('../../lib/providers/http.js');
     const calls = [];
     vi.stubGlobal('fetch', vi.fn(async (url, init) => {
@@ -179,14 +259,29 @@ describe('mirrorUrl SSRF guard', () => {
     const out = await downloadToFile('https://api.example.com/y', { headers: { Authorization: 'Bearer secret' } });
     expect(readFileSync(out.filePath, 'utf8')).toBe('ok');
     expect(calls[0].init.headers).toEqual({ Authorization: 'Bearer secret' });
+    expect(calls[0].init.dispatcher).toBeTruthy();
     expect(calls[1].url).toBe('https://cdn2.example.com/y.mp4');
     expect(calls[1].init.headers).toBeUndefined();
   });
 
+  it('removes its temp directory when a download fails', async () => {
+    publicDns();
+    const { downloadToFile } = await import('../../lib/providers/http.js');
+    const fsp = (await import('node:fs/promises')).default;
+    const made = [];
+    const real = fsp.mkdtemp;
+    vi.spyOn(fsp, 'mkdtemp').mockImplementation(async (p) => { const d = await real(p); made.push(d); return d; });
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('x'.repeat(50), { status: 200 })));
+    await expect(downloadToFile('https://cdn.example.com/big', { maxBytes: 10 })).rejects.toMatchObject({ code: 'failed' });
+    expect(made).toHaveLength(1);
+    expect(existsSync(made[0])).toBe(false);
+  });
+
   it('streams a public file into storage', async () => {
     realMode({ BLOB_READ_WRITE_TOKEN: 't' });
-    vi.stubGlobal('fetch', vi.fn(async () => new Response(Buffer.from('video-bytes'), {
-      status: 200, headers: { 'content-type': 'video/mp4', 'content-length': '11' },
+    publicDns();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(MP4, {
+      status: 200, headers: { 'content-type': 'application/octet-stream', 'content-length': String(MP4.length) },
     })));
     const out = await mirrorUrl({ srcUrl: 'https://cdn.example.com/x.mp4', key: 'projects/p/x.mp4' });
     expect(out).toEqual({ url: 'https://store.public.blob.vercel-storage.com/projects/p/x.mp4', key: 'projects/p/x.mp4' });
@@ -195,6 +290,7 @@ describe('mirrorUrl SSRF guard', () => {
 
   it('rejects files over the cap', async () => {
     realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    publicDns();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('x', {
       status: 200, headers: { 'content-length': String(500 * 1024 * 1024) },
     })));
@@ -207,13 +303,23 @@ describe('mock mode', () => {
   it('writes under a temp directory and returns a mock url without network', async () => {
     const fetchSpy = vi.fn();
     vi.stubGlobal('fetch', fetchSpy);
+    const lookupSpy = vi.spyOn(dns, 'lookup');
     const out = await putObject({ key: 'tests/hello.txt', body: 'hi', contentType: 'text/plain' });
     expect(out).toEqual({ url: '/api/mock/storage/tests/hello.txt', key: 'tests/hello.txt' });
     expect(readFileSync(mockStoragePath('tests/hello.txt'), 'utf8')).toBe('hi');
 
-    const m = await mirrorUrl({ srcUrl: '/mock/clip.mp4', key: 'tests/clip.mp4' });
+    const m = await mirrorUrl({ srcUrl: '/api/mock/fixtures/clip.mp4', key: 'tests/clip.mp4' });
     expect(m.url).toBe('/api/mock/storage/tests/clip.mp4');
     expect(existsSync(mockStoragePath('tests/clip.mp4'))).toBe(true);
+
+    const legacy = await mirrorUrl({ srcUrl: '/mock/still.png', key: 'tests/legacy.png' });
+    expect(readFileSync(mockStoragePath(legacy.key)).equals(PNG)).toBe(true);
+
+    const abs = await mirrorUrl({ srcUrl: 'http://localhost:3000/api/mock/fixtures/still.png', key: 'tests/abs.png' });
+    expect(readFileSync(mockStoragePath(abs.key)).equals(PNG)).toBe(true);
+
+    const copy = await mirrorUrl({ srcUrl: m.url, key: 'tests/clip-copy.mp4' });
+    expect(readFileSync(mockStoragePath(copy.key)).equals(MP4)).toBe(true);
 
     const remote = await mirrorUrl({ srcUrl: 'https://cdn.example.com/out.png', key: 'tests/out.png' });
     expect(remote.key).toBe('tests/out.png');
@@ -221,7 +327,32 @@ describe('mock mode', () => {
     expect(await deleteObjects({ keys: ['tests/hello.txt', 'tests/clip.mp4', 'tests/missing.bin'] })).toBe(2);
     expect(existsSync(mockStoragePath('tests/hello.txt'))).toBe(false);
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lookupSpy).not.toHaveBeenCalled();
     expect(s3.sent).toHaveLength(0);
     expect(blob.put).toHaveLength(0);
+  });
+
+  it('runs the same URL and key validation as real mode', async () => {
+    await expect(mirrorUrl({ srcUrl: 'http://127.0.0.1/x.mp4', key: 'tests/x.mp4' })).rejects.toMatchObject({ code: 'failed' });
+    await expect(mirrorUrl({ srcUrl: 'file:///etc/passwd', key: 'tests/x.mp4' })).rejects.toMatchObject({ code: 'failed' });
+    await expect(putObject({ key: 'tests/x.html', body: '<b>' })).rejects.toMatchObject({ code: 'failed' });
+    await expect(putObject({ key: 'tests/x.png', body: 'not a png' })).rejects.toMatchObject({ code: 'failed' });
+  });
+});
+
+describe('localPathFor / toAbsoluteUrl', () => {
+  it('maps mock urls to local files and real urls to null', async () => {
+    expect(localPathFor('/api/mock/fixtures/clip.mp4')).toBe(path.join(process.cwd(), 'tests', 'fixtures', 'clip.mp4'));
+    expect(localPathFor('/mock/voice.mp3')).toBe(path.join(process.cwd(), 'tests', 'fixtures', 'voice.mp3'));
+    expect(localPathFor('/api/mock/storage/tests/a%20b.png')).toBe(mockStoragePath('tests/a b.png'));
+    expect(localPathFor('http://localhost:3000/api/mock/fixtures/still.png')).toBe(path.join(process.cwd(), 'tests', 'fixtures', 'still.png'));
+    expect(localPathFor('https://store.public.blob.vercel-storage.com/a.mp4')).toBeNull();
+    expect(localPathFor('/api/mock/storage/../../etc/passwd')).toBeNull();
+    expect(localPathFor('/mock/../../.env.local')).toBeNull();
+  });
+
+  it('resolves relative urls against an origin and leaves absolute urls alone', () => {
+    expect(toAbsoluteUrl('/api/mock/fixtures/clip.mp4', 'http://localhost:3000')).toBe('http://localhost:3000/api/mock/fixtures/clip.mp4');
+    expect(toAbsoluteUrl('https://cdn.example.com/a.mp4', 'http://localhost:3000')).toBe('https://cdn.example.com/a.mp4');
   });
 });

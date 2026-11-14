@@ -1,40 +1,46 @@
-import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
-import path from 'node:path';
+import fs from 'node:fs';
 
-import { mockStoragePath } from '../../../../lib/providers/storage.js';
+import { mockStoragePath, storedTypeFor } from '../../../../lib/providers/storage.js';
 
 /*
  * Dev-only: serves files that lib/providers/storage.js wrote to its temp
- * directory in mock mode (STORY_MOCK=1). 404 everywhere else.
+ * directory in mock mode (STORY_MOCK=1). 404 everywhere else. Types follow
+ * the storage allowlist; non-media is served as an attachment.
  */
-
-const TYPES = {
-  '.mp4': 'video/mp4',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.json': 'application/json',
-  '.txt': 'text/plain',
-};
 
 export default async function handler(req, res) {
   if (process.env.STORY_MOCK !== '1' || process.env.NODE_ENV === 'production') {
-    return res.status(404).end();
+    res.statusCode = 404;
+    return res.end();
   }
   const parts = Array.isArray(req.query.key) ? req.query.key : [req.query.key];
   let filePath;
+  let type;
   try {
-    filePath = mockStoragePath(parts.join('/'));
+    const key = parts.join('/');
+    filePath = mockStoragePath(key);
+    type = storedTypeFor(key);
   } catch {
-    return res.status(400).end();
+    res.statusCode = 400;
+    return res.end();
   }
-  const info = await stat(filePath).catch(() => null);
-  if (!info?.isFile()) return res.status(404).end();
-  res.setHeader('Content-Type', TYPES[path.extname(filePath).toLowerCase()] || 'application/octet-stream');
+  const info = await fs.promises.stat(filePath).catch(() => null);
+  if (!info?.isFile()) {
+    res.statusCode = 404;
+    return res.end();
+  }
+  res.setHeader('Content-Type', type.type);
   res.setHeader('Content-Length', String(info.size));
-  createReadStream(filePath).pipe(res);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (!type.media) res.setHeader('Content-Disposition', 'attachment');
+  const stream = fs.createReadStream(filePath);
+  stream.on('error', () => {
+    if (!res.headersSent) {
+      res.statusCode = 500;
+      res.end();
+    } else {
+      res.destroy();
+    }
+  });
+  stream.pipe(res);
 }

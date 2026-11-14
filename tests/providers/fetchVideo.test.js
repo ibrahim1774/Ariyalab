@@ -1,11 +1,27 @@
+import dns from 'node:dns';
 import { existsSync, readFileSync } from 'node:fs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('undici', async (importOriginal) => ({
+  ...(await importOriginal()),
+  fetch: (...args) => globalThis.fetch(...args),
+}));
 
 import { detectPlatform, fetchReference } from '../../lib/providers/fetchVideo.js';
+
+beforeEach(() => {
+  // Every name resolves to a public address; no real DNS in tests.
+  vi.spyOn(dns, 'lookup').mockImplementation((host, opts, cb) => {
+    const callback = typeof opts === 'function' ? opts : cb;
+    process.nextTick(() => (opts?.all ? callback(null, [{ address: '93.184.216.34', family: 4 }]) : callback(null, '93.184.216.34', 4)));
+  });
+});
 
 afterEach(() => {
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe('detectPlatform', () => {
@@ -17,6 +33,8 @@ describe('detectPlatform', () => {
     ['https://www.facebook.com/reel/123', 'facebook'],
     ['https://m.facebook.com/watch/?v=1', 'facebook'],
     ['https://fb.watch/abcd/', 'facebook'],
+    ['https://vm.tiktok.com/ZMabc123/', 'tiktok'],
+    ['https://vt.tiktok.com/ZSabc123/', 'tiktok'],
   ])('%s -> %s', (url, platform) => {
     expect(detectPlatform(url)).toBe(platform);
   });
@@ -44,6 +62,18 @@ describe('fetchReference (mock mode)', () => {
     expect(existsSync(out.filePath)).toBe(true);
     expect(readFileSync(out.filePath).length).toBe(readFileSync('tests/fixtures/reference.mp4').length);
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(out.audioPath).toBeUndefined();
+    await out.cleanup();
+    expect(existsSync(path.dirname(out.filePath))).toBe(false);
+  });
+
+  it('returns a separate audio track for [[mock:silent-reel]]', async () => {
+    const out = await fetchReference('https://www.instagram.com/reel/abc/?x=[[mock:silent-reel]]');
+    expect(out.platform).toBe('instagram');
+    expect(readFileSync(out.filePath).equals(readFileSync('tests/fixtures/reference-silent.mp4'))).toBe(true);
+    expect(readFileSync(out.audioPath).equals(readFileSync('tests/fixtures/voice.mp3'))).toBe(true);
+    await out.cleanup();
+    expect(existsSync(out.audioPath)).toBe(false);
   });
 
   it('still rejects unsupported hosts in mock mode', async () => {
@@ -73,11 +103,47 @@ describe('fetchReference (real mode)', () => {
     expect(out.platform).toBe('instagram');
     expect(readFileSync(out.filePath, 'utf8')).toBe('VIDEO');
     expect(readFileSync(out.audioPath, 'utf8')).toBe('AUDIO');
+    expect(typeof out.cleanup).toBe('function');
+    await out.cleanup();
+    expect(existsSync(out.filePath)).toBe(false);
     expect(calls[0].url).toMatch(/^https:\/\/api\.apify\.com\/v2\/acts\/apify~instagram-scraper\/run-sync-get-dataset-items/);
     expect(calls[0].init.headers.Authorization).toBe('Bearer apify-token');
     expect(JSON.parse(calls[0].init.body)).toMatchObject({
       directUrls: ['https://www.instagram.com/reel/abc/'], resultsType: 'posts',
     });
+  });
+
+  it('resolves a vm.tiktok.com share link to the canonical URL before scraping', async () => {
+    vi.stubEnv('STORY_MOCK', '0');
+    vi.stubEnv('APIFY_TOKEN', 'apify-token');
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init = {}) => {
+      calls.push({ url: String(url), init });
+      if (String(url).startsWith('https://vm.tiktok.com/')) {
+        return new Response(null, { status: 301, headers: { location: 'https://www.tiktok.com/@baker/video/7300000000000000000?_r=1' } });
+      }
+      if (String(url).startsWith('https://api.apify.com/v2/acts/')) {
+        return new Response(JSON.stringify([{ videoMeta: { downloadAddr: 'https://api.apify.com/v2/key-value-stores/s/records/v.mp4' } }]));
+      }
+      return media('TT', 'video/mp4');
+    }));
+    const out = await fetchReference('https://vm.tiktok.com/ZMabc123/');
+    expect(out.platform).toBe('tiktok');
+    const apify = calls.find((c) => c.url.startsWith('https://api.apify.com/v2/acts/'));
+    expect(apify.url).toContain('clockworks~tiktok-scraper');
+    expect(JSON.parse(apify.init.body).postURLs).toEqual(['https://www.tiktok.com/@baker/video/7300000000000000000?_r=1']);
+    const download = calls.at(-1);
+    expect(download.init.headers).toEqual({ Authorization: 'Bearer apify-token' });
+    await out.cleanup();
+  });
+
+  it('rejects a share link that redirects off the allowlist', async () => {
+    vi.stubEnv('STORY_MOCK', '0');
+    vi.stubEnv('APIFY_TOKEN', 'apify-token');
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 302, headers: { location: 'https://evil.example.com/x' } })));
+    const err = await fetchReference('https://vt.tiktok.com/ZSabc/').catch((e) => e);
+    expect(err.code).toBe('failed');
+    expect(err.message).toMatch(/Upload the file instead/);
   });
 
   it('uses ScrapeCreators only when APIFY_TOKEN is not set', async () => {
