@@ -154,7 +154,7 @@ import confirm from '../../pages/api/checkout/confirm.js';
 import claimTicket from '../../pages/api/checkout/claim-ticket.js';
 import claim from '../../pages/api/checkout/claim.js';
 import checkout from '../../pages/api/checkout.js';
-import { getEntitlement } from '../../lib/entitlement';
+import { getEntitlement, linkStripeCustomerToProfile } from '../../lib/entitlement';
 import { getSupabaseAdmin } from '../../lib/supabaseServer';
 import { renewPlanCredits } from '../../lib/credits.js';
 
@@ -1326,7 +1326,7 @@ describe('review fixes round 3, billing_v2 off', () => {
     expect(S.state.customers.get(old).metadata[KEY.credits]).toBe('100');
   });
 
-  it('R2: a past_due plan or foreign metadata on the old customer refuses the relink', async () => {
+  it('R2: a past_due or unpaid subscription of any product on the old customer refuses the relink', async () => {
     // Ownership by client_reference_id (a replacing proof); only the old customer differs.
     const u1 = newUser();
     const old1 = newCustomer();
@@ -1335,9 +1335,13 @@ describe('review fixes round 3, billing_v2 off', () => {
     S.state.subs.get(pastDue).status = 'past_due';
     expect((await confirmAs(u1, topupSession({ customer: newCustomer(), buyer: u1 }).id)).statusCode).toBe(409);
 
+    // A past_due subscription of ANY product (here not one of this app's prices) still blocks.
     const u2 = newUser();
-    const old2 = newCustomer({ creditsRemaining: '7' }); // haelabs-style key
+    const old2 = newCustomer();
     await link(u2.id, old2);
+    const otherProduct = newSub(old2);
+    S.state.subs.get(otherProduct).status = 'unpaid';
+    S.state.subs.get(otherProduct).items.data[0].price.lookup_key = 'haelabs_monthly';
     expect((await confirmAs(u2, topupSession({ customer: newCustomer(), buyer: u2 }).id)).statusCode).toBe(409);
     const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [u2.id]);
     expect(row.rows[0].stripe_customer_id).toBe(old2);
@@ -1354,9 +1358,11 @@ describe('review fixes round 3, billing_v2 off', () => {
     expect((await confirmAs(user, session.id)).statusCode).toBe(200);
     expect(S.state.customers.get(old).metadata[KEY.credits]).toBe('0');
     expect(S.state.customers.get(fresh).metadata[KEY.credits]).toBe(String(TOPUP_S.credits + 100));
-    const relinkWrites = S.state.updates.filter((u) => (u.id === old || u.id === fresh) && Object.keys(u.metadata).some((k) => k.includes('relink')));
-    expect(relinkWrites.length).toBeGreaterThan(0);
-    for (const u of relinkWrites) expect(u.metadata[KEY.plan]).toBeUndefined();
+    // The old customer only ever receives the moved balances and markers (changed keys only).
+    const oldWrites = S.state.updates.filter((u) => u.id === old);
+    expect(oldWrites.length).toBeGreaterThan(0);
+    const allowed = new Set([KEY.credits, KEY.imageCredits, KEY.relinkedTo, KEY.relinkCarry]);
+    for (const u of oldWrites) for (const k of Object.keys(u.metadata)) expect(allowed.has(k)).toBe(true);
   });
 
   it('m5: a 500 from /confirm does not leak the internal error', async () => {
@@ -1421,5 +1427,90 @@ describe('review fixes round 3, billing_v2 on', () => {
     await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
     const rows = await db.query('select amount from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
     expect(rows.rows).toEqual([{ amount: V2_MONTHLY - Math.ceil(V2_MONTHLY / 2) }]);
+  });
+});
+
+// =====================================================================
+// Round 3 follow-up: state follows the profile on a permitted relink
+// =====================================================================
+describe('relink carries state, billing_v2 off', () => {
+  beforeAll(() => setBillingV2(false));
+  const numeric = (md) => Object.fromEntries(Object.entries(md).filter(([, v]) => /^\d+$/.test(v)).map(([k, v]) => [k, Number(v)]));
+
+  it('a former legacy subscriber is relinked: credits moved once, shared keys copied, old keys untouched', async () => {
+    const user = newUser();
+    const old = newCustomer({
+      [KEY.credits]: '100',
+      [KEY.plan]: 'monthly',
+      plan: 'monthly', // un-namespaced, written by readPaidEntitlement (and maybe haelabs)
+      creditsRemaining: '5', // haelabs-style balance
+      supabase_user_id: user.id,
+    });
+    await link(user.id, old);
+    const cancelled = newSub(old);
+    S.state.subs.get(cancelled).status = 'canceled';
+    const fresh = newCustomer({ creditsRemaining: '1' }); // already present: never overwritten
+    const nonce = 'carry-' + randomUUID();
+    const session = subSession({ customer: fresh, metadata: { pending_supabase_link: 'true', claim_ticket: hashClaimTicket(nonce) } });
+    const cookies = { ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) };
+    expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(200);
+    expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(200);
+
+    const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [user.id]);
+    expect(row.rows[0].stripe_customer_id).toBe(fresh);
+    const n = S.state.customers.get(fresh).metadata;
+    const o = S.state.customers.get(old).metadata;
+    expect(n[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
+    expect(n.plan).toBe('monthly');
+    expect(n.creditsRemaining).toBe('1');
+    expect(o[KEY.credits]).toBe('0');
+    expect(o.plan).toBe('monthly');
+    expect(o.creditsRemaining).toBe('5');
+    expect(o.supabase_user_id).toBe(user.id);
+  });
+
+  it('relinking back and forth never increases any numeric value', async () => {
+    const user = newUser();
+    const a = newCustomer({ [KEY.credits]: '100', [KEY.imageCredits]: '9', creditsRemaining: '5', plan: 'monthly' });
+    const b = newCustomer();
+    await link(user.id, a);
+    const admin = getSupabaseAdmin();
+    const max = {};
+    const track = () => {
+      for (const id of [a, b]) {
+        for (const [k, v] of Object.entries(numeric(S.state.customers.get(id).metadata))) {
+          if (k.includes('relink')) continue;
+          max[k] = Math.max(max[k] ?? 0, v);
+        }
+      }
+    };
+    track();
+    const before = { ...max };
+    await linkStripeCustomerToProfile(admin, user.id, b, { via: 'admin' });
+    await linkStripeCustomerToProfile(admin, user.id, a, { via: 'admin' });
+    await linkStripeCustomerToProfile(admin, user.id, b, { via: 'admin' });
+    track();
+    expect(max).toEqual(before);
+    const total = (k) => [a, b].reduce((n, id) => n + parseInt(S.state.customers.get(id).metadata[k] || '0', 10), 0);
+    expect(total(KEY.credits)).toBe(100);
+    expect(total(KEY.imageCredits)).toBe(9);
+  });
+
+  it('refuses with 409 and changes nothing when the copy would exceed Stripe\'s 50-key limit', async () => {
+    const user = newUser();
+    const oldMd = Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`hl_key_${i}`, 'x']));
+    const newMd = Object.fromEntries(Array.from({ length: 25 }, (_, i) => [`other_${i}`, 'y']));
+    const old = newCustomer(oldMd);
+    await link(user.id, old);
+    const fresh = newCustomer(newMd);
+    const session = topupSession({ customer: fresh, buyer: user });
+    const updatesBefore = S.state.updates.length;
+    const res = await confirmAs(user, session.id);
+    expect(res.statusCode).toBe(409);
+    expect(S.state.updates.length).toBe(updatesBefore);
+    expect(S.state.customers.get(old).metadata).toEqual(oldMd);
+    expect(S.state.customers.get(fresh).metadata).toEqual(newMd);
+    const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [user.id]);
+    expect(row.rows[0].stripe_customer_id).toBe(old);
   });
 });
