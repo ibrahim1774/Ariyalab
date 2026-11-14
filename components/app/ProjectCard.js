@@ -31,7 +31,7 @@ export default function ProjectCard({ project }) {
   const badge = BADGES[status];
   const title = project.title || 'Untitled story';
   return (
-    <Link href={`/app/projects/${project.id}`} className={styles.link} aria-label={`Open ${title}`}>
+    <Link href={`/app/p/${project.id}`} className={styles.link} aria-label={`Open ${title}`}>
       <Card className={styles.card} padded={false}>
         <div className={styles.cover} aria-hidden="true">
           {project.cover_url ? <img src={project.cover_url} alt="" /> : <span className={styles.coverMark}>{title.slice(0, 1).toUpperCase()}</span>}

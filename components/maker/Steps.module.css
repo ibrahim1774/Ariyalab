@@ -1,0 +1,165 @@
+.step { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.stepHead h2 { font-size: clamp(22px, 3vw, 30px); line-height: 1.15; margin-bottom: 6px; }
+.stepHead p { margin: 0; color: var(--text-dim); max-width: 600px; }
+.form { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.form p { margin: 0; }
+.muted, .hint { color: var(--text-dim); font-size: 14px; margin: 0; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; }
+
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; min-width: 0; }
+.field input, .field textarea, .line textarea, .sceneTitle {
+  width: 100%;
+  font: inherit;
+  font-weight: 400;
+  padding: 10px 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  resize: vertical;
+}
+.field input:focus-visible, .field textarea:focus-visible, .line textarea:focus-visible, .sceneTitle:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+.optionGrid, .chips, .styleGrid { border: 0; margin: 0; padding: 0; min-width: 0; }
+.optionGrid legend, .chips legend, .styleGrid legend { font-size: 14px; font-weight: 600; margin-bottom: 10px; padding: 0; }
+.optionGrid legend.srOnly, .styleGrid legend.srOnly { position: absolute; margin: 0; }
+
+/* Radio cards: the real input stays in the page (keyboard and screen readers) and the card shows the focus. */
+.optionGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.option, .styleCard, .chip {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 16px;
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.option:hover, .styleCard:hover, .chip:hover { border-color: var(--accent); }
+.option input, .styleCard input, .chip input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.option:focus-within, .styleCard:focus-within, .chip:focus-within { box-shadow: var(--focus-ring); }
+.optionOn { border-color: var(--accent); background: var(--accent-tint); }
+.optionTitle { font-weight: 600; font-size: 15px; }
+.optionHelper, .chip small { font-size: 13px; color: var(--text-dim); }
+.chips { display: flex; flex-wrap: wrap; gap: 10px; }
+.chips legend { width: 100%; }
+.chip { padding: 10px 16px; border-radius: var(--radius-pill); flex-direction: row; align-items: baseline; gap: 8px; font-size: 14px; font-weight: 500; }
+.styleGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
+.styleCard { padding: 10px; }
+.stylePreview { display: block; aspect-ratio: 4 / 3; border-radius: 10px; margin-bottom: 6px; }
+.saveState { min-height: 20px; font-size: 13px; color: var(--text-dim); }
+
+.errorNotice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 14px;
+  background: var(--error-bg);
+  color: var(--error);
+  font-size: 14px;
+}
+.errorAction {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  font-weight: 600;
+  color: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.errorAction:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
+
+/* Script */
+.sceneList { display: flex; flex-direction: column; gap: 14px; }
+.scene { display: flex; flex-direction: column; gap: 12px; padding: 18px; min-width: 0; }
+.sceneHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.sceneNumber { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-deep); }
+.sceneTitle { flex: 1 1 160px; width: auto; font-weight: 600; padding: 6px 10px; }
+.saveBadge { font-size: 12px; color: var(--text-dim); min-width: 52px; text-align: right; }
+.lines { display: flex; flex-direction: column; gap: 10px; }
+.line { display: flex; flex-direction: column; gap: 4px; }
+.speaker { font-size: 12px; font-weight: 600; color: var(--text-dim); }
+.warnings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.warnings li { padding: 8px 12px; border-radius: 12px; background: rgba(183, 121, 31, 0.1); color: #7A4F0F; font-size: 14px; }
+.generalNotes { display: flex; flex-direction: column; gap: 8px; }
+
+/* Cast */
+.castList { display: flex; flex-direction: column; gap: 16px; }
+.castCard { display: flex; flex-direction: column; gap: 14px; padding: 20px; min-width: 0; }
+.castHead h3 { font-size: 18px; margin-bottom: 4px; }
+.castHead p { margin: 0; color: var(--text-dim); font-size: 14px; }
+.candidates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.candidate { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; aspect-ratio: auto; }
+.candidate img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 14px; background: var(--surface-2); }
+div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
+.shimmer { background: linear-gradient(100deg, var(--surface-2) 30%, #fff 50%, var(--surface-2) 70%); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+@keyframes shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .shimmer { animation: none; } }
+.candidateChosen img { outline: 3px solid var(--accent); outline-offset: 2px; }
+.pickButton {
+  padding: 8px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.pickButton[aria-pressed='true'] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.pickButton:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.pickButton:disabled { opacity: 0.6; cursor: not-allowed; }
+.blocked, .failed { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--error-bg); color: var(--error); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
+.regen { display: flex; flex-direction: column; gap: 12px; }
+
+/* Storyboard, generate, review */
+.shotGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.filesNote { margin: 0; font-size: 13px; color: var(--text-dim); }
+.progress { height: 10px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
+.progress span { display: block; height: 100%; background: var(--accent); transition: width 0.4s var(--ease); }
+.clipActions { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.clip { width: 100%; border-radius: 12px; background: #000; max-height: 320px; }
+
+/* Confirm modal */
+.confirm { display: flex; flex-direction: column; gap: 10px; }
+.quoteLines { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 14px; }
+.quoteLines li { display: flex; justify-content: space-between; gap: 12px; }
+.quoteTotal { display: flex; justify-content: space-between; margin: 0; padding-top: 10px; border-top: 1px solid var(--border); font-size: 16px; }
+
+/* Slots */
+.slot { padding: 18px 20px; border-style: dashed; }
+.slot h3 { font-size: 16px; margin-bottom: 4px; }
+.slot p { margin: 0; color: var(--text-dim); font-size: 14px; }
+.chatSlot h3 { font-size: 16px; margin-bottom: 6px; }
+.slotButton {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 14px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 13px;
+  cursor: not-allowed;
+}
+.slotButton small { font-size: 11px; }
+
+@media (max-width: 520px) {
+  .candidates { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .optionGrid { grid-template-columns: minmax(0, 1fr); }
+  .shotGrid { grid-template-columns: minmax(0, 1fr); }
+}
