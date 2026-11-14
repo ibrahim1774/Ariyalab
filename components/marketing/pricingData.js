@@ -1,12 +1,8 @@
-// Starting plan values for the homepage. A later task repoints this file to
-// lib/pricing.js; PricingSection reads from here only.
-export const PLANS = {
-  starter: { usd: 29, credits: 1500 },
-  creator: { usd: 49, credits: 2600 },
-  studio: { usd: 99, credits: 5400 },
-};
+// Homepage plan numbers. One source of truth: lib/pricing.js.
+import { PLANS_V2, YEARLY_DISCOUNT } from '../../lib/pricing.js';
 
-export const YEARLY_DISCOUNT = 0.2;
+export const PLANS = PLANS_V2;
+export { YEARLY_DISCOUNT };
 
 // 720 credits is one 45 second Pro narrated video.
 export const CREDITS_PER_REFERENCE_VIDEO = 720;
