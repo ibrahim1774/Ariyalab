@@ -12,6 +12,7 @@ import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../lib/entitlement';
 import { CLAIM_NONCE_COOKIE, hashClaimTicket, usersForCustomer } from '../../lib/grants';
+import { signClaimNonce, verifyClaimNonce } from '../../lib/jobToken';
 
 // Session metadata keys only the server sets; never taken from the
 // attribution cookie (ownership and claims read them).
@@ -67,20 +68,32 @@ function appendCookie(res, cookie) {
  * its metadata and upsert profile.stripe_customer_id so subsequent
  * calls converge on the same customer.
  */
+// A lookup failed, so we cannot tell whether this user already has a Stripe
+// customer. Never fall through to creating a second one: the buyer retries.
+class CustomerLookupUnavailableError extends Error {
+  constructor(step, cause) {
+    super(`customer lookup unavailable (${step})`);
+    this.name = 'CustomerLookupUnavailableError';
+    this.cause = cause;
+  }
+}
+
 async function findStripeCustomerForUser({ admin, userId, email }) {
   let customerId = null;
 
-  // 1) Profile lookup + Stripe existence check
+  // 1) Profile lookup + Stripe existence check. supabase-js reports errors
+  // in `error` rather than throwing.
   let linkedId = null;
   try {
-    const { data } = await admin
+    const { data, error } = await admin
       .from('profiles')
       .select('stripe_customer_id')
       .eq('id', userId)
       .maybeSingle();
+    if (error) throw error;
     linkedId = data?.stripe_customer_id || null;
   } catch (lookupErr) {
-    console.warn('[customer-find] profile lookup failed', lookupErr.message);
+    throw new CustomerLookupUnavailableError('profile', lookupErr);
   }
   if (linkedId) {
     try {
@@ -89,7 +102,7 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
     } catch (retrieveErr) {
       // Only a customer that is really gone is re-resolved; a transient
       // Stripe error must not start a second customer for this user.
-      if (retrieveErr?.code !== 'resource_missing') throw retrieveErr;
+      if (retrieveErr?.code !== 'resource_missing') throw new CustomerLookupUnavailableError('customer', retrieveErr);
       console.warn('[customer-find] linked customer not in Stripe, will re-resolve');
     }
   }
@@ -111,7 +124,7 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
     });
     if (search.data.length > 0 && (await adoptable(search.data[0]))) customerId = search.data[0].id;
   } catch (searchErr) {
-    console.warn('[customer-find] metadata search failed', searchErr.message);
+    throw new CustomerLookupUnavailableError('search', searchErr);
   }
 
   // 3) Email match: only a customer this user already owns, or one nobody owns.
@@ -129,7 +142,7 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
         }
       }
     } catch (listErr) {
-      console.warn('[customer-find] email list failed', listErr.message);
+      throw new CustomerLookupUnavailableError('email', listErr);
     }
   }
 
@@ -343,12 +356,14 @@ export default async function handler(req, res) {
     if (isTicketFlow) {
       // Reuse this browser's nonce: a second click, another tab or a retry
       // must not orphan an earlier session that gets paid.
-      const existing = parseCookies(req.headers?.cookie || '')[CLAIM_NONCE_COOKIE];
-      const nonce = NONCE_PATTERN.test(existing || '') ? existing : randomBytes(24).toString('base64url');
+      // Only a nonce this server signed is reused; a planted cookie is
+      // replaced (nonce fixation).
+      const existing = verifyClaimNonce(parseCookies(req.headers?.cookie || '')[CLAIM_NONCE_COOKIE]);
+      const nonce = existing && NONCE_PATTERN.test(existing) ? existing : randomBytes(24).toString('base64url');
       claimTicket = hashClaimTicket(nonce);
       appendCookie(
         res,
-        `${CLAIM_NONCE_COOKIE}=${nonce}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
+        `${CLAIM_NONCE_COOKIE}=${signClaimNonce(nonce)}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
       );
     }
 
@@ -425,6 +440,10 @@ export default async function handler(req, res) {
       meta: { eventName: 'InitiateCheckout', eventId, value, currency: 'USD' },
     });
   } catch (err) {
+    if (err instanceof CustomerLookupUnavailableError) {
+      console.error('[checkout]', err.message, err.cause?.message);
+      return res.status(503).json({ error: 'Please try again.' });
+    }
     return res.status(500).json({ error: err.message });
   }
 }

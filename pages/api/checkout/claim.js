@@ -12,6 +12,7 @@ import {
   grantForCheckoutSession,
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
+  claimNonceFromCookie,
 } from '../../../lib/grants';
 
 /*
@@ -74,7 +75,7 @@ export default async function handler(req, res) {
     // Security: the caller must own this session (normally: the signed-in
     // user's verified email matches the email Stripe collected).
     const owner = checkSessionOwner(checkoutSession, session.user, {
-      claimNonce: req.cookies?.[CLAIM_NONCE_COOKIE],
+      claimNonce: claimNonceFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
     });
     if (!owner.ok) {
       return res.status(403).json({
@@ -110,7 +111,7 @@ export default async function handler(req, res) {
     } catch (grantErr) {
       if (!(grantErr instanceof GrantInProgressError)) throw grantErr;
       return res.status(409).json({
-        error: 'Your payment is still being processed. Try again in a minute.',
+        error: 'Your payment is still being processed. Try again in a couple of minutes.',
         retryable: true,
       });
     }

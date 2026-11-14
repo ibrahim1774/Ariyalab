@@ -10,6 +10,7 @@ const S = vi.hoisted(() => {
     subs: new Map(),
     invoices: new Map(),
     charges: new Map(),
+    disputes: new Map(),
     failCustomerUpdates: 0,
     failSessionRetrieves: 0,
     created: [], // checkout.sessions.create params
@@ -76,12 +77,15 @@ const S = vi.hoisted(() => {
     },
     invoices: { retrieve: async (id) => clone(state.invoices.get(id)) },
     charges: { retrieve: async (id) => clone(state.charges.get(id)) },
+    disputes: {
+      list: async ({ charge }) => ({ data: [...state.disputes.values()].filter((d) => d.charge === charge).map(clone) }),
+    },
     webhooks: { constructEvent: (raw) => JSON.parse(raw.toString('utf8')) },
   };
   return { state, api };
 });
 
-const auth = vi.hoisted(() => ({ user: null, db: null }));
+const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false }));
 
 vi.mock('../../lib/stripe', async (importOriginal) => {
   const actual = await importOriginal();
@@ -100,6 +104,7 @@ vi.mock('../../lib/supabaseServer', () => {
       select: () => ({
         eq: (_col, id) => ({
           maybeSingle: async () => {
+            if (auth.failProfileRead) return { data: null, error: { message: 'db down', code: '08006' } };
             const { rows } = await auth.db.query('select stripe_customer_id from public.profiles where id = $1', [id]);
             return { data: rows[0] || null, error: null };
           },
@@ -126,6 +131,7 @@ import { KEY } from '../../lib/metaKeys';
 import { setCreditsDb, getBalance } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
 import { setGrantsDb, hashClaimTicket } from '../../lib/grants.js';
+import { signClaimNonce, verifyClaimNonce } from '../../lib/jobToken.js';
 import webhook from '../../pages/api/stripe-webhook.js';
 import confirm from '../../pages/api/checkout/confirm.js';
 import claimTicket from '../../pages/api/checkout/claim-ticket.js';
@@ -477,7 +483,7 @@ describe('billing_v2 off (legacy metadata grants)', () => {
 
     const ok = await callRoute(claimTicket, {
       user: newcomer,
-      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: nonce },
+      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) },
     });
     expect(ok.statusCode).toBe(200);
     expect(S.state.customers.get(customer).metadata[KEY.plan]).toBe('monthly');
@@ -609,7 +615,7 @@ describe('billing_v2 on (ledger grants)', () => {
     const newcomer = newUser();
     const res = await callRoute(claimTicket, {
       user: newcomer,
-      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: nonce },
+      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) },
     });
     expect(res.statusCode).toBe(200);
     expect(await getBalance(newcomer.id)).toMatchObject({ plan: V2_MONTHLY });
@@ -775,7 +781,7 @@ describe('review fixes, billing_v2 off', () => {
     const md = lastCreated().metadata;
     expect(md.supabase_user_id).toBeUndefined();
     expect(md.pending_supabase_link).toBe('true');
-    expect(md.claim_ticket).toBe(hashClaimTicket(cookieValue(res, 'ugc2_claim_nonce')));
+    expect(md.claim_ticket).toBe(hashClaimTicket(verifyClaimNonce(cookieValue(res, 'ugc2_claim_nonce'))));
     expect(md.utm_source).toBe('fb');
   });
 
@@ -787,7 +793,7 @@ describe('review fixes, billing_v2 off', () => {
       const firstSession = lastCreated();
       expect(firstSession.success_url.startsWith('https://www.ariyalab.test/ugc-2/claim?')).toBe(true);
       const nonce1 = cookieValue(first, 'ugc2_claim_nonce');
-      expect(nonce1).toMatch(/^[A-Za-z0-9_-]{32}$/);
+      expect(verifyClaimNonce(nonce1)).toMatch(/^[A-Za-z0-9_-]{32}$/);
 
       // Second click / second tab in the same browser: the cookie is reused.
       const second = await callCheckout({
@@ -819,13 +825,18 @@ describe('review fixes, billing_v2 off', () => {
     }
   });
 
-  it('refuses to replace a profile link to a different live customer, allows it when that customer is gone', async () => {
+  it('refuses to move a profile off a customer with a live plan, allows it when that customer is gone', async () => {
     const buyer = newUser();
     const existing = newCustomer();
     await link(buyer.id, existing);
+    newSub(existing); // active plan on the old customer
     const other = newCustomer();
     const session = topupSession({ customer: other, buyer });
-    expect((await confirmAs(buyer, session.id)).statusCode).toBe(409);
+    const refused = await confirmAs(buyer, session.id);
+    expect(refused.statusCode).toBe(409);
+    expect(refused.body.error).toBe(
+      'You already have an active plan on this account. Contact support so we can merge your new purchase.'
+    );
     expect(legacyCredits(other)).toBe(0);
 
     S.state.customers.get(existing).deleted = true;
@@ -993,5 +1004,224 @@ describe('review fixes, billing_v2 on', () => {
     expect(replay.body.creditsAdded).toBe(0);
     await deliver(completedEvent(sessions[0]));
     expect((await getBalance(buyer.id)).topup).toBe(12 * V2_TOPUP_S);
+  });
+});
+
+// =====================================================================
+// Review fix round 2
+// =====================================================================
+// Wraps db.query for one test. `onQuery(sql, params, run)` may delay or
+// replace the call; `run` executes the real query.
+async function withQueryHook(onQuery, body) {
+  const real = db.query;
+  db.query = (sql, params) => onQuery(String(sql), params, () => real(sql, params));
+  try {
+    return await body();
+  } finally {
+    db.query = real;
+  }
+}
+// Holds the first call matching `pattern` until a second one arrives (or
+// 200 ms pass), then releases both: both callers are past every earlier read.
+function pairUp(pattern) {
+  const waiting = [];
+  return (sql, params, run) => {
+    if (!pattern.test(sql)) return run();
+    return new Promise((resolve) => {
+      waiting.push(resolve);
+      if (waiting.length >= 2) waiting.splice(0).forEach((f) => f());
+      else setTimeout(() => waiting.splice(0).forEach((f) => f()), 200);
+    }).then(run);
+  };
+}
+
+describe('review fixes round 2, billing_v2 off', () => {
+  beforeAll(() => setBillingV2(false));
+  beforeEach(() => {
+    auth.failProfileRead = false;
+  });
+
+  it('N2: a returning customer who paid again logged out is moved to the new customer, credits carried over', async () => {
+    const user = newUser();
+    const old = newCustomer({ [KEY.credits]: '100' });
+    await link(user.id, old);
+    const fresh = newCustomer();
+    const nonce = 'n2-' + randomUUID();
+    const session = subSession({
+      customer: fresh,
+      metadata: { pending_supabase_link: 'true', claim_ticket: hashClaimTicket(nonce) },
+    });
+    const res = await callRoute(claimTicket, {
+      user,
+      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) },
+    });
+    expect(res.statusCode).toBe(200);
+    const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [user.id]);
+    expect(row.rows[0].stripe_customer_id).toBe(fresh);
+    const md = S.state.customers.get(fresh).metadata;
+    expect(md[KEY.credits]).toBe(String(PLANS.monthly.cap + 100));
+    expect(md[KEY.relinkedFrom]).toBe(old);
+    expect(S.state.customers.get(old).metadata[KEY.credits]).toBe('0');
+  });
+
+  it('N3: a database error at the checkout click fails with 503 instead of creating a second customer', async () => {
+    const user = newUser('n3@example.test');
+    const before = S.state.created.length;
+    auth.failProfileRead = true;
+    const res = await callCheckout({ user, body: { mode: 'topup', pack: 's' } });
+    auth.failProfileRead = false;
+    expect(res.statusCode).toBe(503);
+    expect(res.body.error).toBe('Please try again.');
+
+    newCustomer({}, 'n3@example.test'); // adoptable by email, but its links cannot be read
+    const res2 = await withQueryHook(
+      (sql, params, run) => {
+        if (sql.includes('from public.profiles where stripe_customer_id')) throw new Error('db down');
+        return run();
+      },
+      () => callCheckout({ user, body: { mode: 'topup', pack: 's' } })
+    );
+    expect(res2.statusCode).toBe(503);
+    expect(S.state.created.length).toBe(before);
+  });
+
+  it('N4: a planted claim nonce is replaced, and an unsigned nonce never claims', async () => {
+    const planted = 'A'.repeat(32);
+    const res = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' }, cookie: `ugc2_claim_nonce=${planted}` });
+    expect(res.statusCode).toBe(200);
+    const issued = verifyClaimNonce(cookieValue(res, 'ugc2_claim_nonce'));
+    expect(issued).toBeTruthy();
+    expect(issued).not.toBe(planted);
+    expect(lastCreated().metadata.claim_ticket).toBe(hashClaimTicket(issued));
+
+    // Even a session carrying the planted nonce's hash cannot be claimed with the raw value.
+    const session = subSession({
+      customer: newCustomer(),
+      metadata: { pending_supabase_link: 'true', claim_ticket: hashClaimTicket(planted) },
+    });
+    const denied = await callRoute(claimTicket, {
+      user: newUser(),
+      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: planted },
+    });
+    expect(denied.statusCode).toBe(403);
+  });
+
+  it('M3: the in-progress message matches the 2-minute takeover', async () => {
+    const payer = newUser('m3@example.test');
+    const session = subSession({ customer: newCustomer(), email: payer.email });
+    await lockRow(`checkout:${session.id}`);
+    const res = await callRoute(claim, { user: payer, query: { session_id: session.id } });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/couple of minutes/);
+  });
+});
+
+describe('review fixes round 2, billing_v2 on', () => {
+  beforeAll(() => setBillingV2(true));
+  afterAll(() => setBillingV2(false));
+
+  it('N1: two owner-verified users racing on one unlinked customer get one grant and one link', async () => {
+    const a = newUser();
+    const b = newUser();
+    const customer = newCustomer();
+    // A paid (client_reference_id) but typed B's verified email at Stripe.
+    const session = topupSession({ customer, buyer: a, email: b.email });
+    // Hold A's grant/link in flight while B reads the customer's linked users.
+    const [ra, rb] = await withQueryHook(pairUp(/credit_grant\(|credit_link_customer\(|credit_claim_pending\(/), () =>
+      Promise.all([confirmAs(a, session.id), confirmAs(b, session.id)])
+    );
+    expect([ra.statusCode, rb.statusCode].sort()).toEqual([200, 409]);
+    const rows = await db.query('select user_id from public.credit_ledger where ref = $1', [`checkout:${session.id}`]);
+    expect(rows.rows).toHaveLength(1);
+    const links = await db.query('select id from public.profiles where stripe_customer_id = $1', [customer]);
+    expect(links.rows).toHaveLength(1);
+    expect(String(links.rows[0].id)).toBe(String(rows.rows[0].user_id));
+    expect((await getBalance(a.id)).topup + (await getBalance(b.id)).topup).toBe(V2_TOPUP_S);
+  });
+
+  it('N2: a parked first invoice lands after a returning customer claims on a new customer', async () => {
+    const user = newUser();
+    const old = newCustomer();
+    await link(user.id, old);
+    const fresh = newCustomer();
+    const invoice = paidInvoice({ customer: fresh, subId: newSub(fresh) });
+    await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
+    const nonce = 'n2v2-' + randomUUID();
+    const session = subSession({ customer: fresh, metadata: { pending_supabase_link: 'true', claim_ticket: hashClaimTicket(nonce) } });
+    const res = await callRoute(claimTicket, {
+      user,
+      cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) },
+    });
+    expect(res.statusCode).toBe(200);
+    expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+    expect(S.state.customers.get(fresh).metadata[KEY.relinkedFrom]).toBe(old);
+  });
+
+  it('M1: a grant for a linked user also claims its parked rows, and a transient claim failure is retryable', async () => {
+    const user = newUser();
+    const customer = newCustomer();
+    await link(user.id, customer);
+    await db.query(
+      `insert into public.credit_pending_grants (stripe_customer_id, currency, amount, bucket, reason, ref)
+       values ($1, 'video', 50, 'topup', 'stripe_topup', $2)`,
+      [customer, `checkout:parked_${randomUUID().slice(0, 8)}`]
+    );
+    const session = topupSession({ customer, buyer: user });
+    let failed = false;
+    const first = await withQueryHook(
+      (sql, params, run) => {
+        if (!failed && sql.includes('credit_claim_pending(')) {
+          failed = true;
+          throw new Error('connection reset');
+        }
+        return run();
+      },
+      () => confirmAs(user, session.id)
+    );
+    expect(first.statusCode).toBe(500);
+    expect((await confirmAs(user, session.id)).statusCode).toBe(200);
+    expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S + 50);
+  });
+
+  it('M2a: a refund that lands while the grant is in flight is still clawed back', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    await link(buyer.id, customer);
+    const session = topupSession({ customer, buyer });
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 1500, amount_refunded: 750, payment_intent: session.payment_intent };
+    S.state.charges.set(charge.id, charge);
+    let refunded = false;
+    await withQueryHook(
+      async (sql, params, run) => {
+        if (!refunded && sql.includes('credit_grant(')) {
+          refunded = true;
+          // The refund webhook runs to completion before this grant commits.
+          expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } })).statusCode).toBe(200);
+        }
+        return run();
+      },
+      () => deliver(completedEvent(session))
+    );
+    expect(refunded).toBe(true);
+    expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - Math.ceil(V2_TOPUP_S / 2));
+  });
+
+  it('M2c: a partial dispute then a partial refund claw back both shares', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    await link(buyer.id, customer);
+    const session = topupSession({ customer, buyer });
+    await deliver(completedEvent(session));
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 1500, amount_refunded: 0, disputed: true, payment_intent: session.payment_intent };
+    S.state.charges.set(charge.id, charge);
+    const dispute = { id: `dp_${randomUUID().slice(0, 8)}`, object: 'dispute', charge: charge.id, amount: 500 };
+    S.state.disputes.set(dispute.id, dispute);
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: dispute } });
+    const third = Math.ceil(V2_TOPUP_S / 3); // 160
+    expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - third);
+
+    charge.amount_refunded = 500;
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
+    expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - Math.ceil((V2_TOPUP_S * 2) / 3));
   });
 });

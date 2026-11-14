@@ -12,6 +12,7 @@ import {
   grantForCheckoutSession,
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
+  claimNonceFromCookie,
 } from '../../../lib/grants';
 
 /*
@@ -66,7 +67,7 @@ export default async function handler(req, res) {
     }
 
     const owner = checkSessionOwner(checkoutSession, session.user, {
-      claimNonce: req.cookies?.[CLAIM_NONCE_COOKIE],
+      claimNonce: claimNonceFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
     });
     if (!owner.ok) {
       return res.status(403).json({ error: 'This checkout belongs to a different account.' });
