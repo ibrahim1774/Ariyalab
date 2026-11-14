@@ -25,7 +25,7 @@ import Home from '../../pages/index';
 import MarketingNav from '../../components/marketing/MarketingNav';
 import MarketingFooter from '../../components/marketing/MarketingFooter';
 import useReveal from '../../components/marketing/useReveal';
-import { PLANS, YEARLY_DISCOUNT, videosFor } from '../../components/marketing/pricingData';
+import { PLANS, YEARLY_DISCOUNT, videosPerPlan } from '../../components/marketing/pricingData';
 
 afterEach(() => {
   cleanup();
@@ -93,14 +93,45 @@ describe('homepage', () => {
   });
 });
 
+describe('what each plan makes', () => {
+  const rowCells = (container, seconds) =>
+    [...container.querySelector(`[data-matrix] tr[data-seconds="${seconds}"]`).querySelectorAll('td')].map((td) => td.textContent);
+
+  it('defaults to Pro narrated and agrees with the plan cards', () => {
+    const { container } = renderPage();
+    expect(screen.getByRole('heading', { name: 'What each plan makes' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Pro narrated' })).toHaveAttribute('aria-pressed', 'true');
+    expect(rowCells(container, 45)).toEqual(['2 videos', '3 videos', '7 videos']);
+    const cards = [...container.querySelectorAll('[data-plan]')].map((c) => c.textContent);
+    expect(cards[0]).toMatch(/About 2 videos of 45 seconds/);
+    expect(cards[1]).toMatch(/About 3 videos of 45 seconds/);
+    expect(cards[2]).toMatch(/About 7 videos of 45 seconds/);
+  });
+
+  it('switches quality levels', () => {
+    const { container } = renderPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Standard' }));
+    expect(rowCells(container, 30)).toEqual(['3 videos', '6 videos', '12 videos']);
+    fireEvent.click(screen.getByRole('button', { name: 'Pro talking' }));
+    expect(rowCells(container, 60)).toEqual(['1 video', '1 video', '4 videos']);
+  });
+
+  it('explains the levels and the cost line', () => {
+    renderPage();
+    expect(screen.getByText(/Standard is 720p with a narrator\./)).toBeInTheDocument();
+    expect(screen.getByText(/Pro talking is 1080p and the characters speak\./)).toBeInTheDocument();
+    expect(screen.getByText(/You always see the exact cost before you generate\./)).toBeInTheDocument();
+  });
+});
+
 describe('pricing data', () => {
   it('matches the starting plans', () => {
     expect(PLANS.starter).toEqual({ usd: 29, credits: 1500 });
     expect(PLANS.creator).toEqual({ usd: 49, credits: 2600 });
     expect(PLANS.studio).toEqual({ usd: 99, credits: 5400 });
     expect(YEARLY_DISCOUNT).toBe(0.2);
-    expect(videosFor(1500)).toBe(2);
-    expect(videosFor(5400)).toBe(7);
+    expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(2);
+    expect(videosPerPlan({ credits: 5400, quality: 'pro_narrated', seconds: 45 })).toBe(7);
   });
 });
 

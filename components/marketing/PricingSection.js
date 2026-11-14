@@ -5,7 +5,9 @@ import Pill from '../ui/Pill';
 import SectionHead from './SectionHead';
 import useReveal from './useReveal';
 import useStartHref from './useStartHref';
-import { PLANS, YEARLY_DISCOUNT, videosFor } from './pricingData';
+import {
+  PLANS, YEARLY_DISCOUNT, videosPerPlan, CARD_VIDEO_SECONDS, MATRIX_LENGTHS, MATRIX_QUALITIES, DEFAULT_MATRIX_QUALITY,
+} from './pricingData';
 import section from './Section.module.css';
 import styles from './PricingSection.module.css';
 
@@ -17,6 +19,10 @@ const CARDS = [
 
 const TICKS = ['Cancel any time', 'Secure checkout', 'Plan credits roll over for one month', 'Top-up credits never expire'];
 
+function videoCount(n) {
+  return `${n} ${n === 1 ? 'video' : 'videos'}`;
+}
+
 function money(n, yearly) {
   return yearly ? `$${n.toFixed(2)}` : `$${n}`;
 }
@@ -25,6 +31,7 @@ export default function PricingSection() {
   const ref = useReveal();
   const startHref = useStartHref();
   const [yearly, setYearly] = useState(false);
+  const [quality, setQuality] = useState(DEFAULT_MATRIX_QUALITY);
 
   return (
     <section id="pricing" ref={ref} className={section.section} data-section="pricing">
@@ -66,7 +73,7 @@ export default function PricingSection() {
                 </p>
                 <ul className={styles.list}>
                   <li>{plan.credits.toLocaleString('en-US')} credits each month</li>
-                  <li>About {videosFor(plan.credits)} videos of 45 seconds</li>
+                  <li>About {videosPerPlan({ credits: plan.credits, quality: 'pro_narrated', seconds: CARD_VIDEO_SECONDS })} videos of {CARD_VIDEO_SECONDS} seconds</li>
                   <li>Captions and music included</li>
                 </ul>
                 <Button href={startHref} variant={dark ? 'primary' : 'ghost'} className={styles.cta}>
@@ -75,6 +82,50 @@ export default function PricingSection() {
               </Card>
             );
           })}
+        </div>
+
+        <div className={styles.matrix} data-matrix>
+          <h3 className={styles.matrixTitle}>What each plan makes</h3>
+          <div className={styles.seg} role="group" aria-label="Video quality">
+            {MATRIX_QUALITIES.map((q) => (
+              <button
+                key={q.key}
+                type="button"
+                aria-pressed={quality === q.key}
+                className={`${styles.opt} ${quality === q.key ? styles.on : ''}`}
+                onClick={() => setQuality(q.key)}
+              >
+                {q.label}
+              </button>
+            ))}
+          </div>
+          <div className={styles.tableWrap}>
+            <table className={styles.table}>
+              <caption className={styles.srOnly}>Videos each plan makes per month, by video length</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Video length</th>
+                  {CARDS.map((c) => <th key={c.key} scope="col">{c.name}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {MATRIX_LENGTHS.map((seconds) => (
+                  <tr key={seconds} data-seconds={seconds}>
+                    <th scope="row">{seconds} seconds</th>
+                    {CARDS.map((c) => (
+                      <td key={c.key}>{videoCount(videosPerPlan({ credits: PLANS[c.key].credits, quality, seconds }))}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className={styles.matrixNote}>
+            {MATRIX_QUALITIES.map((q) => `${q.label} is ${q.note}`).join(' ')}
+          </p>
+          <p className={styles.matrixNote}>
+            Fast cut videos with many short shots use more credits. You always see the exact cost before you generate.
+          </p>
         </div>
 
         <ul className={styles.ticks}>

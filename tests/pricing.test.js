@@ -3,7 +3,9 @@ import {
   getPricing, quoteShot, quoteProject, setPricingDb, _resetPricingCache,
   PLANS_V2, TOPUPS_V2, YEARLY_DISCOUNT, LEGACY_TO_V2,
 } from '../lib/pricing.js';
-import { QUALITY_LABELS } from '../lib/pricingConstants.js';
+import {
+  QUALITY_LABELS, PROVIDER_COSTS_USD, costOfVideoUsd, creditsForVideo, videosPerPlan, markup,
+} from '../lib/pricingConstants.js';
 import { isBillingV2 } from '../lib/billingFlags.js';
 
 function fakeDb(rows, { fail = false } = {}) {
@@ -168,5 +170,46 @@ describe('isBillingV2', () => {
 describe('labels', () => {
   it('has display names', () => {
     expect(QUALITY_LABELS).toEqual({ economy: 'Economy', standard: 'Standard', pro_narrated: 'Pro narrated', pro_talking: 'Pro talking' });
+  });
+});
+
+describe('the 2x rule', () => {
+  const QUALITIES = ['standard', 'pro_narrated', 'pro_talking'];
+  const LENGTHS = [15, 30, 45, 60];
+  const studio = PLANS_V2.studio.usd / PLANS_V2.studio.credits;
+  const starter = PLANS_V2.starter.usd / PLANS_V2.starter.credits;
+
+  it('keeps provider costs as agreed', () => {
+    expect(PROVIDER_COSTS_USD.projectFixed).toBe(0.84);
+    expect(PROVIDER_COSTS_USD.rerollAllowance).toBe(0.2);
+  });
+  it('charges at least 1.95x cost at the cheapest credit price sold', () => {
+    for (const quality of QUALITIES) {
+      for (const seconds of LENGTHS) {
+        expect(markup({ quality, seconds, usdPerCredit: studio }), `${quality} ${seconds}s`).toBeGreaterThanOrEqual(1.95);
+      }
+    }
+  });
+  it('charges at most 2.4x cost at the Starter price', () => {
+    for (const quality of QUALITIES) {
+      for (const seconds of LENGTHS) {
+        expect(markup({ quality, seconds, usdPerCredit: starter }), `${quality} ${seconds}s`).toBeLessThanOrEqual(2.4);
+      }
+    }
+  });
+  it('computes exact credits per video', () => {
+    expect(creditsForVideo({ quality: 'pro_narrated', seconds: 45 })).toBe(720);
+    expect(creditsForVideo({ quality: 'standard', seconds: 30 })).toBe(420);
+    expect(creditsForVideo({ quality: 'pro_talking', seconds: 60 })).toBe(1350);
+  });
+  it('rounds generated seconds up to whole shots', () => {
+    expect(creditsForVideo({ quality: 'standard', seconds: 10 })).toBe(90 + 11 * 12);
+    expect(creditsForVideo({ quality: 'standard', seconds: 10, shotSeconds: 5 })).toBe(90 + 11 * 10);
+    expect(costOfVideoUsd({ quality: 'standard', seconds: 30 })).toBeCloseTo((0.0755 * 30 + 0.02 * 10) * 1.2 + 0.84, 10);
+  });
+  it('counts whole videos per plan', () => {
+    expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(2);
+    expect(videosPerPlan({ credits: 2600, quality: 'standard', seconds: 30 })).toBe(6);
+    expect(videosPerPlan({ credits: 5400, quality: 'pro_talking', seconds: 60 })).toBe(4);
   });
 });

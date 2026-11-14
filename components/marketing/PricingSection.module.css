@@ -54,3 +54,35 @@
   .grid { grid-template-columns: repeat(3, 1fr); }
   .plan[data-plan='creator'] { transform: translateY(-8px); }
 }
+
+.matrix { margin: 40px auto 0; max-width: 720px; text-align: center; }
+.matrixTitle { margin: 0 0 16px; font-size: 20px; font-weight: 600; }
+.seg {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 18px;
+  padding: 4px;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+}
+.tableWrap {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+}
+.table { width: 100%; min-width: 340px; border-collapse: collapse; font-size: 14px; }
+.table th, .table td { padding: 12px 14px; text-align: right; white-space: nowrap; }
+.table th:first-child { text-align: left; font-weight: 500; }
+.table thead th { font-weight: 600; color: var(--text-dim); font-size: 13px; }
+.table tbody tr + tr > * { border-top: 1px solid var(--border); }
+.table td { font-weight: 600; }
+.matrixNote { margin: 12px 0 0; font-size: 13px; line-height: 1.55; color: var(--text-dim); }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
