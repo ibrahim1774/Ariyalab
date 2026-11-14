@@ -15,6 +15,13 @@
 --   poll_errors         provider errors in a row while polling
 --   no_handler_rounds   claims that found no registered handler
 --   rate_limited_since  first rate limit of the current wait
+--   lease_until         a poll (or mirror) of this job is in flight until then;
+--                       locked_until stays "next poll due" (or the apply lease
+--                       on a finished row)
+--   nudged_at           last webhook nudge (at most one per 5 s)
+--
+-- story_projects.runner_ticked_at: when the cron last picked the project, so
+-- story_pending_projects rotates instead of always serving the oldest.
 --
 -- story_claim_jobs takes the clock as p_now (rounded to milliseconds, so the
 -- returned started_at round-trips through JavaScript exactly), can be limited
@@ -31,12 +38,25 @@ alter table public.story_jobs
   add column mirror_tries integer not null default 0 check (mirror_tries >= 0),
   add column poll_errors integer not null default 0 check (poll_errors >= 0),
   add column no_handler_rounds integer not null default 0 check (no_handler_rounds >= 0),
-  add column rate_limited_since timestamptz;
+  add column rate_limited_since timestamptz,
+  add column lease_until timestamptz,
+  add column nudged_at timestamptz;
 
--- One job per provider task: a callback or poll can only ever match one row.
+alter table public.story_projects add column runner_ticked_at timestamptz;
+
+-- The cron's rotation stamp is bookkeeping, not an edit: it must not move
+-- story_projects.updated_at (project lists sort by it).
+drop trigger story_projects_touch on public.story_projects;
+create trigger story_projects_touch before update on public.story_projects
+  for each row
+  when ((to_jsonb(old) - 'runner_ticked_at' - 'updated_at') is distinct from (to_jsonb(new) - 'runner_ticked_at' - 'updated_at'))
+  execute function public.story_touch_updated_at();
+
+-- One job per real provider task. Mock task ids restart at 1 in every
+-- process, so finished mock rows would collide with new ones: excluded.
 drop index public.story_jobs_provider_task_idx;
 create unique index story_jobs_provider_task_idx on public.story_jobs (provider, provider_task_id)
-  where provider_task_id is not null;
+  where provider_task_id is not null and provider <> 'mock';
 
 -- The cron and sweeper read these.
 create index story_jobs_active_idx on public.story_jobs (project_id)
@@ -120,23 +140,43 @@ end;
 $$;
 
 -- Distinct project ids (null = account-level jobs) with work the cron should
--- tick: a due queued job or a running job. Oldest work first.
-create function public.story_pending_projects(p_now timestamptz default now(), p_limit integer default 200)
+-- tick: a due queued job or a running job, leaving out p_skip_kinds (worker
+-- kinds, which the cron does not run). Projects the cron picked least
+-- recently come first (account-level jobs first of all); the returned
+-- projects are stamped with runner_ticked_at = p_now, so the next call
+-- rotates to the others.
+create function public.story_pending_projects(
+  p_now timestamptz default now(),
+  p_limit integer default 200,
+  p_skip_kinds text[] default array['render']
+)
 returns table (project_id uuid)
-language sql
-stable
+language plpgsql
 security definer
 set search_path = public, pg_temp
 as $$
-  select t.project_id from (
-    select j.project_id, min(j.created_at) as first_at
-      from story_jobs j
-     where j.status = 'running'
-        or (j.status = 'queued' and (j.run_after is null or j.run_after <= coalesce(p_now, now())))
-     group by j.project_id
-  ) t
-  order by t.first_at
-  limit greatest(coalesce(p_limit, 0), 0);
+declare
+  v_now timestamptz := date_trunc('milliseconds', coalesce(p_now, now()));
+  v_ids uuid[];
+begin
+  select array_agg(t.project_id order by t.ord_ticked, t.first_at) into v_ids from (
+    select w.project_id, coalesce(p.runner_ticked_at, '-infinity'::timestamptz) as ord_ticked, w.first_at
+      from (
+        select j.project_id, min(j.created_at) as first_at
+          from story_jobs j
+         where (j.status = 'running'
+                or (j.status = 'queued' and (j.run_after is null or j.run_after <= v_now)))
+           and (p_skip_kinds is null or not (j.kind = any (p_skip_kinds)))
+         group by j.project_id
+      ) w
+      left join story_projects p on p.id = w.project_id
+     order by 2, 3
+     limit greatest(coalesce(p_limit, 0), 0)
+  ) t;
+
+  update story_projects set runner_ticked_at = v_now where id = any (coalesce(v_ids, '{}'::uuid[]));
+  return query select u.id from unnest(coalesce(v_ids, '{}'::uuid[])) with ordinality as u(id, n) order by u.n;
+end;
 $$;
 
 do $$
