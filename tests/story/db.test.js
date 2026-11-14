@@ -157,6 +157,15 @@ describe('storyDb over supabase-js', () => {
     ]);
   });
 
+  it('an empty IN list matches nothing without a request', async () => {
+    const client = fakeSupabase({ data: [{ id: 1 }], error: null });
+    const a = createSupabaseAdapter(client);
+    expect(await a.select('story_shots', { id: [] })).toEqual([]);
+    expect(await a.update('story_shots', { id: [] }, { stale: true })).toEqual([]);
+    expect(await a.remove('story_shots', { id: [] })).toEqual([]);
+    expect(client.calls).toEqual([]);
+  });
+
   it('throws the PostgREST error and passes rpc through', async () => {
     const failing = createSupabaseAdapter(fakeSupabase({ data: null, error: { message: 'boom' } }));
     await expect(failing.select('story_projects', {})).rejects.toThrow('boom');
