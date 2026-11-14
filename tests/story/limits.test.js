@@ -20,7 +20,7 @@ const { getEntitlement } = await import('../../lib/entitlement.js');
 const { LimitError, sendError } = await import('../../lib/story/errors.js');
 const { ModerationError } = await import('../../lib/moderation.js');
 const { createProject, duplicateProject } = await import('../../lib/story/projects.js');
-const { assertAllowed, isPaidUser, LIMIT_ACTIONS, PAID_ONLY_ACTIONS, setLimitsDeps } = await import('../../lib/story/limits.js');
+const { assertAllowed, isPaidUser, LIMIT_ACTIONS, PAID_ONLY_ACTIONS, releaseAllowance, setLimitsDeps } = await import('../../lib/story/limits.js');
 const { makeRes } = await import('../helpers/apiMock');
 
 useRegexOnlyModeration();
@@ -105,7 +105,7 @@ describe('assertAllowed', () => {
     accounts.set({ paid: false, verified: false });
     await expect(assertAllowed({ userId: randomUUID(), action: 'project_create' })).rejects.toMatchObject({ status: 403, code: 'email_unverified' });
     accounts.set({ paid: true, verified: false });
-    await expect(assertAllowed({ userId: randomUUID(), action: 'project_create' })).resolves.toBeUndefined();
+    await expect(assertAllowed({ userId: randomUUID(), action: 'project_create' })).resolves.toMatchObject({ counters: [] });
   });
 
   it('uses the session user when one is passed instead of looking the account up', async () => {
@@ -126,7 +126,7 @@ describe('assertAllowed', () => {
       expect(res.body.error).toBe('plan_required');
     }
     accounts.set({ paid: true });
-    await expect(assertAllowed({ userId: randomUUID(), action: 'cast_generate' })).resolves.toBeUndefined();
+    await expect(assertAllowed({ userId: randomUUID(), action: 'cast_generate' })).resolves.toMatchObject({ counters: [] });
   });
 
   it('caps chat messages per project: 30 free, the included 150 when paid', async () => {
@@ -211,7 +211,9 @@ describe('fix round 1', () => {
   it('releaseAllowance never takes a count below zero', async () => {
     const { releaseAllowance } = await import('../../lib/story/limits.js');
     const userId = randomUUID();
-    await releaseAllowance({ userId, action: 'project_create' });
+    await releaseAllowance(undefined);
+    await releaseAllowance({ userId, counters: [] });
+    await releaseAllowance({ userId, counters: [{ key: 'project_create', day: '2026-01-01' }] });
     const { rows } = await raw.query('select count from story_usage where user_id = $1', [userId]);
     expect(rows.every((r) => r.count >= 0)).toBe(true);
   });
@@ -226,5 +228,41 @@ describe('fix round 1', () => {
     await expect(assertAllowed({ userId, action: 'script_write' })).rejects.toThrow(/projectId/);
     accounts.set({ paid: true });
     await assertAllowed({ userId, action: 'script_write', projectId: a });
+  });
+});
+
+describe('fix round 2: receipts', () => {
+  const usage = async (userId) => (await raw.query('select action, day::text as day, count from story_usage where user_id = $1 order by action', [userId])).rows;
+
+  it('assertAllowed returns the counters it took and releaseAllowance gives exactly those back', async () => {
+    free();
+    const userId = randomUUID();
+    const projectId = randomUUID();
+    const receipt = await assertAllowed({ userId, action: 'script_write', projectId });
+    expect(receipt.counters).toEqual([{ key: `script_write:${projectId}`, day: expect.stringMatching(/^\d{4}-\d{2}-\d{2}$/) }]);
+    expect((await usage(userId))[0].count).toBe(1);
+    await releaseAllowance(receipt);
+    expect((await usage(userId))[0].count).toBe(0);
+    await releaseAllowance(receipt); // a second give-back never goes below zero
+    expect((await usage(userId))[0].count).toBe(0);
+  });
+
+  it('gives a chat or revise count back on the fixed project day', async () => {
+    free();
+    const userId = randomUUID();
+    const projectId = randomUUID();
+    const receipt = await assertAllowed({ userId, action: 'script_revise', projectId });
+    expect(receipt.counters).toEqual([{ key: `chat_message:${projectId}`, day: '1970-01-01' }]);
+    await releaseAllowance(receipt);
+    expect(await usage(userId)).toEqual([{ action: `chat_message:${projectId}`, day: '1970-01-01', count: 0 }]);
+  });
+
+  it('a paid account takes no daily count, so a give-back changes nothing', async () => {
+    const userId = randomUUID();
+    await raw.query(`insert into story_usage (user_id, day, action, count) values ($1, current_date, 'project_create', 2)`, [userId]);
+    const receipt = await assertAllowed({ userId, action: 'project_create' });
+    expect(receipt.counters).toEqual([]);
+    await releaseAllowance(receipt);
+    expect((await usage(userId))[0].count).toBe(2);
   });
 });

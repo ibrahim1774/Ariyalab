@@ -772,12 +772,17 @@ describe('fix round 1: service', () => {
 
   it('screens the written script with the regex layer before saving', async () => {
     const { userId, project } = await newProject();
-    registerMock('story_script', (input) => {
+    const spy = vi.fn((input) => {
       const out = storyScriptMock(input);
       out.scenes[1].visual = 'A nude figure in the shop.';
       return out;
     });
-    await expect(writeScript({ userId, projectId: project.id })).rejects.toBeInstanceOf(ModerationError);
+    registerMock('story_script', spy);
+    const err = await writeScript({ userId, projectId: project.id }).catch((e) => e);
+    expect(err).toMatchObject({ status: 422, code: 'script_blocked' });
+    expect(err.message).toBe('We could not write a script we were happy with. Try wording the brief a little differently.');
+    expect(spy).toHaveBeenCalledTimes(2); // one family friendly retry
+    expect(spy.mock.calls[1][0].system).toMatch(/family friendly/i);
     expect(await scriptRows(project.id)).toHaveLength(0);
   });
 
@@ -826,5 +831,123 @@ describe('fix round 1: limits', () => {
       await raw.query(`delete from public.pricing_config where key = 'free_limits'`);
       _resetPricingCache();
     }
+  });
+});
+
+// ---------------------------------------------------------------- fix round 2
+
+const usageRows = async (userId) => (await raw.query('select action, count from story_usage where user_id = $1 order by action', [userId])).rows;
+const countOf = (rows, prefix) => rows.filter((r) => r.action.startsWith(prefix)).reduce((n, r) => n + r.count, 0);
+
+describe('fix round 2: counts are given back when the work fails', () => {
+  const failing = (code) => () => {
+    throw new ProviderError(code);
+  };
+
+  it.each([['failed'], ['rate_limited'], ['blocked']])('a %s model call on write leaves the script count unchanged', async (code) => {
+    accounts.set({ paid: false });
+    const { userId, project } = await newProject();
+    registerMock('story_script', failing(code));
+    await expect(writeScript({ userId, projectId: project.id })).rejects.toBeInstanceOf(ProviderError);
+    expect(countOf(await usageRows(userId), 'script_write')).toBe(0);
+  });
+
+  it('an empty answer (script_failed) on write leaves the count unchanged', async () => {
+    accounts.set({ paid: false });
+    const { userId, project } = await newProject();
+    registerMock('story_script', () => ({ scenes: [] }));
+    await expect(writeScript({ userId, projectId: project.id })).rejects.toMatchObject({ code: 'script_failed' });
+    expect(countOf(await usageRows(userId), 'script_write')).toBe(0);
+  });
+
+  it('a failed model call on revise leaves the chat count unchanged, for free and paid accounts', async () => {
+    for (const paid of [false, true]) {
+      const { userId, project } = await newProject();
+      await writeScript({ userId, projectId: project.id });
+      accounts.set({ paid });
+      registerMock('story_script', failing('failed'));
+      await expect(reviseScript({ userId, projectId: project.id, instruction: 'Funnier' })).rejects.toBeInstanceOf(ProviderError);
+      expect(countOf(await usageRows(userId), 'chat_message')).toBe(0);
+      registerMock('story_script', storyScriptMock);
+    }
+  });
+
+  it('an output moderation trip leaves the counts unchanged', async () => {
+    accounts.set({ paid: false });
+    const { userId, project } = await newProject();
+    registerMock('story_script', (input) => {
+      const out = storyScriptMock(input);
+      out.scenes[0].visual = 'A nude figure.';
+      return out;
+    });
+    await expect(writeScript({ userId, projectId: project.id })).rejects.toMatchObject({ code: 'script_blocked' });
+    expect(countOf(await usageRows(userId), 'script_write')).toBe(0);
+  });
+
+  it('a successful write or revise uses exactly one count', async () => {
+    accounts.set({ paid: false });
+    const { userId, project } = await newProject();
+    await writeScript({ userId, projectId: project.id });
+    expect(countOf(await usageRows(userId), 'script_write')).toBe(1);
+    await reviseScript({ userId, projectId: project.id, instruction: 'Funnier' });
+    expect(countOf(await usageRows(userId), 'chat_message')).toBe(1);
+  });
+});
+
+describe('fix round 2: output moderation', () => {
+  it('saves the family friendly retry when it comes back clean', async () => {
+    const { userId, project } = await newProject();
+    registerMock('story_script', (input) => {
+      const out = storyScriptMock(input);
+      if (!/family friendly/i.test(input.system)) out.scenes[1].visual = 'A nude figure in the shop.';
+      return out;
+    });
+    const script = await writeScript({ userId, projectId: project.id });
+    expect(script.version).toBe(1);
+    expect(JSON.stringify(script.scenes)).not.toMatch(/nude/);
+  });
+
+  it('screens each scene on its own, so words in different scenes never combine', async () => {
+    const { userId, project } = await newProject();
+    registerMock('story_script', (input) => {
+      const out = storyScriptMock(input);
+      out.scenes[0].visual = 'He works hard';
+      out.scenes[1].title = 'on the weekend';
+      out.scenes[1].visual = 'Saturday morning in the shop.';
+      return out;
+    });
+    await expect(writeScript({ userId, projectId: project.id })).resolves.toMatchObject({ version: 1 });
+  });
+});
+
+describe('fix round 2: rules and prompt', () => {
+  it('matches an avoid word with or without a space, hyphen or dot', () => {
+    for (const term of ['pay-day', 'pay day', 'payday', 'pay.day']) {
+      for (const text of ['It was pay-day again, honestly.', 'It was pay day again, honestly.', 'It was payday again, honestly.']) {
+        expect({ term, text, rules: rulesOf(checkScriptRules(withLine(text), { ...OPTS, avoid: [term] })) }).toEqual({
+          term, text, rules: expect.arrayContaining(['avoid_word']),
+        });
+      }
+    }
+    expect(rulesOf(checkScriptRules(withLine('It was a long day, honestly.'), { ...OPTS, avoid: ['payday'] }))).not.toContain('avoid_word');
+  });
+
+  it('names no specific trade in any purpose block', () => {
+    const TRADES = /\b(barber|salon|cleaner|dentist|plumber|bakery|baker|studio|agency|cafe|restaurant|gym|electrician|lawyer|mechanic|florist|spa|clinic)s?\b/i;
+    for (const [purpose, text] of Object.entries(PURPOSE_GUIDANCE)) expect({ purpose, match: TRADES.exec(text)?.[0] ?? null }).toEqual({ purpose, match: null });
+  });
+
+  it('only talks about an offer riding along and bookings when there is an offer', () => {
+    for (const args of [{ purpose: 'story' }, { purpose: 'personal_brand', offer: '' }, { purpose: 'service', offer: '' }]) {
+      const system = buildScriptSystem({ mode: 'narrated', seconds: 30, ...args });
+      expect(system).not.toMatch(/offer rides along/);
+      expect(system).not.toMatch(/a booking coming in/i);
+    }
+    const withOffer = buildScriptSystem({ purpose: 'app', offer: 'A booking app.', mode: 'narrated', seconds: 30 });
+    expect(withOffer).toMatch(/offer rides along/);
+  });
+
+  it('tells the model on a retry to keep the ids it was shown', () => {
+    expect(buildRetryMessage([{ sceneId: 's1', rule: 'dash', message: 'x.' }], [{ id: 's1', title: 'A' }])).toMatch(/keep the ids shown in your previous answer/i);
   });
 });
