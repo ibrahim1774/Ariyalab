@@ -33,6 +33,12 @@ describe('middleware', () => {
     expect(res.headers.get('location')).toBeNull();
   });
 
+  it('leaves the provider webhook public', async () => {
+    const res = await run('/api/webhooks/kie?token=x');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('location')).toBeNull();
+  });
+
   it('answers 401 JSON to other /api/story paths without a session', async () => {
     const res = await run('/api/story/billing');
     expect(res.status).toBe(401);

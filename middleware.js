@@ -53,6 +53,10 @@ export async function middleware(req) {
 
   const { pathname } = req.nextUrl;
 
+  // Provider webhooks (/api/webhooks/kie) carry no session; each route
+  // checks its own token. Public even if a broader /api prefix is gated.
+  if (pathname.startsWith('/api/webhooks/')) return res;
+
   // Gate the private API routes. Note:
   //   - /api/checkout is not here — subscription path supports
   //     anonymous users (pay first, sign up after).
