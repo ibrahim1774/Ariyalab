@@ -24,7 +24,10 @@ export default async function handler(req, res) {
   }
   const origin = req.headers.origin;
   const fetchSite = req.headers['sec-fetch-site'];
-  if ((origin && origin !== new URL(oauthIssuer(req)).origin) || (fetchSite && fetchSite !== 'same-origin')) {
+  // Origin "null" (privacy-sensitive contexts) is accepted only when the
+  // unforgeable Sec-Fetch-Site says same-origin.
+  const originOk = !origin || origin === new URL(oauthIssuer(req)).origin || (origin === 'null' && fetchSite === 'same-origin');
+  if (!originOk || (fetchSite && fetchSite !== 'same-origin')) {
     return sendErrorPage(res, 403, 'Request not accepted', 'The approval must come from the Ariya Lab consent page.');
   }
   const auth = await getUserFromRequest(req, res);

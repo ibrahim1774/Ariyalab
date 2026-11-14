@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import Head from 'next/head';
 
 import Button from '../../components/ui/Button';
@@ -27,12 +28,18 @@ import styles from '../../styles/OAuthConsent.module.css';
  * Client-supplied values (client name, client URI) render as plain text.
  */
 export default function OAuthConsentPage({ error = null, details = null, email = '', requestToken = '' }) {
+  // Headers forbid framing on a full load; this also covers arriving here by
+  // client-side navigation (sign-in uses router.push).
+  const [framed, setFramed] = useState(false);
+  useEffect(() => {
+    if (window.top !== window.self) setFramed(true);
+  }, []);
   return (
     <>
       <Head>
         <title>{error ? 'Connection error' : 'Allow access'} · Ariya Lab</title>
         <meta name="robots" content="noindex" />
-        <meta name="referrer" content="no-referrer" />
+        <meta name="referrer" content="same-origin" />
       </Head>
       <main className={styles.page}>
         <Card className={styles.card}>
@@ -59,15 +66,21 @@ export default function OAuthConsentPage({ error = null, details = null, email =
                   This app runs on a computer, not a website. Only allow it if you started this connection yourself.
                 </p>
               )}
-              <form method="post" action="/api/oauth/authorize" className={styles.actions}>
-                <input type="hidden" name="request_token" value={requestToken} />
-                <Button type="submit" name="decision" value="deny" variant="ghost" arrow={false}>
-                  Deny
-                </Button>
-                <Button type="submit" name="decision" value="allow">
-                  Allow
-                </Button>
-              </form>
+              {framed ? (
+                <p className={styles.warning} role="alert">
+                  Open this page in its own window to continue.
+                </p>
+              ) : (
+                <form method="post" action="/api/oauth/authorize" className={styles.actions}>
+                  <input type="hidden" name="request_token" value={requestToken} />
+                  <Button type="submit" name="decision" value="deny" variant="ghost" arrow={false}>
+                    Deny
+                  </Button>
+                  <Button type="submit" name="decision" value="allow">
+                    Allow
+                  </Button>
+                </form>
+              )}
             </>
           )}
         </Card>
@@ -81,7 +94,9 @@ function setConsentHeaders(res) {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
   res.setHeader('Cache-Control', 'no-store');
-  res.setHeader('Referrer-Policy', 'no-referrer');
+  // same-origin, not no-referrer: under no-referrer a same-origin form POST is
+  // sent with `Origin: null`, which the approval endpoint rejects.
+  res.setHeader('Referrer-Policy', 'same-origin');
 }
 
 export async function getServerSideProps({ req, res, query }) {

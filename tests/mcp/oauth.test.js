@@ -510,6 +510,17 @@ describe('consent page', () => {
     expect(res.headers['x-frame-options']).toBe('DENY');
     expect(res.headers['content-security-policy']).toContain("frame-ancestors 'none'");
     expect(res.headers['cache-control']).toBe('no-store');
+    // Not no-referrer: under no-referrer browsers send the same-origin
+    // approval POST with Origin: null, which the endpoint would reject.
+    expect(res.headers['referrer-policy']).toBe('same-origin');
+  });
+
+  it('accepts Origin null only with Sec-Fetch-Site same-origin', async () => {
+    const { body: client } = await register();
+    const first = await consent(authorizeQuery(client.client_id, pkce().challenge));
+    expect((await decide(first.result.props.requestToken, 'allow', { ...FORM, origin: 'null' })).statusCode).toBe(403);
+    const ok = await decide(first.result.props.requestToken, 'allow', { ...FORM, origin: 'null', 'sec-fetch-site': 'same-origin' });
+    expect(ok.statusCode).toBe(303);
   });
 
   it('renders client name and URI as plain text, with the access, account and redirect host', async () => {
