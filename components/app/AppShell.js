@@ -10,6 +10,7 @@ const NAV = [
   { href: '/app/brand', label: 'Brand kit' },
   { href: '/app/voices', label: 'Voices' },
   { href: '/app/billing', label: 'Billing' },
+  { href: '/app/connections', label: 'Connected apps' },
   { href: '/app/tools', label: 'More tools' },
 ];
 

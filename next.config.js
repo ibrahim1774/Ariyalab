@@ -22,19 +22,24 @@ const nextConfig = {
       { source: '/.well-known/oauth-authorization-server', destination: '/api/oauth/metadata' },
       { source: '/.well-known/oauth-authorization-server/:path*', destination: '/api/oauth/metadata' },
       { source: '/.well-known/oauth-protected-resource', destination: '/api/oauth/protected-resource' },
-      { source: '/.well-known/oauth-protected-resource/:path*', destination: '/api/oauth/protected-resource' },
+      // Only the MCP endpoint's own path-suffixed form; other suffixes 404.
+      { source: '/.well-known/oauth-protected-resource/api/mcp', destination: '/api/oauth/protected-resource' },
     ];
   },
-  // The consent page must never be framed (clickjacking).
+  // Sign-in, sign-up and the OAuth consent page must never be framed
+  // (clickjacking); sign-in reaches the consent page by client-side
+  // navigation, so it needs the headers too.
   async headers() {
+    const noFraming = [
+      { key: 'X-Frame-Options', value: 'DENY' },
+      { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
+    ];
     return [
-      {
-        source: '/oauth/:path*',
-        headers: [
-          { key: 'X-Frame-Options', value: 'DENY' },
-          { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
-        ],
-      },
+      { source: '/oauth/:path*', headers: noFraming },
+      { source: '/sign-in', headers: noFraming },
+      { source: '/sign-in/:path*', headers: noFraming },
+      { source: '/sign-up', headers: noFraming },
+      { source: '/sign-up/:path*', headers: noFraming },
     ];
   },
 };

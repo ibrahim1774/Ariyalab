@@ -13,18 +13,32 @@ vi.mock('../../lib/supabaseServer.js', () => ({
   },
 }));
 
-// ---- DNS stub for Client ID Metadata Document fetches ---------------------
-const dnsAnswers = new Map();
-vi.mock('node:dns/promises', () => ({
-  lookup: vi.fn(async (host) => {
-    if (!dnsAnswers.has(host)) throw new Error('ENOTFOUND');
-    return dnsAnswers.get(host).map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
-  }),
-}));
+// ---- network stubs for Client ID Metadata Document fetches ----------------
+// The real provider SSRF guard (lib/providers/http.js) runs; only DNS and
+// the undici transport are stubbed.
+const net = vi.hoisted(() => ({ dnsAnswers: new Map(), fetchMock: null }));
+const dnsAnswers = net.dnsAnswers;
+vi.mock('node:dns', async (importOriginal) => {
+  const real = await importOriginal();
+  const lookup = (host, options, callback) => {
+    const cb = typeof options === 'function' ? options : callback;
+    const list = net.dnsAnswers.get(host);
+    if (!list) return cb(Object.assign(new Error('ENOTFOUND'), { code: 'ENOTFOUND' }));
+    const all = list.map((address) => ({ address, family: address.includes(':') ? 6 : 4 }));
+    if (options?.all) return cb(null, all);
+    return cb(null, all[0].address, all[0].family);
+  };
+  return { ...real, default: { ...real, lookup }, lookup };
+});
+vi.mock('undici', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, fetch: (...args) => net.fetchMock(...args) };
+});
 
 const { setStoryDb } = await import('../../lib/story/db.js');
 const oauth = await import('../../lib/mcp/oauth.js');
 const clients = await import('../../lib/mcp/oauthClients.js');
+const providerHttp = await import('../../lib/providers/http.js');
 const registerHandler = (await import('../../pages/api/oauth/register.js')).default;
 const authorizeHandler = (await import('../../pages/api/oauth/authorize.js')).default;
 const tokenHandler = (await import('../../pages/api/oauth/token.js')).default;
@@ -52,10 +66,18 @@ afterAll(async () => {
   vi.unstubAllGlobals();
 });
 
+const knownUsers = new Map();
 beforeEach(() => {
   vi.stubEnv('APP_URL', ISSUER);
   vi.stubEnv('VERCEL', '');
+  vi.stubEnv('VERCEL_ENV', '');
   currentUser = ALICE;
+  knownUsers.set(ALICE.id, { id: ALICE.id });
+  knownUsers.set(BOB.id, { id: BOB.id });
+  oauth.setOAuthUserLookup(async (id) => knownUsers.get(id) ?? null);
+  net.fetchMock = vi.fn(async () => {
+    throw new Error('unexpected network call');
+  });
 });
 
 // ---- request / response fakes ---------------------------------------------
@@ -243,6 +265,8 @@ describe('brief tests', () => {
     expect(first.statusCode).toBe(200);
     expect(first.body.refresh_token).not.toBe(tokens.refresh_token);
     expect(first.body).toMatchObject({ token_type: 'Bearer', expires_in: 3600, scope: 'story' });
+    // The client got the new pair (it used it), so the 60 s retry grace no longer applies.
+    await oauth.verifyAccessToken(bearer(first.body.access_token));
     const old = await exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id });
     expect(old.statusCode).toBe(400);
     expect(old.body.error).toBe('invalid_grant');
@@ -373,6 +397,7 @@ describe('refresh tokens', () => {
     const { client, tokens } = await newGrant();
     const next = await exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id });
     expect(next.statusCode).toBe(200);
+    await raw.query(`update story_oauth_tokens set rotated_at = now() - interval '61 seconds' where refresh_token_hash = $1`, [hash(tokens.refresh_token)]);
     const replay = await exchange({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: client.client_id });
     expect(replay.body.error).toBe('invalid_grant');
     const afterReplay = await exchange({ grant_type: 'refresh_token', refresh_token: next.body.refresh_token, client_id: client.client_id });
@@ -428,12 +453,20 @@ describe('authorization request validation', () => {
     ['unknown scope', { scope: 'story admin' }, 'invalid_scope'],
     ['missing resource', { resource: undefined }, 'invalid_target'],
     ['wrong resource', { resource: 'https://evil.test/api/mcp' }, 'invalid_target'],
-  ])('redirects %s errors to the registered redirect_uri', async (_label, extra, error) => {
+  ])('shows %s errors on an error card with a link back to the registered redirect_uri, no auto-redirect', async (_label, extra, error) => {
     const { body: client } = await register();
     const query = authorizeQuery(client.client_id, pkce().challenge, extra);
     for (const k of Object.keys(query)) if (query[k] === undefined) delete query[k];
+    for (const user of [null, ALICE]) {
+      currentUser = user;
+      const { result } = await consent(query);
+      expect(result.redirect).toBeUndefined();
+      expect(result.props.error.returnHost).toBe('claude.ai');
+    }
     const { result } = await consent(query);
-    const loc = new URL(result.redirect.destination);
+    const html = renderToStaticMarkup(createElement(consentPage.default, result.props));
+    expect(html).toContain('Return to claude.ai');
+    const loc = new URL(result.props.error.returnUrl);
     expect(loc.origin + loc.pathname).toBe(CLAUDE_CALLBACK);
     expect(loc.searchParams.get('error')).toBe(error);
     expect(loc.searchParams.get('state')).toBe('st-123');
@@ -526,10 +559,10 @@ describe('consent page', () => {
   it('renders client name and URI as plain text, with the access, account and redirect host', async () => {
     const { body: client } = await register({
       client_name: '<img src=x onerror=alert(1)>',
-      client_uri: 'https://example.test/"><script>alert(1)</script>',
-      redirect_uris: [CLAUDE_CALLBACK],
+      client_uri: 'https://app.example/"><script>alert(1)</script>',
+      redirect_uris: ['https://app.example/cb'],
     });
-    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge));
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge, { redirect_uri: 'https://app.example/cb' }));
     const html = renderToStaticMarkup(createElement(consentPage.default, result.props));
     expect(html).not.toContain('<img');
     expect(html).not.toContain('<script');
@@ -537,7 +570,7 @@ describe('consent page', () => {
     expect(html).not.toMatch(/<a /);
     expect(html).toContain('Create and manage your Ariya Lab story videos and spend your credits');
     expect(html).toContain('alice@example.test');
-    expect(html).toContain('claude.ai');
+    expect(html).toContain('app.example');
     expect(html).toContain('action="/api/oauth/authorize"');
     expect(html).toContain(`value="${result.props.requestToken}"`);
   });
@@ -672,20 +705,25 @@ describe('Client ID Metadata Documents', () => {
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
   };
+  const docResponse = (doc = DOC, headers = {}) =>
+    new Response(JSON.stringify(doc), { status: 200, headers: { 'content-type': 'application/json', ...headers } });
   let fetchMock;
   beforeEach(async () => {
     await raw.query(`delete from story_oauth_clients where kind = 'metadata_document'`);
+    await raw.query('delete from story_oauth_cimd_failures');
+    await raw.query('delete from story_oauth_rate_limits');
     dnsAnswers.clear();
     dnsAnswers.set('claude.ai', ['160.79.104.10']);
-    fetchMock = vi.fn(async () => new Response(JSON.stringify(DOC), { status: 200, headers: { 'content-type': 'application/json' } }));
-    vi.stubGlobal('fetch', fetchMock);
+    fetchMock = vi.fn(async () => docResponse());
+    net.fetchMock = fetchMock;
   });
+  const cimdQuery = (extra = {}) => authorizeQuery(CIMD_URL, pkce().challenge, { redirect_uri: 'http://localhost:4000/callback', ...extra });
 
   it('fetches, caches and uses a metadata document client end to end', async () => {
     const { verifier, challenge } = pkce();
     const query = authorizeQuery(CIMD_URL, challenge, { redirect_uri: 'http://127.0.0.1:53111/callback' });
     const { result } = await consent(query);
-    expect(result.props.details).toMatchObject({ clientName: 'Claude Code', clientUri: 'https://claude.ai', loopbackOnly: true });
+    expect(result.props.details).toMatchObject({ verified: true, headline: 'Claude Code', loopbackOnly: true });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ redirect: 'manual' });
     const res = await decide(result.props.requestToken);
@@ -699,33 +737,100 @@ describe('Client ID Metadata Documents', () => {
   });
 
   it.each([
-    ['a client_id mismatch', () => fetchMock.mockResolvedValue(new Response(JSON.stringify({ ...DOC, client_id: 'https://claude.ai/other' })))],
-    ['a confidential client', () => fetchMock.mockResolvedValue(new Response(JSON.stringify({ ...DOC, token_endpoint_auth_method: 'private_key_jwt' })))],
-    ['an oversized document', () => fetchMock.mockResolvedValue(new Response(JSON.stringify({ ...DOC, pad: 'x'.repeat(6000) })))],
-    ['a redirect', () => fetchMock.mockResolvedValue(new Response(null, { status: 302, headers: { location: 'http://10.0.0.1/' } }))],
+    ['a client_id mismatch', () => fetchMock.mockResolvedValue(docResponse({ ...DOC, client_id: 'https://claude.ai/other' }))],
+    ['a confidential client', () => fetchMock.mockResolvedValue(docResponse({ ...DOC, token_endpoint_auth_method: 'private_key_jwt' }))],
+    ['no token_endpoint_auth_method', () => fetchMock.mockResolvedValue(docResponse({ ...DOC, token_endpoint_auth_method: undefined }))],
+    ['an oversized document', () => fetchMock.mockResolvedValue(docResponse({ ...DOC, pad: 'x'.repeat(6000) }))],
+    ['a redirect', () => fetchMock.mockResolvedValue(new Response(null, { status: 302, headers: { location: 'https://claude.ai/x' } }))],
     ['a private address', () => dnsAnswers.set('claude.ai', ['10.0.0.5'])],
-    ['an http redirect URI', () => fetchMock.mockResolvedValue(new Response(JSON.stringify({ ...DOC, redirect_uris: ['http://claude.ai/cb'] })))],
-  ])('rejects %s with an error page', async (_label, arrange) => {
+    ['an IPv4-compatible loopback address', () => dnsAnswers.set('claude.ai', ['::127.0.0.1'])],
+    ['an unresolvable host', () => dnsAnswers.delete('claude.ai')],
+    ['an http redirect URI', () => fetchMock.mockResolvedValue(docResponse({ ...DOC, redirect_uris: ['http://claude.ai/cb'] }))],
+    ['invalid JSON', () => fetchMock.mockResolvedValue(new Response('{nope', { status: 200 }))],
+  ])('rejects %s with one generic error message', async (_label, arrange) => {
     arrange();
-    const { result } = await consent(authorizeQuery(CIMD_URL, pkce().challenge, { redirect_uri: 'http://localhost:4000/callback' }));
+    const { result } = await consent(cimdQuery());
     expect(result.redirect).toBeUndefined();
-    expect(result.props.error).toBeTruthy();
+    expect(result.props.error.message).toBe("We could not load this app's details. Try connecting again later.");
   });
 
-  it.each(['https://10.0.0.1/meta.json', 'https://localhost/meta.json', 'https://claude.ai/', 'https://claude.ai:8443/meta', 'https://intranet.internal/meta'])(
-    'never fetches %s',
-    async (clientId) => {
-      const { result } = await consent(authorizeQuery(clientId, pkce().challenge));
-      expect(result.props.error).toBeTruthy();
-      expect(fetchMock).not.toHaveBeenCalled();
-    }
-  );
+  it.each([
+    'https://10.0.0.1/meta.json', 'https://localhost/meta.json', 'https://claude.ai/', 'https://claude.ai:8443/meta',
+    'https://intranet.internal/meta', 'https://[::ffff:7f00:1]/meta', 'http://claude.ai/meta',
+  ])('never fetches %s', async (clientId) => {
+    const { result } = await consent(authorizeQuery(clientId, pkce().challenge));
+    expect(result.props.error).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-  it('classifies private addresses', () => {
-    for (const ip of ['127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '::1', 'fd00::1', 'fe80::1', '::ffff:10.0.0.1', '0.0.0.0']) {
-      expect(clients.isPrivateAddress(ip), ip).toBe(true);
+  it('classifies private addresses with the shared provider guard', () => {
+    for (const ip of [
+      '127.0.0.1', '10.1.2.3', '172.20.0.1', '192.168.1.1', '169.254.169.254', '100.64.0.1', '::1', 'fd00::1', 'fe80::1',
+      '::ffff:10.0.0.1', '0.0.0.0', '::127.0.0.1', '::ffff:7f00:1', '2002:7f00:1::', 'fec0::1', '100::1', '2001::1', '64:ff9b::a00:1',
+    ]) {
+      expect(providerHttp.isPrivateAddress(ip), ip).toBe(true);
     }
-    for (const ip of ['160.79.104.10', '8.8.8.8', '2606:4700::1111']) expect(clients.isPrivateAddress(ip), ip).toBe(false);
+    for (const ip of ['160.79.104.10', '8.8.8.8', '2606:4700::1111']) expect(providerHttp.isPrivateAddress(ip), ip).toBe(false);
+    expect(clients.isPrivateAddress).toBeUndefined();
+  });
+
+  it('a signed-out visitor with an uncached client goes to sign-in before anything is fetched', async () => {
+    currentUser = null;
+    const { result } = await consent(cimdQuery());
+    expect(new URL(result.redirect.destination, ISSUER).pathname).toBe('/sign-in');
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect((await raw.query('select count(*)::int as n from story_oauth_clients where kind = $1', ['metadata_document'])).rows[0].n).toBe(0);
+  });
+
+  it('the token endpoint never fetches a metadata document', async () => {
+    const res = await exchange({ grant_type: 'refresh_token', refresh_token: 'x', client_id: CIMD_URL });
+    expect(res.statusCode).toBe(401);
+    expect(res.body.error).toBe('invalid_client');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('serves the stale cached row when a refetch fails', async () => {
+    await consent(cimdQuery());
+    await raw.query(`update story_oauth_clients set metadata_expires_at = now() - interval '1 minute' where client_id = $1`, [CIMD_URL]);
+    fetchMock.mockRejectedValue(new Error('down'));
+    const { result } = await consent(cimdQuery());
+    expect(result.props.requestToken).toBeTruthy();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('caches a failure for a few minutes', async () => {
+    fetchMock.mockRejectedValue(new Error('down'));
+    await consent(cimdQuery());
+    await consent(cimdQuery());
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await raw.query(`update story_oauth_cimd_failures set retry_after = now() - interval '1 second'`);
+    fetchMock.mockResolvedValue(docResponse());
+    const { result } = await consent(cimdQuery());
+    expect(result.props.requestToken).toBeTruthy();
+  });
+
+  it('respects Cache-Control max-age within 5 minutes and 24 hours', async () => {
+    const ttl = async (cacheControl) => {
+      await raw.query(`delete from story_oauth_clients where client_id = $1`, [CIMD_URL]);
+      fetchMock.mockResolvedValue(docResponse(DOC, cacheControl ? { 'cache-control': cacheControl } : {}));
+      await consent(cimdQuery());
+      const row = (await raw.query('select extract(epoch from metadata_expires_at - metadata_fetched_at)::int as s from story_oauth_clients where client_id = $1', [CIMD_URL])).rows[0];
+      return row.s;
+    };
+    expect(await ttl('max-age=60')).toBe(300);
+    expect(await ttl('public, max-age=3600')).toBe(3600);
+    expect(await ttl('max-age=9999999')).toBe(86400);
+    expect(await ttl(null)).toBe(86400);
+  });
+
+  it('charges first-time fetches against the per-IP registration limit', async () => {
+    await raw.query(
+      `insert into story_oauth_rate_limits (bucket, day, count) values ($1, current_date, 20)`,
+      [`register:${clients.ipKeyHash('203.0.113.9')}`]
+    );
+    const { result } = await consent(cimdQuery());
+    expect(result.props.error).toBeTruthy();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -790,14 +895,14 @@ describe('schema', () => {
         where n.nspname = 'public' and c.relkind = 'r' and c.relname like 'story\\_oauth\\_%' order by 1`
     );
     expect(rows.map((r) => r.relname)).toEqual([
-      'story_oauth_clients', 'story_oauth_codes', 'story_oauth_registrations', 'story_oauth_requests', 'story_oauth_tokens',
+      'story_oauth_cimd_failures', 'story_oauth_clients', 'story_oauth_codes', 'story_oauth_rate_limits', 'story_oauth_requests', 'story_oauth_tokens',
     ]);
     for (const r of rows) expect(r, r.relname).toMatchObject({ relrowsecurity: true, policies: 0 });
     for (const role of ['anon', 'authenticated']) {
       await raw.exec(`set role ${role}`);
       try {
         await expect(raw.query('select * from story_oauth_tokens')).rejects.toThrow(/permission denied/);
-        await expect(raw.query(`select story_oauth_registration_take('x', 5)`)).rejects.toThrow(/permission denied/);
+        await expect(raw.query(`select story_oauth_rate_take('x', 5)`)).rejects.toThrow(/permission denied/);
       } finally {
         await raw.exec('reset role');
       }
@@ -824,5 +929,403 @@ describe('next.config.js', () => {
         { key: 'Content-Security-Policy', value: "frame-ancestors 'none'" },
       ])
     );
+  });
+});
+
+// ============================================================ fix round 1
+
+const revokeHandler = (await import('../../pages/api/oauth/revoke.js')).default;
+const connectionsHandler = (await import('../../pages/api/oauth/connections.js')).default;
+const cleanupHandler = (await import('../../pages/api/cron/oauth-cleanup.js')).default;
+const renderConsent = (props) => renderToStaticMarkup(createElement(consentPage.default, props));
+const tokenRow = async (access) => (await raw.query('select * from story_oauth_tokens where access_token_hash = $1', [hash(access)])).rows[0];
+const refresh = (client, refreshToken, extra = {}) =>
+  exchange({ grant_type: 'refresh_token', refresh_token: refreshToken, client_id: client.client_id, ...extra });
+
+describe('I1 consent identity', () => {
+  it('names a client verified by Claude\'s documented callback "Claude", whatever it calls itself', async () => {
+    const { body: client } = await register({ client_name: 'Totally Real Bank', redirect_uris: [CLAUDE_CALLBACK] });
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge));
+    expect(result.props.details).toMatchObject({ verified: true, headline: 'Claude', redirectHost: 'claude.ai' });
+    const html = renderConsent(result.props);
+    expect(html).toContain('Claude');
+    expect(html).not.toContain('Totally Real Bank');
+    expect(html).not.toContain('Unverified app');
+  });
+
+  it('headlines an unverified client by its redirect host and labels it', async () => {
+    const { body: client } = await register({
+      client_name: 'Claude',
+      client_uri: 'https://claude.ai',
+      redirect_uris: ['https://claude.ai.evil.example/api/mcp/auth_callback'],
+    });
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge, { redirect_uri: 'https://claude.ai.evil.example/api/mcp/auth_callback' }));
+    expect(result.props.details).toMatchObject({ verified: false, headline: 'claude.ai.evil.example', clientUri: null });
+    const html = renderConsent(result.props);
+    expect(html).toContain('Unverified app');
+    expect(html).toMatch(/<h1[^>]*>[^<]*<span[^>]*>claude\.ai\.evil\.example<\/span>/);
+    expect(html).not.toContain('https://claude.ai<');
+  });
+
+  it('shows client_uri only when its host is the redirect host', async () => {
+    const { body: client } = await register({ client_name: 'Notes', client_uri: 'https://notes.example/about', redirect_uris: ['https://notes.example/cb'] });
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge, { redirect_uri: 'https://notes.example/cb' }));
+    expect(result.props.details.clientUri).toBe('https://notes.example/about');
+  });
+
+  it('never verifies a loopback client, even one calling itself Claude Code', async () => {
+    const { body: client } = await register({ client_name: 'Claude Code', redirect_uris: ['http://localhost/callback'] });
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge, { redirect_uri: 'http://localhost:5000/callback' }));
+    expect(result.props.details).toMatchObject({ verified: false, headline: 'localhost:5000', loopbackOnly: true });
+  });
+
+  it('shows the client_id host of an unverified metadata document client', async () => {
+    const url = 'https://tools.example/oauth/client.json';
+    await raw.query('delete from story_oauth_rate_limits');
+    dnsAnswers.set('tools.example', ['160.79.104.20']);
+    net.fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      client_id: url, client_name: 'Tools', redirect_uris: ['https://tools.example/cb'], token_endpoint_auth_method: 'none',
+    })));
+    const { result } = await consent(authorizeQuery(url, pkce().challenge, { redirect_uri: 'https://tools.example/cb' }));
+    expect(result.props.details).toMatchObject({ verified: false, headline: 'tools.example', clientIdHost: 'tools.example' });
+  });
+
+  it('strips bidi, zero-width and other format characters from names, stored and shown', async () => {
+    const { body: client } = await register({ client_name: 'Cla​ude‮ edoC', redirect_uris: ['https://x.example/cb'] });
+    expect(client.client_name).toBe('Claude edoC');
+    await raw.query(`update story_oauth_clients set client_name = 'Ev⁦il' where client_id = $1`, [client.client_id]);
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge, { redirect_uri: 'https://x.example/cb' }));
+    expect(result.props.details.clientName).toBe('Evil');
+    expect(clients.cleanDisplayText('a‍⁠﻿b')).toBe('ab');
+  });
+
+  it('keeps the verified list in one config constant', () => {
+    expect(clients.VERIFIED_CLIENTS).toEqual([
+      { name: 'Claude', redirectUri: 'https://claude.ai/api/mcp/auth_callback' },
+      { name: 'Claude Code', clientId: 'https://claude.ai/oauth/claude-code-client-metadata' },
+    ]);
+  });
+
+  it('page copy uses no dashes as punctuation', async () => {
+    const { body: client } = await register({ client_name: 'n', redirect_uris: ['https://x.example/cb'] });
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge, { redirect_uri: 'https://x.example/cb' }));
+    const text = renderConsent(result.props).replace(/<[^>]+>/g, ' ');
+    expect(text).not.toMatch(/ [-–—] /);
+  });
+});
+
+describe('I3 / O1 client loading', () => {
+  it('validation without a session never fetches; loadClient refuses an uncached document', async () => {
+    await expect(clients.loadClient('https://new.example/c.json', { allowFetch: false })).rejects.toMatchObject({ error: 'client_not_cached' });
+  });
+});
+
+describe('I4 revocation', () => {
+  it('advertises the revocation endpoint', async () => {
+    const res = await call(metadataHandler, { method: 'GET' });
+    expect(res.body).toMatchObject({
+      revocation_endpoint: `${ISSUER}/api/oauth/revoke`,
+      revocation_endpoint_auth_methods_supported: ['none'],
+    });
+  });
+
+  it.each(['access_token', 'refresh_token'])('POST /api/oauth/revoke with the %s revokes the whole grant', async (kind) => {
+    const { client, tokens } = await newGrant();
+    const res = await call(revokeHandler, { method: 'POST', body: { token: tokens[kind], client_id: client.client_id }, headers: FORM });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['cache-control']).toBe('no-store');
+    await expect(oauth.verifyAccessToken(bearer(tokens.access_token))).rejects.toMatchObject({ status: 401 });
+    expect((await refresh(client, tokens.refresh_token)).body.error).toBe('invalid_grant');
+  });
+
+  it('revoke answers 200 for unknown tokens and ignores tokens of another client', async () => {
+    const { tokens } = await newGrant();
+    const { body: other } = await register();
+    expect((await call(revokeHandler, { method: 'POST', body: { token: 'nope', client_id: other.client_id }, headers: FORM })).statusCode).toBe(200);
+    expect((await call(revokeHandler, { method: 'POST', body: { token: tokens.access_token, client_id: other.client_id }, headers: FORM })).statusCode).toBe(200);
+    await expect(oauth.verifyAccessToken(bearer(tokens.access_token))).resolves.toBeTruthy();
+    expect((await call(revokeHandler, { method: 'GET' })).statusCode).toBe(405);
+    expect((await call(revokeHandler, { method: 'POST', body: {}, headers: JSON_CT })).statusCode).toBe(415);
+    expect((await call(revokeHandler, { method: 'POST', body: { client_id: other.client_id }, headers: FORM })).body.error).toBe('invalid_request');
+  });
+
+  it('lists only my active grants by client and lets me disconnect one', async () => {
+    await oauth.revokeTokensForUser(ALICE.id);
+    const mine = await newGrant();
+    currentUser = BOB;
+    const bobs = await newGrant();
+    currentUser = ALICE;
+    const list = await call(connectionsHandler, { method: 'GET' });
+    expect(list.statusCode).toBe(200);
+    expect(list.headers['cache-control']).toBe('no-store');
+    expect(list.body.connections).toEqual([
+      expect.objectContaining({ clientId: mine.client.client_id, headline: 'Claude', verified: true }),
+    ]);
+    expect(JSON.stringify(list.body)).not.toMatch(/hash/);
+    // I cannot disconnect Bob's grant.
+    await call(connectionsHandler, { method: 'POST', body: { client_id: bobs.client.client_id }, headers: { ...JSON_CT, origin: ISSUER } });
+    await expect(oauth.verifyAccessToken(bearer(bobs.tokens.access_token))).resolves.toBeTruthy();
+    const off = await call(connectionsHandler, { method: 'POST', body: { client_id: mine.client.client_id }, headers: { ...JSON_CT, origin: ISSUER } });
+    expect(off.statusCode).toBe(200);
+    await expect(oauth.verifyAccessToken(bearer(mine.tokens.access_token))).rejects.toMatchObject({ status: 401 });
+    expect((await call(connectionsHandler, { method: 'GET' })).body.connections).toEqual([]);
+  });
+
+  it('the connections API needs a session, JSON and same origin', async () => {
+    currentUser = null;
+    expect((await call(connectionsHandler, { method: 'GET' })).statusCode).toBe(401);
+    currentUser = ALICE;
+    expect((await call(connectionsHandler, { method: 'POST', body: { client_id: 'x' }, headers: { ...JSON_CT, origin: 'https://evil.test' } })).statusCode).toBe(403);
+    expect((await call(connectionsHandler, { method: 'POST', body: { client_id: 'x' }, headers: { ...FORM, origin: ISSUER } })).statusCode).toBe(415);
+    expect((await call(connectionsHandler, { method: 'DELETE' })).statusCode).toBe(405);
+  });
+
+  it('a grant ends 90 days after authorization, however often it is refreshed', async () => {
+    const { client, tokens } = await newGrant();
+    const row = await tokenRow(tokens.access_token);
+    expect(Math.round((new Date(row.family_expires_at) - new Date(row.created_at)) / 86_400_000)).toBe(90);
+    await raw.query(`update story_oauth_tokens set family_expires_at = now() + interval '1 hour' where family_id = $1`, [row.family_id]);
+    const next = await refresh(client, tokens.refresh_token);
+    const nextRow = await tokenRow(next.body.access_token);
+    expect(new Date(nextRow.refresh_expires_at).getTime()).toBeLessThanOrEqual(new Date(nextRow.family_expires_at).getTime());
+    expect(new Date(nextRow.access_expires_at).getTime()).toBeLessThanOrEqual(new Date(nextRow.family_expires_at).getTime());
+    await raw.query(`update story_oauth_tokens set family_expires_at = now() - interval '1 second' where family_id = $1`, [row.family_id]);
+    expect((await refresh(client, next.body.refresh_token)).body.error).toBe('invalid_grant');
+  });
+
+  it('verifyAccessToken rejects a deleted or banned user and caches live users briefly', async () => {
+    const { tokens } = await newGrant();
+    const lookup = vi.fn(async () => ({ id: ALICE.id }));
+    oauth.setOAuthUserLookup(lookup);
+    await oauth.verifyAccessToken(bearer(tokens.access_token));
+    await oauth.verifyAccessToken(bearer(tokens.access_token));
+    expect(lookup).toHaveBeenCalledTimes(1);
+    oauth.setOAuthUserLookup(async () => null);
+    await expect(oauth.verifyAccessToken(bearer(tokens.access_token))).rejects.toMatchObject({ status: 401, error: 'invalid_token' });
+    oauth.setOAuthUserLookup(async (id) => ({ id, banned_until: new Date(Date.now() + 3_600_000).toISOString() }));
+    await expect(oauth.verifyAccessToken(bearer(tokens.access_token))).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('fails closed with 503 (not 401) when the user lookup is unavailable', async () => {
+    const { tokens } = await newGrant();
+    oauth.setOAuthUserLookup(null); // default lookup: the admin client, which throws in tests
+    const err = await oauth.verifyAccessToken(bearer(tokens.access_token)).catch((e) => e);
+    expect(err).toBeInstanceOf(oauth.OAuthUnavailableError);
+    expect(err.status).toBe(503);
+  });
+
+  it('revokeTokensForUser also kills taken codes and pending consent requests (M6, Opus)', async () => {
+    const { body: client } = await register();
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge));
+    const { verifier, challenge } = pkce();
+    const redirect = await authorize(client.client_id, challenge);
+    const code = redirect.searchParams.get('code');
+    const [taken] = await storyDbRpc('story_oauth_take_code', { p_code_hash: hash(code) });
+    await oauth.revokeTokensForUser(ALICE.id);
+    await expect(storyDbRpc('story_oauth_issue_code_tokens', {
+      p_code_id: taken.id, p_access_hash: 'a'.repeat(43), p_access_expires: new Date(Date.now() + 1e6).toISOString(),
+      p_refresh_hash: 'r'.repeat(43), p_refresh_expires: new Date(Date.now() + 1e6).toISOString(),
+    })).rejects.toThrow(/code_revoked/);
+    expect((await decide(result.props.requestToken)).statusCode).toBe(400);
+    expect(verifier).toBeTruthy();
+  });
+});
+
+const storyDbRpc = async (fn, params) => (await import('../../lib/story/db.js')).storyDb().rpc(fn, params);
+
+describe('O2 refresh grace window', () => {
+  it('a retry within 60 s gets a fresh pair and the lost successor stops working', async () => {
+    const { client, tokens } = await newGrant();
+    const lost = await refresh(client, tokens.refresh_token);
+    const retry = await refresh(client, tokens.refresh_token);
+    expect(retry.statusCode).toBe(200);
+    expect(retry.body.refresh_token).not.toBe(lost.body.refresh_token);
+    await expect(oauth.verifyAccessToken(bearer(lost.body.access_token))).rejects.toMatchObject({ status: 401 });
+    expect((await refresh(client, lost.body.refresh_token)).body.error).toBe('invalid_grant');
+    await expect(oauth.verifyAccessToken(bearer(retry.body.access_token))).resolves.toBeTruthy();
+  });
+
+  it('reuse after 60 s revokes the family', async () => {
+    const { client, tokens } = await newGrant();
+    const next = await refresh(client, tokens.refresh_token);
+    await raw.query(`update story_oauth_tokens set rotated_at = now() - interval '61 seconds' where refresh_token_hash = $1`, [hash(tokens.refresh_token)]);
+    expect((await refresh(client, tokens.refresh_token)).body.error).toBe('invalid_grant');
+    await expect(oauth.verifyAccessToken(bearer(next.body.access_token))).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('reuse within 60 s after the successor was used revokes the family', async () => {
+    const { client, tokens } = await newGrant();
+    const next = await refresh(client, tokens.refresh_token);
+    await oauth.verifyAccessToken(bearer(next.body.access_token));
+    expect((await refresh(client, tokens.refresh_token)).body.error).toBe('invalid_grant');
+    await expect(oauth.verifyAccessToken(bearer(next.body.access_token))).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('reuse within 60 s after the successor was itself rotated revokes the family', async () => {
+    const { client, tokens } = await newGrant();
+    const next = await refresh(client, tokens.refresh_token);
+    const third = await refresh(client, next.body.refresh_token);
+    expect((await refresh(client, tokens.refresh_token)).body.error).toBe('invalid_grant');
+    await expect(oauth.verifyAccessToken(bearer(third.body.access_token))).rejects.toMatchObject({ status: 401 });
+  });
+});
+
+describe('M7 code replay window', () => {
+  it('a code replayed more than 10 minutes later is refused without revoking the grant', async () => {
+    const { client, code, verifier, tokens } = await newGrant();
+    await raw.query(`update story_oauth_codes set used_at = now() - interval '11 minutes' where code_hash = $1`, [hash(code)]);
+    const again = await exchange({
+      grant_type: 'authorization_code', code, code_verifier: verifier, redirect_uri: CLAUDE_CALLBACK, client_id: client.client_id, resource: RESOURCE,
+    });
+    expect(again.body.error).toBe('invalid_grant');
+    await expect(oauth.verifyAccessToken(bearer(tokens.access_token))).resolves.toBeTruthy();
+  });
+});
+
+describe('I5 limits and cleanup', () => {
+  it('limits refreshes per grant per day with 429, never invalid_grant', async () => {
+    const { client, tokens } = await newGrant();
+    const row = await tokenRow(tokens.access_token);
+    await raw.query(
+      `insert into story_oauth_tokens (family_id, client_id, user_id, scope, resource, access_token_hash, access_expires_at,
+         refresh_token_hash, refresh_expires_at, family_expires_at, rotated_at)
+       select $1, client_id, user_id, scope, resource, 'fa' || g, now(), 'fr' || g, now(), family_expires_at, now() - interval '1 hour'
+         from story_oauth_tokens, generate_series(1, $2::int) g where id = $3`,
+      [row.family_id, oauth.REFRESHES_PER_GRANT_PER_DAY, row.id]
+    );
+    const res = await refresh(client, tokens.refresh_token);
+    expect(res.statusCode).toBe(429);
+    expect(res.body.error).not.toBe('invalid_grant');
+  });
+
+  it('limits token requests per IP per day with 429', async () => {
+    await raw.query(`insert into story_oauth_rate_limits (bucket, day, count) values ($1, current_date, $2)
+                     on conflict (bucket, day) do update set count = excluded.count`,
+      [`token:${clients.ipKeyHash('203.0.113.9')}`, oauth.TOKEN_REQUESTS_PER_IP_PER_DAY]);
+    const res = await exchange({ grant_type: 'refresh_token', refresh_token: 'x', client_id: 'y' });
+    expect(res.statusCode).toBe(429);
+    await raw.query(`delete from story_oauth_rate_limits where bucket like 'token:%'`);
+  });
+
+  it('keys the registration cap on the IPv6 /64', async () => {
+    expect(clients.ipKey('2001:db8:1:2:aaaa::1')).toBe(clients.ipKey('2001:db8:1:2:bbbb::9'));
+    expect(clients.ipKey('2001:db8:1:3::1')).not.toBe(clients.ipKey('2001:db8:1:2::1'));
+    expect(clients.ipKey('198.51.100.7')).toBe('198.51.100.7');
+    for (let i = 0; i < 20; i += 1) expect((await register(undefined, `2001:db8:9:9:${i.toString(16)}::1`)).statusCode).toBe(201);
+    expect((await register(undefined, '2001:db8:9:9:ffff::2')).statusCode).toBe(429);
+  });
+
+  it('M9: an invalid registration does not spend the quota', async () => {
+    const ip = '192.0.2.200';
+    await raw.query(`insert into story_oauth_rate_limits (bucket, day, count) values ($1, current_date, 19)`, [`register:${clients.ipKeyHash(ip)}`]);
+    expect((await register({ client_name: '', redirect_uris: [] }, ip)).statusCode).toBe(400);
+    expect((await register(undefined, ip)).statusCode).toBe(201);
+    expect((await register(undefined, ip)).statusCode).toBe(429);
+  });
+
+  it('the cleanup cron needs CRON_SECRET', async () => {
+    vi.stubEnv('CRON_SECRET', 's3cret');
+    expect((await call(cleanupHandler, { method: 'GET' })).statusCode).toBe(401);
+    expect((await call(cleanupHandler, { method: 'GET', headers: { authorization: 'Bearer nope' } })).statusCode).toBe(401);
+    vi.stubEnv('CRON_SECRET', '');
+    expect((await call(cleanupHandler, { method: 'GET', headers: { authorization: 'Bearer ' } })).statusCode).toBe(401);
+  });
+
+  it('the cleanup cron deletes dead rows and keeps live ones', async () => {
+    vi.stubEnv('CRON_SECRET', 's3cret');
+    const live = await newGrant();
+    const dead = await newGrant();
+    const unused = (await register()).body;
+    await raw.query(`update story_oauth_clients set created_at = now() - interval '8 days' where client_id = $1`, [unused.client_id]);
+    await raw.query(`update story_oauth_tokens set revoked_at = now() - interval '2 days' where access_token_hash = $1`, [hash(dead.tokens.access_token)]);
+    await raw.query(`update story_oauth_codes set expires_at = now() - interval '2 days'`);
+    await raw.query(`update story_oauth_requests set expires_at = now() - interval '2 days'`);
+    await raw.query(`insert into story_oauth_rate_limits (bucket, day, count) values ('register:old', current_date - 3, 1)`);
+    const res = await call(cleanupHandler, { method: 'GET', headers: { authorization: 'Bearer s3cret' } });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.deleted).toMatchObject({ tokens: expect.any(Number), codes: expect.any(Number), requests: expect.any(Number) });
+    expect(await tokenRow(dead.tokens.access_token)).toBeUndefined();
+    expect(await tokenRow(live.tokens.access_token)).toBeTruthy();
+    await expect(oauth.verifyAccessToken(bearer(live.tokens.access_token))).resolves.toBeTruthy();
+    const n = async (sql, p) => (await raw.query(sql, p)).rows[0].n;
+    expect(await n(`select count(*)::int as n from story_oauth_codes`)).toBe(0);
+    expect(await n(`select count(*)::int as n from story_oauth_requests`)).toBe(0);
+    expect(await n(`select count(*)::int as n from story_oauth_rate_limits where bucket = 'register:old'`)).toBe(0);
+    expect(await n(`select count(*)::int as n from story_oauth_clients where client_id = $1`, [unused.client_id])).toBe(0);
+    expect(await n(`select count(*)::int as n from story_oauth_clients where client_id = $1`, [live.client.client_id])).toBe(1);
+  });
+
+  it('is scheduled daily in vercel.json next to the existing crons', async () => {
+    const { readFileSync } = await import('node:fs');
+    const config = JSON.parse(readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8'));
+    const paths = config.crons.map((c) => c.path);
+    expect(paths).toEqual(expect.arrayContaining(['/api/cron/cleanup-history', '/api/cron/story-tick', '/api/cron/oauth-cleanup']));
+    expect(config.crons.find((c) => c.path === '/api/cron/oauth-cleanup').schedule).toMatch(/^\d+ \d+ \* \* \*$/);
+  });
+});
+
+describe('I2 / Opus repeated parameters', () => {
+  it('GET /api/oauth/authorize rejects a repeated parameter with an error page', async () => {
+    const res = await call(authorizeHandler, { method: 'GET', query: { ...authorizeQuery('c', 'x'), state: ['a', 'b'] } });
+    expect(res.statusCode).toBe(400);
+    expect(res.location).toBeNull();
+    expect(res.headers['content-type']).toMatch(/text\/html/);
+  });
+});
+
+describe('M1 issuer in production', () => {
+  it('refuses to derive the issuer from the request in production', () => {
+    vi.stubEnv('APP_URL', '');
+    vi.stubEnv('VERCEL_ENV', 'production');
+    expect(() => oauth.oauthIssuer(makeReq())).toThrow(/APP_URL/);
+    vi.stubEnv('VERCEL_ENV', '');
+    vi.stubEnv('NODE_ENV', 'production');
+    expect(() => oauth.oauthIssuer(makeReq())).toThrow(/APP_URL/);
+    vi.stubEnv('NODE_ENV', 'test');
+  });
+});
+
+describe('M5 framing', () => {
+  it('next.config.js forbids framing sign-in, sign-up and /oauth', async () => {
+    const { createRequire } = await import('node:module');
+    const config = createRequire(import.meta.url)('../../next.config.js');
+    const headers = await config.headers();
+    const { pathToRegexp } = await import('next/dist/compiled/path-to-regexp');
+    for (const path of ['/sign-in', '/sign-up', '/oauth/consent']) {
+      const rule = headers.find((h) => pathToRegexp(h.source).test(path));
+      expect(rule?.headers, path).toEqual(expect.arrayContaining([{ key: 'X-Frame-Options', value: 'DENY' }]));
+    }
+  });
+
+  it('the consent form is not rendered at all when the page is framed', async () => {
+    const { body: client } = await register();
+    const { result } = await consent(authorizeQuery(client.client_id, pkce().challenge));
+    const saved = globalThis.window;
+    globalThis.window = { top: {}, self: {} };
+    try {
+      const html = renderConsent(result.props);
+      expect(html).not.toContain('<form');
+      expect(html).toContain('Open this page in its own window');
+    } finally {
+      if (saved === undefined) delete globalThis.window;
+      else globalThis.window = saved;
+    }
+  });
+});
+
+describe('Opus discovery minors', () => {
+  it('the protected resource rewrite answers only the bare path and the MCP path', async () => {
+    const { createRequire } = await import('node:module');
+    const config = createRequire(import.meta.url)('../../next.config.js');
+    const rewrites = await config.rewrites();
+    const { pathToRegexp } = await import('next/dist/compiled/path-to-regexp');
+    const target = (path) => rewrites.find((r) => pathToRegexp(r.source).test(path))?.destination;
+    expect(target('/.well-known/oauth-protected-resource/other')).toBeUndefined();
+    expect(target('/.well-known/oauth-protected-resource/api/mcp')).toBe('/api/oauth/protected-resource');
+  });
+
+  it('story_oauth_codes is indexed by user_id', async () => {
+    const { rows } = await raw.query(`select indexdef from pg_indexes where tablename = 'story_oauth_codes'`);
+    expect(rows.some((r) => /\(user_id\)/.test(r.indexdef))).toBe(true);
   });
 });

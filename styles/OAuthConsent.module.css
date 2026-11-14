@@ -63,3 +63,17 @@
   gap: 10px;
   margin-top: 24px;
 }
+.unverified {
+  display: inline-block;
+  margin: 0 0 12px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent-deep);
+  font-size: 13px;
+  font-weight: 600;
+}
+.returnLink {
+  color: var(--accent-deep);
+  font-weight: 600;
+}

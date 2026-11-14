@@ -1,0 +1,14 @@
+.list { display: grid; gap: 14px; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 20px 22px; }
+.info { min-width: 0; }
+.name { margin: 0 0 4px; font-weight: 600; font-size: 17px; overflow-wrap: anywhere; }
+.unverified {
+  display: inline-block;
+  margin: 0 0 6px;
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--accent);
+  color: var(--accent-deep);
+  font-size: 12px;
+  font-weight: 600;
+}

@@ -17,20 +17,24 @@ import styles from '../../styles/OAuthConsent.module.css';
  * OAuth consent page for the MCP connector. GET /api/oauth/authorize
  * forwards here with the authorization request in the query.
  *
- * Order: validate the request (bad client or redirect_uri -> error card,
- * never a redirect; anything else -> error redirect to the client), then
- * require the Supabase session (signed out -> /sign-in with a returnTo
- * back to this request), then store a consent request bound to the user
- * and render Allow / Deny. The form posts to /api/oauth/authorize with
- * the single-use request token. Framing is forbidden (headers here and in
- * next.config.js).
+ * Order: read the Supabase session; validate the request (a metadata
+ * document client never seen before is fetched only for a signed-in
+ * visitor); on any error show an error card, with a "Return to <host>"
+ * link when the redirect URI is valid (never an automatic redirect before
+ * the user has chosen); signed out -> /sign-in with a returnTo back to
+ * this request; then store a consent request bound to the user and render
+ * Allow / Deny. The form posts to /api/oauth/authorize with the single-use
+ * request token. Framing is forbidden (headers here and in next.config.js,
+ * and the form is not rendered inside a frame).
  *
- * Client-supplied values (client name, client URI) render as plain text.
+ * Identity: only VERIFIED_CLIENTS get a name in the headline; any other
+ * app is headlined by its redirect host and labelled "Unverified app".
+ * Client-supplied values render as plain text.
  */
 export default function OAuthConsentPage({ error = null, details = null, email = '', requestToken = '' }) {
   // Headers forbid framing on a full load; this also covers arriving here by
   // client-side navigation (sign-in uses router.push).
-  const [framed, setFramed] = useState(false);
+  const [framed, setFramed] = useState(() => typeof window !== 'undefined' && window.top !== window.self);
   useEffect(() => {
     if (window.top !== window.self) setFramed(true);
   }, []);
@@ -48,12 +52,31 @@ export default function OAuthConsentPage({ error = null, details = null, email =
             <>
               <h1 className={styles.title}>{error.title}</h1>
               <p className={styles.text}>{error.message}</p>
+              {error.returnUrl && (
+                <p className={styles.actions}>
+                  <a className={styles.returnLink} href={error.returnUrl} rel="noreferrer">
+                    Return to {error.returnHost}
+                  </a>
+                </p>
+              )}
             </>
           ) : (
             <>
-              <h1 className={styles.title}>
-                Allow <span className={styles.client}>{details.clientName}</span> to use your account?
-              </h1>
+              {details.verified ? (
+                <h1 className={styles.title}>
+                  Allow <span className={styles.client}>{details.headline}</span> to use your Ariya Lab account?
+                </h1>
+              ) : (
+                <>
+                  <p className={styles.unverified}>Unverified app</p>
+                  <h1 className={styles.title}>
+                    Allow an app at <span className={styles.client}>{details.headline}</span> to use your Ariya Lab account?
+                  </h1>
+                  {details.clientName && <p className={styles.meta}>It calls itself {details.clientName}.</p>}
+                  {details.clientIdHost && <p className={styles.meta}>Its details come from {details.clientIdHost}.</p>}
+                  <p className={styles.meta}>We could not confirm who made it. Only allow it if you trust it.</p>
+                </>
+              )}
               {details.clientUri && <p className={styles.meta}>App website: {details.clientUri}</p>}
               <div className={styles.access}>
                 <p className={styles.label}>It will be able to</p>
@@ -99,24 +122,29 @@ function setConsentHeaders(res) {
   res.setHeader('Referrer-Policy', 'same-origin');
 }
 
+function signInRedirect(query) {
+  return { redirect: { destination: `/sign-in?returnTo=${encodeURIComponent(consentPath(query))}`, permanent: false } };
+}
+
 export async function getServerSideProps({ req, res, query }) {
   setConsentHeaders(res);
+  const auth = await getUserFromRequest(req, res);
   let validated;
   try {
-    validated = await validateAuthorizeRequest(query, req);
+    validated = await validateAuthorizeRequest(query, req, { allowFetch: Boolean(auth?.user) });
   } catch (err) {
     if (!(err instanceof OAuthError)) throw err;
-    if (err.redirect) return { redirect: { destination: err.redirect, permanent: false } };
+    if (err.error === 'client_not_cached') return signInRedirect(query);
     res.statusCode = 400;
-    return { props: { error: { title: 'This connection cannot continue', message: err.message } } };
+    const error = { title: 'This connection cannot continue', message: err.message };
+    if (err.redirect) {
+      error.returnUrl = err.redirect;
+      error.returnHost = new URL(err.redirect).host;
+    }
+    return { props: { error } };
   }
 
-  const auth = await getUserFromRequest(req, res);
-  if (!auth?.user) {
-    return {
-      redirect: { destination: `/sign-in?returnTo=${encodeURIComponent(consentPath(query))}`, permanent: false },
-    };
-  }
+  if (!auth?.user) return signInRedirect(query);
 
   const requestToken = await createConsentRequest(validated.params, auth.user.id);
   return {

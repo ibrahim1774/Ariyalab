@@ -1,11 +1,12 @@
-import { OAuthError, consentPath, decideConsent, oauthIssuer } from '../../../lib/mcp/oauth.js';
+import { AUTHORIZE_PARAMS, OAuthError, consentPath, decideConsent, oauthIssuer } from '../../../lib/mcp/oauth.js';
 import { hasContentType, methodNotAllowed, sendErrorPage } from '../../../lib/mcp/oauthHttp.js';
 import { getUserFromRequest } from '../../../lib/supabaseServer.js';
 
 /*
  * OAuth authorization endpoint (advertised in the server metadata).
  *
- * GET: forwards the authorization request to the consent page, which
+ * GET: rejects a repeated parameter (error page), else forwards the
+ *   authorization request to the consent page, which
  *   validates it, requires the Supabase session and shows Allow / Deny.
  * POST (the consent form, application/x-www-form-urlencoded):
  *   request_token, decision=allow|deny. Same-origin only, needs the
@@ -15,6 +16,10 @@ import { getUserFromRequest } from '../../../lib/supabaseServer.js';
 export default async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
   if (req.method === 'GET') {
+    const repeated = AUTHORIZE_PARAMS.find((k) => Array.isArray(req.query?.[k]));
+    if (repeated) {
+      return sendErrorPage(res, 400, 'This connection cannot continue', `The ${repeated} parameter is repeated.`);
+    }
     return res.redirect(302, consentPath(req.query));
   }
   if (req.method !== 'POST') return methodNotAllowed(res, 'GET, POST');
