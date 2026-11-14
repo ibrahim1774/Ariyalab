@@ -19,7 +19,7 @@ export default async function handler(req, res) {
     if (req.method === 'GET') {
       return res.status(200).json({ projects: await listProjects({ userId }) });
     }
-    const project = await createProject({ userId, input: req.body ?? {} });
+    const project = await createProject({ userId, input: req.body ?? {}, user: session.user });
     return res.status(201).json({ project });
   } catch (err) {
     return sendError(res, err);

@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeReq, makeRes } from '../helpers/apiMock';
 import { createTestDb } from '../helpers/db.js';
-import { useRegexOnlyModeration } from '../helpers/storyEnv.js';
+import { useRegexOnlyModeration, useTestAccounts } from '../helpers/storyEnv.js';
 
 let currentUser = null;
 vi.mock('../../lib/supabaseServer.js', () => ({
@@ -30,6 +30,7 @@ const listHandler = (await import('../../pages/api/story/projects/index.js')).de
 const itemHandler = (await import('../../pages/api/story/projects/[id]/index.js')).default;
 
 useRegexOnlyModeration();
+useTestAccounts(); // paid and verified: these tests are not about the free-tier caps
 
 let raw;
 const ALICE = { id: randomUUID(), email: 'alice@example.test' };

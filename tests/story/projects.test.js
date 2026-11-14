@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDb } from '../helpers/db.js';
-import { useRegexOnlyModeration } from '../helpers/storyEnv.js';
+import { useRegexOnlyModeration, useTestAccounts } from '../helpers/storyEnv.js';
 import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/story/errors.js';
 import { ModerationError } from '../../lib/moderation.js';
@@ -15,6 +15,7 @@ import {
 } from '../../lib/story/projects.js';
 
 useRegexOnlyModeration();
+useTestAccounts(); // paid and verified: these tests are not about the free-tier caps
 
 let raw;
 
