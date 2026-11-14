@@ -1,8 +1,9 @@
 import { stripe, planFromPrice, PLANS, CAPS } from '../../../lib/stripe';
-import { linkStripeCustomerToProfile } from '../../../lib/entitlement';
+import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../../lib/entitlement';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
 import { sendCapiEvent } from '../../../lib/meta';
-import { KEY, nsEventId } from '../../../lib/metaKeys';
+import { nsEventId } from '../../../lib/metaKeys';
+import { checkSessionOwner, grantForCheckoutSession, CLAIM_NONCE_COOKIE } from '../../../lib/grants';
 
 /*
  * UGC-2 ticket-claim endpoint (email-independent, leak-protected).
@@ -15,24 +16,38 @@ import { KEY, nsEventId } from '../../../lib/metaKeys';
  *     request/query. The ticket never appears in a client-rendered URL,
  *     so it can't leak to the Meta/TikTok pixels or browser referrers.
  *   - There is NO email-match gate. The user may sign up with ANY email
- *     or Google account; the binding is authorized solely by possession
- *     of the (unguessable, single-use, short-lived, httpOnly) ticket.
+ *     or Google account. The session id alone is NOT enough (it travels in
+ *     the success URL): the binding is authorized by the claim ticket
+ *     /api/checkout issued to this browser when checkout started — a
+ *     random nonce in the httpOnly `ugc2_claim_nonce` cookie whose SHA-256
+ *     is stored on the session as metadata.claim_ticket. The usual owner
+ *     checks (client_reference_id, verified email) also pass.
+ *   - Ticket-flow sessions created before tickets carried a nonce are
+ *     accepted on the session-id cookie alone for TICKET_TTL_S after
+ *     creation (the same 30 minutes the cookie lives), so purchases in
+ *     flight at deploy time still link. Nothing older takes that path.
  *
- * Everything else — payment-status guard, single-use processedSessions
- * idempotency, credit seeding, profile link, Purchase CAPI — mirrors
- * /api/checkout/claim verbatim so the entitlement reader is unchanged.
- *
- * This endpoint is fully isolated: /api/checkout/claim and every other
- * paid surface keep their email-match behavior untouched.
+ * Everything else — payment-status guard, grant once per session
+ * (lib/grants.js), profile link, Purchase CAPI — mirrors
+ * /api/checkout/claim so the entitlement reader is unchanged.
  */
 
 const CLAIM_COOKIE = 'ugc2_claim_sid';
+const TICKET_TTL_S = 1800;
 
 function clearClaimCookie(res) {
-  res.setHeader(
-    'Set-Cookie',
-    `${CLAIM_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`
-  );
+  res.setHeader('Set-Cookie', [
+    `${CLAIM_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
+    `${CLAIM_NONCE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
+  ]);
+}
+
+// A ticket-flow session from before /api/checkout stamped claim_ticket.
+function isPreTicketSession(cs) {
+  if (cs.metadata?.claim_ticket) return false;
+  if (cs.metadata?.pending_supabase_link !== 'true') return false;
+  if (!String(cs.success_url || '').includes('/ugc-2/claim?')) return false;
+  return Boolean(cs.created) && Date.now() / 1000 - cs.created <= TICKET_TTL_S;
 }
 
 export default async function handler(req, res) {
@@ -80,7 +95,15 @@ export default async function handler(req, res) {
         : null);
 
     // NOTE: intentionally NO email-match gate here. Authorization is the
-    // httpOnly, single-use, short-lived ticket. See file header.
+    // claim ticket issued to this browser. See file header.
+    const owner = checkSessionOwner(checkoutSession, session.user, {
+      claimNonce: req.cookies?.[CLAIM_NONCE_COOKIE],
+    });
+    if (!owner.ok && !isPreTicketSession(checkoutSession)) {
+      return res.status(403).json({
+        error: 'This payment was started in a different browser. Contact support to link it.',
+      });
+    }
 
     const price = checkoutSession.line_items?.data?.[0]?.price;
     const plan = planFromPrice(price);
@@ -88,22 +111,26 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Session is not a subscription.' });
     }
 
-    // Seed plan + credits on the Stripe customer's metadata. Same
-    // shape as /api/checkout/confirm so the entitlement reader can
-    // pick it up unchanged.
-    const sub = checkoutSession.subscription;
-    const periodStartMs =
-      ((sub && sub.current_period_start) || Math.floor(Date.now() / 1000)) * 1000;
-    const customer = await stripe().customers.retrieve(customerId);
-    const md = customer && !customer.deleted ? customer.metadata || {} : {};
-    const sessionTag = checkoutSession.id.replace(/^cs_(test_|live_)/, '').slice(-32);
-    const processed = (md[KEY.processedSessions] || '').split(',').filter(Boolean);
-    if (processed.includes(sessionTag)) {
-      // Already claimed (refresh / double tab / prior claim) — bind the
-      // profile (cheap, idempotent) and return success without
-      // re-seeding credits. Single-use: the ticket is spent.
+    // Authoritative link in our profiles table.
+    try {
       await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
-      clearClaimCookie(res);
+    } catch (linkErr) {
+      if (linkErr instanceof CustomerLinkedElsewhereError) {
+        return res.status(409).json({ error: linkErr.message });
+      }
+      throw linkErr;
+    }
+
+    const grant = await grantForCheckoutSession(checkoutSession, {
+      userId: session.user.id,
+      clearPendingLink: true,
+    });
+
+    // Ticket is spent — clear the cookies so it can't be replayed.
+    clearClaimCookie(res);
+
+    if (!grant.granted && grant.skipped !== 'granted_per_invoice') {
+      // Already claimed (refresh / double tab / prior claim).
       return res.status(200).json({
         ok: true,
         alreadyProcessed: true,
@@ -111,35 +138,8 @@ export default async function handler(req, res) {
         videoCap: CAPS[plan],
       });
     }
-    const existingCredits = parseInt(md[KEY.credits] || '0', 10) || 0;
-    // See /api/checkout/confirm.js for the rationale: trialing subs
-    // only get the 2-credit trial pool until current_period_start
-    // jumps on conversion to active.
-    const isTrialing = sub && sub.status === 'trialing';
-    const seededCredits = isTrialing
-      ? existingCredits
-      : Math.max(existingCredits, CAPS[plan]);
-    const nextProcessed = [sessionTag, ...processed].slice(0, 10).join(',');
-    await stripe().customers.update(customerId, {
-      metadata: {
-        ...md,
-        [KEY.plan]: plan,
-        [KEY.periodStart]: String(periodStartMs),
-        [KEY.credits]: String(seededCredits),
-        supabase_user_id: session.user.id,
-        [KEY.videosUsedThisPeriod]: '',
-        [KEY.trialUsed]: '',
-        [KEY.processedSessions]: nextProcessed,
-        pending_supabase_link: '',
-      },
-    });
 
-    // Authoritative link in our profiles table.
-    await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
-
-    // Ticket is spent — clear the cookie so it can't be replayed.
-    clearClaimCookie(res);
-
+    const sub = checkoutSession.subscription;
     const value = PLANS[plan].amountCents / 100;
     // Match /api/checkout/confirm.js: a trialing yearly sub fires
     // StartTrial (no charge yet); the real Purchase fires from the

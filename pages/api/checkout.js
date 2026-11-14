@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { parse as parseCookies } from 'cookie';
 import {
   stripe,
@@ -10,6 +11,14 @@ import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { linkStripeCustomerToProfile } from '../../lib/entitlement';
+import { CLAIM_NONCE_COOKIE, hashClaimTicket } from '../../lib/grants';
+
+// Adds a Set-Cookie header without dropping one already set on `res`.
+function appendCookie(res, cookie) {
+  const prev = res.getHeader?.('Set-Cookie');
+  const list = prev ? (Array.isArray(prev) ? prev : [String(prev)]) : [];
+  res.setHeader('Set-Cookie', [...list, cookie]);
+}
 
 /*
  * Find an existing Stripe customer for this Supabase user. Returns
@@ -208,6 +217,8 @@ export default async function handler(req, res) {
         cancel_url: `${origin}/dashboard?paid=0`,
         allow_promotion_codes: true,
         billing_address_collection: 'auto',
+        // Ties the session to the buyer: /confirm only binds it to this user.
+        client_reference_id: session.user.id,
         metadata: { supabase_user_id: session.user.id, ...adAttr },
       });
       const value = TOPUPS[pack].amountCents / 100;
@@ -280,6 +291,21 @@ export default async function handler(req, res) {
       ? { pending_supabase_link: 'true' }
       : { supabase_user_id: session.user.id };
 
+    // Pay-first ticket flow: the claim ticket is a random nonce kept in
+    // this browser (httpOnly cookie); only its hash rides on the session.
+    // /api/checkout/claim-ticket binds the session only for the browser
+    // holding the nonce, so the session id in the success URL is not
+    // enough on its own. SameSite=Lax so it survives Stripe's redirect.
+    let claimTicket = null;
+    if (isTicketFlow) {
+      const nonce = randomBytes(24).toString('base64url');
+      claimTicket = hashClaimTicket(nonce);
+      appendCookie(
+        res,
+        `${CLAIM_NONCE_COOKIE}=${nonce}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
+      );
+    }
+
     // Subscription flow: charge the plan price immediately. No trial,
     // no deposit — just a clean recurring sub. Monthly $5/mo, yearly
     // $29/yr. Stripe Checkout displays the renewal terms natively.
@@ -325,10 +351,11 @@ export default async function handler(req, res) {
       cancel_url: `${origin}${isAnon ? '/' : '/dashboard?paid=0'}`,
       allow_promotion_codes: true,
       billing_address_collection: 'auto',
+      ...(isAnon ? {} : { client_reference_id: session.user.id }),
       subscription_data: {
         metadata: subMetadata,
       },
-      metadata: { ...subMetadata, ...adAttr },
+      metadata: { ...subMetadata, ...adAttr, ...(claimTicket ? { claim_ticket: claimTicket } : {}) },
     });
 
     // Pixel value: actual cents charged today.

@@ -1,22 +1,24 @@
 import { stripe, planFromPrice, PLANS, CAPS } from '../../../lib/stripe';
-import { linkStripeCustomerToProfile } from '../../../lib/entitlement';
+import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../../lib/entitlement';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
 import { sendCapiEvent } from '../../../lib/meta';
-import { KEY, nsEventId } from '../../../lib/metaKeys';
+import { nsEventId } from '../../../lib/metaKeys';
+import { checkSessionOwner, grantForCheckoutSession, CLAIM_NONCE_COOKIE } from '../../../lib/grants';
 
 /*
  * Claim a Stripe Checkout Session that was created anonymously
  * (pay-first flow) and bind it to the just-signed-up Supabase user.
  *
  * Requires the caller to be signed in (the brand-new user from the
- * post-payment signup). Verifies the email on the Stripe session
- * matches the signed-in user's email — this is the security gate
+ * post-payment signup). The caller must own the session
+ * (lib/grants.js checkSessionOwner): in this flow that is normally the
+ * verified email matching the email Stripe collected. This is the gate
  * that prevents one user from claiming another user's payment.
  *
  * Side effects on success:
- *   - Updates the Stripe customer's metadata with supabase_user_id
- *   - Seeds credits per plan (same as /api/checkout/confirm)
- *   - Links profiles.stripe_customer_id <-> the new user
+ *   - Links profiles.stripe_customer_id <-> the new user (409 when the
+ *     customer already belongs to someone else)
+ *   - Grants through grantForCheckoutSession (once per session)
  *   - Fires Purchase CAPI event with deduplication id
  */
 export default async function handler(req, res) {
@@ -60,11 +62,12 @@ export default async function handler(req, res) {
         ? checkoutSession.customer?.email
         : null);
 
-    // Security: the signed-in user's email MUST match the email Stripe
-    // collected. Otherwise anyone who gets a session_id could claim
-    // someone else's subscription.
-    const userEmail = (session.user.email || '').toLowerCase();
-    if (!customerEmail || customerEmail.toLowerCase() !== userEmail) {
+    // Security: the caller must own this session (normally: the signed-in
+    // user's verified email matches the email Stripe collected).
+    const owner = checkSessionOwner(checkoutSession, session.user, {
+      claimNonce: req.cookies?.[CLAIM_NONCE_COOKIE],
+    });
+    if (!owner.ok) {
       return res.status(403).json({
         error: 'Email mismatch. Sign in with the same email you used at checkout.',
       });
@@ -76,21 +79,24 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Session is not a subscription.' });
     }
 
-    // Seed plan + credits on the Stripe customer's metadata. Same
-    // shape as /api/checkout/confirm so the entitlement reader can
-    // pick it up unchanged.
-    const sub = checkoutSession.subscription;
-    const periodStartMs =
-      ((sub && sub.current_period_start) || Math.floor(Date.now() / 1000)) * 1000;
-    const customer = await stripe().customers.retrieve(customerId);
-    const md = customer && !customer.deleted ? customer.metadata || {} : {};
-    const sessionTag = checkoutSession.id.replace(/^cs_(test_|live_)/, '').slice(-32);
-    const processed = (md[KEY.processedSessions] || '').split(',').filter(Boolean);
-    if (processed.includes(sessionTag)) {
-      // Already claimed via /confirm or a prior /claim — bind the
-      // profile (cheap, idempotent) and return success without
-      // re-seeding credits.
+    // Authoritative link in our profiles table.
+    try {
       await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
+    } catch (linkErr) {
+      if (linkErr instanceof CustomerLinkedElsewhereError) {
+        return res.status(409).json({ error: linkErr.message });
+      }
+      throw linkErr;
+    }
+
+    // Seeds plan + credits (legacy) or leaves the grant to the invoice
+    // (billing_v2). Already claimed via /confirm or a prior /claim:
+    // return success without re-seeding.
+    const grant = await grantForCheckoutSession(checkoutSession, {
+      userId: session.user.id,
+      clearPendingLink: true,
+    });
+    if (!grant.granted && grant.skipped !== 'granted_per_invoice') {
       return res.status(200).json({
         ok: true,
         alreadyProcessed: true,
@@ -98,32 +104,8 @@ export default async function handler(req, res) {
         videoCap: CAPS[plan],
       });
     }
-    const existingCredits = parseInt(md[KEY.credits] || '0', 10) || 0;
-    // See /api/checkout/confirm.js for the rationale: trialing subs
-    // only get the 2-credit trial pool until current_period_start
-    // jumps on conversion to active.
-    const isTrialing = sub && sub.status === 'trialing';
-    const seededCredits = isTrialing
-      ? existingCredits
-      : Math.max(existingCredits, CAPS[plan]);
-    const nextProcessed = [sessionTag, ...processed].slice(0, 10).join(',');
-    await stripe().customers.update(customerId, {
-      metadata: {
-        ...md,
-        [KEY.plan]: plan,
-        [KEY.periodStart]: String(periodStartMs),
-        [KEY.credits]: String(seededCredits),
-        supabase_user_id: session.user.id,
-        [KEY.videosUsedThisPeriod]: '',
-        [KEY.trialUsed]: '',
-        [KEY.processedSessions]: nextProcessed,
-        pending_supabase_link: '',
-      },
-    });
 
-    // Authoritative link in our profiles table.
-    await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
-
+    const sub = checkoutSession.subscription;
     const value = PLANS[plan].amountCents / 100;
     // Match /api/checkout/confirm.js: a trialing yearly sub fires
     // StartTrial (no charge yet); the real Purchase fires from the
