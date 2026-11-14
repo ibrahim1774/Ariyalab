@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { put } from '@vercel/blob';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
+import { getUserFromRequest } from '../../lib/supabaseServer';
 
 export const config = {
   api: {
@@ -50,6 +51,9 @@ export default async function handler(req, res) {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  const session = await getUserFromRequest(req, res);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
   const { videoUrl } = req.body || {};
   if (!isHttpUrl(videoUrl)) {

@@ -204,8 +204,9 @@ export default function LocalBusinessPage() {
     setImageBusy('upload');
     try {
       const compressed = await maybeCompressImage(file);
-      // Homepage keeps the upload-time NSFW/minor pre-screen ON — this is
-      // the highest-traffic surface. Default screenMode screens images.
+      // Signed-in uploads get the upload-time NSFW/minor pre-screen
+      // (default screenMode). Signed-out uploads skip it (it's signed-in
+      // only); generation routes still screen before spending.
       const url = await uploadTempFile(compressed, 'auto', { anonymous: !authUser });
       setImageUrl(url);
       // If this upload is a "New scene" image, use it as the start

@@ -48,7 +48,9 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Entitlement check failed: ${err.message}` });
   }
 
-  const { firstFrameUrl, referenceImageUrl, sourceVideoUrl, swapMode } = req.body || {};
+  const { firstFrameUrl, referenceImageUrl, sourceVideoUrl, swapMode, mode: motionModeRaw } = req.body || {};
+  // Motion quality for the later /api/swap; bound into the swap token.
+  const motionMode = motionModeRaw === 'pro' ? 'pro' : 'std';
   if (!isHttpUrl(firstFrameUrl) || !isHttpUrl(referenceImageUrl) || !isHttpUrl(sourceVideoUrl)) {
     return res.status(400).json({
       error: 'firstFrameUrl, referenceImageUrl and sourceVideoUrl are required (http/https URLs).',
@@ -109,6 +111,7 @@ export default async function handler(req, res) {
         userId: session.user.id,
         videoUrl: sourceVideoUrl,
         framePredictionId: prediction.id,
+        mode: motionMode,
       }),
     });
   } catch (err) {

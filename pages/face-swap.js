@@ -222,6 +222,7 @@ export default function Home() {
           referenceImageUrl,
           sourceVideoUrl,
           swapMode,
+          mode, // std/pro motion quality, locked into the swap token
         }),
       });
       const rawText = await res.text();
@@ -280,7 +281,7 @@ export default function Home() {
     } finally {
       setSubmitting(false);
     }
-  }, [videoFile, faceFile, swapMode, fetchEntitlement]);
+  }, [videoFile, faceFile, swapMode, mode, fetchEntitlement]);
 
   // Stage 2: kick off the motion-transfer model using the approved frame + source video.
   const proceedWithSwap = useCallback(async () => {
@@ -305,9 +306,9 @@ export default function Home() {
       const data = await res.json().catch(() => ({}));
       log(res.ok ? 'info' : 'warn', 'swap response', { httpStatus: res.status, body: data });
 
-      if (res.status === 402 && data.code === 'SWAP_TOKEN_INVALID') {
-        // The paid preview expired (30 min) or doesn't match; the user
-        // needs a fresh preview, which charges again.
+      if (res.status === 402 && typeof data.code === 'string' && data.code.startsWith('SWAP_')) {
+        // The paid preview expired (30 min), doesn't match, or used all
+        // its retries; the user needs a fresh preview, which charges again.
         throw new Error(data.message || 'This preview expired. Start a new swap.');
       }
       if (res.status === 402) {

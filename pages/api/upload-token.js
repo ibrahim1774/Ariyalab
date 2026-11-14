@@ -13,16 +13,18 @@ import { getUserFromRequest } from '../../lib/supabaseServer';
  * Token requests need a session, with one exception: the pre-paywall
  * pages (/, /ugc-2, /ugc-3, /local-business, /real-estate) let
  * signed-out visitors upload a photo before sign-up. They send
- * clientPayload {"surface":"anon-image"} and get a small image-only
- * token. Upload-completed callbacks come from Vercel's servers (no
- * cookie) and are verified by handleUpload's own signature check.
+ * clientPayload {"surface":"anon-image"} and get a 5-minute, 25 MB
+ * token for JPEG/PNG/WebP/HEIC only. Upload-completed callbacks come
+ * from Vercel's servers (no cookie) and are verified by handleUpload's
+ * own signature check.
  */
 
 const ANON_SURFACE = 'anon-image';
 const ANON_LIMITS = {
-  allowedContentTypes: ['image/*'],
+  allowedContentTypes: ['image/jpeg', 'image/png', 'image/webp', 'image/heic'],
   maximumSizeInBytes: 25 * 1024 * 1024,
 };
+const ANON_TOKEN_TTL_MS = 5 * 60 * 1000;
 const SIGNED_IN_LIMITS = {
   allowedContentTypes: ['video/*', 'image/*'],
   maximumSizeInBytes: 1024 * 1024 * 1024,
@@ -62,6 +64,7 @@ export default async function handler(req, res) {
       body: req.body,
       onBeforeGenerateToken: async () => ({
         ...(limits || ANON_LIMITS),
+        ...(limits === SIGNED_IN_LIMITS ? {} : { validUntil: Date.now() + ANON_TOKEN_TTL_MS }),
         addRandomSuffix: true,
       }),
       onUploadCompleted: async () => {

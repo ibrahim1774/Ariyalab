@@ -38,6 +38,15 @@ vi.mock('../../lib/moderation', async (importOriginal) => ({
   ...(await import('../helpers/apiMock')).moderationMocks,
 }));
 
+const anthropicCreate = vi.fn();
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class Anthropic {
+    constructor() {
+      this.messages = { create: anthropicCreate };
+    }
+  },
+}));
+
 const handleUpload = vi.fn(async ({ body, onBeforeGenerateToken }) => {
   if (body.type === 'blob.generate-client-token') {
     const { pathname, clientPayload, multipart } = body.payload;
@@ -57,6 +66,8 @@ const status = (await import('../../pages/api/status')).default;
 const ugcImage = (await import('../../pages/api/ugc-image')).default;
 const ugcAnimate = (await import('../../pages/api/ugc-animate')).default;
 const imageToVideo = (await import('../../pages/api/image-to-video')).default;
+const planEdits = (await import('../../pages/api/video/plan-edits')).default;
+const extractFrame = (await import('../../pages/api/extract-frame')).default;
 
 const VIDEO_URL = 'https://blob.example.test/source.mp4';
 const FRAME_URL = 'https://blob.example.test/frame0.jpg';
@@ -75,9 +86,30 @@ function frameSucceeds(url = HYBRID_URL) {
   );
 }
 
-async function runCharacterFrame() {
+async function runCharacterFrame(extra = {}) {
   return call(characterFrame, {
-    body: { firstFrameUrl: FRAME_URL, referenceImageUrl: FACE_URL, sourceVideoUrl: VIDEO_URL, swapMode: 'face' },
+    body: { firstFrameUrl: FRAME_URL, referenceImageUrl: FACE_URL, sourceVideoUrl: VIDEO_URL, swapMode: 'face', ...extra },
+  });
+}
+
+// Run outside the test runner's key fallback with no CRON_SECRET.
+function unsetSigningSecret() {
+  delete process.env.CRON_SECRET;
+  process.env.NODE_ENV = 'production';
+  process.env.STORY_MOCK = '1'; // mock mode alone must not unlock the fallback key
+}
+
+// Frame succeeds; motion jobs get ids swap-pred-1, -2, ... with statuses
+// taken from `swapStatuses` (default 'processing').
+function stageSwaps(swapStatuses = {}) {
+  let n = 0;
+  replicateMocks.createMotionTransferPrediction.mockImplementation(async () => ({
+    id: `swap-pred-${++n}`,
+    status: 'starting',
+  }));
+  replicateMocks.getPrediction.mockImplementation(async (id) => {
+    if (id === 'frame-pred-1') return { status: 'succeeded', output: HYBRID_URL };
+    return { status: swapStatuses[id] || 'processing' };
   });
 }
 
@@ -88,7 +120,9 @@ beforeEach(() => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
 });
+const ORIGINAL_NODE_ENV = process.env.NODE_ENV;
 afterEach(() => {
+  process.env.NODE_ENV = ORIGINAL_NODE_ENV;
   vi.restoreAllMocks();
   vi.useRealTimers();
   setMockEnv();
@@ -109,9 +143,14 @@ describe('lib/jobToken', () => {
     expect(verifySwapToken(signed, { userId: 'user-a', videoUrl: VIDEO_URL })).toBeNull();
   });
 
-  it('refuses to sign without CRON_SECRET outside STORY_MOCK', () => {
+  it('falls back to a test key only when NODE_ENV is test', () => {
     delete process.env.CRON_SECRET;
-    process.env.STORY_MOCK = '0';
+    expect(process.env.NODE_ENV).toBe('test');
+    expect(verifyJobId('user-a', signJobId('user-a', 'p1'))).toBe('p1');
+  });
+
+  it('refuses to sign without CRON_SECRET outside tests, even with STORY_MOCK=1', () => {
+    unsetSigningSecret();
     expect(() => signJobId('user-a', 'p1')).toThrow();
     expect(() => signSwapToken({ userId: 'user-a', videoUrl: VIDEO_URL, framePredictionId: 'p1' })).toThrow();
   });
@@ -134,7 +173,7 @@ describe('/api/swap', () => {
     expect(replicateMocks.createCharacterFramePrediction).not.toHaveBeenCalled();
   });
 
-  it('charges FACE_SWAP_COST once across character-frame, swap and a retry', async () => {
+  it('charges FACE_SWAP_COST once across character-frame, swap and a failed-job retry', async () => {
     signIn(USER_A);
     setCredits(500);
     const frame = await runCharacterFrame();
@@ -142,15 +181,78 @@ describe('/api/swap', () => {
     expect(typeof frame.body.swapToken).toBe('string');
     expect(getCredits()).toBe(500 - FACE_SWAP_COST);
 
-    frameSucceeds();
+    stageSwaps({ 'swap-pred-1': 'failed' });
     const body = { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: frame.body.swapToken };
     const first = await call(swap, { body });
     const retry = await call(swap, { body });
     expect(first.statusCode).toBe(200);
     expect(retry.statusCode).toBe(200);
+    expect(verifyJobId(USER_A.id, first.body.predictionId)).toBe('swap-pred-1');
+    expect(verifyJobId(USER_A.id, retry.body.predictionId)).toBe('swap-pred-2');
     expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledTimes(2);
     expect(getCredits()).toBe(500 - FACE_SWAP_COST);
-    expect(verifyJobId(USER_A.id, first.body.predictionId)).toBe('swap-pred-1');
+  });
+
+  it('a second call while the first job runs returns the same id and creates nothing', async () => {
+    signIn(USER_A);
+    setCredits(500);
+    const frame = await runCharacterFrame();
+    stageSwaps();
+    const body = { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: frame.body.swapToken };
+    const first = await call(swap, { body });
+    const again = await call(swap, { body });
+    expect(again.statusCode).toBe(200);
+    expect(again.body.predictionId).toBe(first.body.predictionId);
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledTimes(1);
+  });
+
+  it('a call after the job succeeded returns that job and creates nothing', async () => {
+    signIn(USER_A);
+    setCredits(500);
+    const frame = await runCharacterFrame();
+    stageSwaps({ 'swap-pred-1': 'succeeded' });
+    const body = { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: frame.body.swapToken };
+    await call(swap, { body });
+    const again = await call(swap, { body });
+    expect(verifyJobId(USER_A.id, again.body.predictionId)).toBe('swap-pred-1');
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a fourth job for one frame even after three failures', async () => {
+    signIn(USER_A);
+    setCredits(500);
+    const frame = await runCharacterFrame();
+    stageSwaps({ 'swap-pred-1': 'failed', 'swap-pred-2': 'canceled', 'swap-pred-3': 'failed' });
+    const body = { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: frame.body.swapToken };
+    for (let i = 0; i < 3; i += 1) expect((await call(swap, { body })).statusCode).toBe(200);
+    const fourth = await call(swap, { body });
+    expect(fourth.statusCode).toBe(402);
+    expect(fourth.body.code).toBe('SWAP_RETRY_LIMIT');
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledTimes(3);
+  });
+
+  it("runs the token's mode, not the body's", async () => {
+    signIn(USER_A);
+    setCredits(500);
+    const frame = await runCharacterFrame({ mode: 'std' });
+    stageSwaps();
+    await call(swap, {
+      body: { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: frame.body.swapToken, mode: 'pro' },
+    });
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'std' })
+    );
+  });
+
+  it('a pro token runs pro', async () => {
+    signIn(USER_A);
+    setCredits(500);
+    const frame = await runCharacterFrame({ mode: 'pro' });
+    stageSwaps();
+    await call(swap, { body: { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: frame.body.swapToken } });
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'pro' })
+    );
   });
 
   it.each([
@@ -197,10 +299,9 @@ describe('/api/swap', () => {
     expect(replicateMocks.createMotionTransferPrediction).not.toHaveBeenCalled();
   });
 
-  it('refuses when CRON_SECRET is unset outside STORY_MOCK', async () => {
+  it('refuses when CRON_SECRET is unset outside tests', async () => {
     signIn(USER_A);
-    delete process.env.CRON_SECRET;
-    process.env.STORY_MOCK = '0';
+    unsetSigningSecret();
     const res = await call(swap, { body: { imageUrl: HYBRID_URL, videoUrl: VIDEO_URL, swapToken: 'x.y' } });
     expect(res.statusCode).toBe(503);
     expect(replicateMocks.createMotionTransferPrediction).not.toHaveBeenCalled();
@@ -222,12 +323,16 @@ describe('/api/upload-token', () => {
     expect(handleUpload).not.toHaveBeenCalled();
   });
 
-  it("without a session but surface 'anon-image' gets a 25 MB image-only token", async () => {
+  it("without a session but surface 'anon-image' gets a 5-minute, 25 MB photo-only token", async () => {
     signOut();
+    const before = Date.now();
     const res = await call(uploadToken, tokenRequest(JSON.stringify({ surface: 'anon-image' })));
     expect(res.statusCode).toBe(200);
     expect(res.body.options.maximumSizeInBytes).toBe(25 * 1024 * 1024);
-    expect(res.body.options.allowedContentTypes).toEqual(['image/*']);
+    expect(res.body.options.allowedContentTypes).toEqual(['image/jpeg', 'image/png', 'image/webp', 'image/heic']);
+    const ttl = res.body.options.validUntil - before;
+    expect(ttl).toBeGreaterThan(4 * 60 * 1000);
+    expect(ttl).toBeLessThanOrEqual(5 * 60 * 1000 + 1000);
   });
 
   it('ignores a malformed client payload (401 when signed out)', async () => {
@@ -242,6 +347,7 @@ describe('/api/upload-token', () => {
     expect(res.statusCode).toBe(200);
     expect(res.body.options.maximumSizeInBytes).toBe(1024 * 1024 * 1024);
     expect(res.body.options.allowedContentTypes).toEqual(['video/*', 'image/*']);
+    expect(res.body.options.validUntil).toBeUndefined();
   });
 
   it('passes Vercel upload-completed callbacks (no session cookie) to handleUpload', async () => {
@@ -348,6 +454,92 @@ describe('prediction-creating routes return ids signed for the caller', () => {
     signIn(USER_A);
     setCredits(500);
     const res = await runCharacterFrame();
+    expect(res.statusCode).toBe(200);
     expect(verifyJobId(USER_A.id, res.body.predictionId)).toBe('frame-pred-1');
+  });
+});
+
+describe('creating routes refuse before charging when CRON_SECRET is missing', () => {
+  it.each([
+    ['character-frame', () => runCharacterFrame()],
+    ['ugc-image', () => call(ugcImage, { body: { prompt: 'a cat on a sofa' } })],
+    ['ugc-animate', () => call(ugcAnimate, { body: { script: 'a cat waves', duration: 5 } })],
+    ['image-to-video', () => call(imageToVideo, { body: { imageUrl: FACE_URL, prompt: 'smile', duration: 5 } })],
+  ])('%s returns 503 and reserves nothing', async (_name, run) => {
+    signIn(USER_A);
+    setCredits(500);
+    unsetSigningSecret();
+    const res = await run();
+    expect(res.statusCode).toBe(503);
+    expect(getCredits()).toBe(500);
+    expect(replicateMocks.createCharacterFramePrediction).not.toHaveBeenCalled();
+    expect(replicateMocks.createImagePrediction).not.toHaveBeenCalled();
+    expect(seedanceMocks.createSeedancePrediction).not.toHaveBeenCalled();
+    expect(kieMocks.createKlingSinglePrediction).not.toHaveBeenCalled();
+  });
+});
+
+describe('/api/video/plan-edits', () => {
+  const plan = {
+    sourceUrl: 'https://example.com/v.mp4',
+    duration: 10,
+    width: 1080,
+    height: 1920,
+    operations: [],
+  };
+  const edit = (body) => call(planEdits, { body: { currentPlan: plan, userMessage: 'trim the start', ...body } });
+
+  beforeEach(() => {
+    anthropicCreate.mockReset();
+    anthropicCreate.mockResolvedValue({
+      content: [{ type: 'text', text: JSON.stringify({ plan, assistantMessage: 'Done.' }) }],
+    });
+  });
+
+  it('a signed-in account with no credits gets 402 and no model call', async () => {
+    signIn(USER_A);
+    setCredits(0);
+    const res = await edit();
+    expect(res.statusCode).toBe(402);
+    expect(anthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it('an account with credits gets a plan', async () => {
+    signIn(USER_A);
+    setCredits(5);
+    const res = await edit();
+    expect(res.statusCode).toBe(200);
+    expect(anthropicCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['more than 10 history messages', { chatHistory: Array.from({ length: 11 }, () => ({ role: 'user', content: 'hi' })) }],
+    ['a history message over 2,000 characters', { chatHistory: [{ role: 'user', content: 'x'.repeat(2001) }] }],
+    ['a plan over 20,000 characters of JSON', { currentPlan: { ...plan, padding: 'x'.repeat(20001) } }],
+  ])('rejects %s with 422 before any model call', async (_label, body) => {
+    signIn(USER_A);
+    setCredits(5);
+    const res = await edit(body);
+    expect(res.statusCode).toBe(422);
+    expect(anthropicCreate).not.toHaveBeenCalled();
+  });
+
+  it('accepts 10 history messages of exactly 2,000 characters', async () => {
+    signIn(USER_A);
+    setCredits(5);
+    const chatHistory = Array.from({ length: 10 }, (_, i) => ({
+      role: i % 2 ? 'assistant' : 'user',
+      content: 'x'.repeat(2000),
+    }));
+    const res = await edit({ chatHistory });
+    expect(res.statusCode).toBe(200);
+  });
+});
+
+describe('/api/extract-frame', () => {
+  it('without a session returns 401', async () => {
+    signOut();
+    const res = await call(extractFrame, { body: { videoUrl: VIDEO_URL } });
+    expect(res.statusCode).toBe(401);
   });
 });

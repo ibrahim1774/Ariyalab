@@ -1,16 +1,53 @@
 import Anthropic from '@anthropic-ai/sdk';
 
 import { getUserFromRequest } from '../../../lib/supabaseServer';
+import { getEntitlement } from '../../../lib/entitlement';
+import { KEY } from '../../../lib/metaKeys';
 import { validateEditPlan, SCHEMA_DESCRIPTION, OPERATION_TYPES } from '../../../lib/editPlan';
 
 /*
- * Chat planner. Free — does NOT charge credits.
+ * Chat planner. Does NOT charge credits, but it makes a paid Anthropic
+ * call, so it is limited to admins and accounts holding credits, and
+ * the input size is capped.
  *
  * Body: { currentPlan, userMessage, chatHistory? }
  * Returns: { plan, assistantMessage, clarifyingQuestion? }
  *   - plan: validated edit plan (unchanged on clarifying questions)
  *   - assistantMessage: short chat reply for the UI
  */
+
+const MAX_HISTORY_MESSAGES = 10;
+const MAX_HISTORY_MESSAGE_CHARS = 2000;
+const MAX_PLAN_JSON_CHARS = 20000;
+
+function hasCredits(entitlement) {
+  if (entitlement?.isAdmin) return true;
+  // Active plans report creditsRemaining; trialing ones report KEY.credits.
+  const credits = Number(entitlement?.creditsRemaining ?? entitlement?.[KEY.credits] ?? 0);
+  return credits > 0;
+}
+
+function oversizeError({ currentPlan, userMessage, chatHistory }) {
+  if (JSON.stringify(currentPlan).length > MAX_PLAN_JSON_CHARS) {
+    return `currentPlan is too large (max ${MAX_PLAN_JSON_CHARS} characters).`;
+  }
+  if (userMessage.length > MAX_HISTORY_MESSAGE_CHARS) {
+    return `userMessage is too long (max ${MAX_HISTORY_MESSAGE_CHARS} characters).`;
+  }
+  if (chatHistory === undefined || chatHistory === null) return null;
+  if (!Array.isArray(chatHistory)) return 'chatHistory must be an array.';
+  if (chatHistory.length > MAX_HISTORY_MESSAGES) {
+    return `chatHistory is too long (max ${MAX_HISTORY_MESSAGES} messages).`;
+  }
+  for (const m of chatHistory) {
+    const content = m?.content;
+    if (content !== undefined && typeof content !== 'string') return 'chatHistory content must be text.';
+    if (typeof content === 'string' && content.length > MAX_HISTORY_MESSAGE_CHARS) {
+      return `chatHistory messages are limited to ${MAX_HISTORY_MESSAGE_CHARS} characters.`;
+    }
+  }
+  return null;
+}
 
 const SYSTEM_PROMPT = `You are a video editing assistant inside a web app.
 
@@ -41,17 +78,33 @@ export default async function handler(req, res) {
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
-  const apiKey = process.env.ANTHROPIC_API_KEY;
-  if (!apiKey) {
-    return res.status(500).json({ error: 'Editor not configured (missing ANTHROPIC_API_KEY).' });
-  }
-
   const { currentPlan, userMessage, chatHistory } = req.body || {};
   if (!currentPlan || typeof currentPlan !== 'object') {
     return res.status(400).json({ error: 'currentPlan required' });
   }
   if (typeof userMessage !== 'string' || !userMessage.trim()) {
     return res.status(400).json({ error: 'userMessage required' });
+  }
+  const tooBig = oversizeError({ currentPlan, userMessage, chatHistory });
+  if (tooBig) return res.status(422).json({ error: tooBig });
+
+  let entitlement;
+  try {
+    entitlement = await getEntitlement({
+      supabase: session.supabase,
+      userId: session.user.id,
+      email: session.user.email,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: `Entitlement check failed: ${err.message}` });
+  }
+  if (!hasCredits(entitlement)) {
+    return res.status(402).json({ error: 'paywall', tier: entitlement?.tier || 'none' });
+  }
+
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Editor not configured (missing ANTHROPIC_API_KEY).' });
   }
 
   // Validate the incoming plan first — protects against a corrupted
@@ -67,7 +120,7 @@ export default async function handler(req, res) {
   // turn. We always include the current plan in the user message so
   // Claude has the latest state even if chatHistory was truncated.
   const history = Array.isArray(chatHistory)
-    ? chatHistory.slice(-10).filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
+    ? chatHistory.slice(-MAX_HISTORY_MESSAGES).filter((m) => m && (m.role === 'user' || m.role === 'assistant') && m.content)
     : [];
 
   const messages = [

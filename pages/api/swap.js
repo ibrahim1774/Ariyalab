@@ -5,6 +5,11 @@ import { createMotionTransferPrediction, getPrediction, normalizeStatus } from '
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
 import { signingConfigured, verifySwapToken, signJobId } from '../../lib/jobToken';
+import { getEntitlement, getSwapUse, recordSwapUse } from '../../lib/entitlement';
+
+// One character-frame charge covers at most this many motion-transfer
+// jobs, and a new one only starts after the previous one failed.
+const MAX_SWAPS_PER_FRAME = 3;
 
 function isHttpUrl(value) {
   if (typeof value !== 'string') return false;
@@ -16,14 +21,26 @@ function isHttpUrl(value) {
   }
 }
 
+// Returns the verified token ({ framePredictionId, mode }) or null.
 async function verifySwapCharge({ swapToken, userId, videoUrl, imageUrl }) {
   const token = verifySwapToken(swapToken, { userId, videoUrl });
-  if (!token) return false;
+  if (!token) return null;
   try {
     const frame = normalizeStatus(await getPrediction(token.framePredictionId));
-    return frame.status === 'complete' && frame.resultUrl === imageUrl;
+    return frame.status === 'complete' && frame.resultUrl === imageUrl ? token : null;
   } catch (err) {
     console.warn('[swap] frame lookup failed', err.message);
+    return null;
+  }
+}
+
+// Has the previous swap for this frame ended in failure? Any doubt
+// (still running, succeeded, lookup failed) counts as "no".
+async function previousSwapFailed(swapId) {
+  try {
+    return normalizeStatus(await getPrediction(swapId)).status === 'error';
+  } catch (err) {
+    console.warn('[swap] previous swap lookup failed', err.message);
     return false;
   }
 }
@@ -50,7 +67,6 @@ export default async function handler(req, res) {
     const {
       imageUrl,
       videoUrl,
-      mode,
       videoFileName,
       faceFileName,
       swapToken,
@@ -76,6 +92,38 @@ export default async function handler(req, res) {
       });
     }
 
+    // Replay guard. The token is reusable, so record each motion job
+    // started for this frame. While the last one is running or done,
+    // hand back its id instead of starting (and paying for) another.
+    let entitlement;
+    let use;
+    try {
+      entitlement = await getEntitlement({
+        supabase: session.supabase,
+        userId: session.user.id,
+        email: session.user.email,
+      });
+      use = await getSwapUse(entitlement, paid.framePredictionId);
+    } catch (err) {
+      console.error('[swap] use record lookup failed', err);
+      return res.status(503).json({ error: 'Face swap is temporarily unavailable.' });
+    }
+    if (use && !(await previousSwapFailed(use.swapId))) {
+      return res.status(200).json({
+        jobId,
+        predictionId: signJobId(session.user.id, use.swapId),
+        status: 'processing',
+        reused: true,
+      });
+    }
+    if (use && use.count >= MAX_SWAPS_PER_FRAME) {
+      return res.status(402).json({
+        error: 'paywall',
+        code: 'SWAP_RETRY_LIMIT',
+        message: 'This preview has used all its retries. Start a new swap.',
+      });
+    }
+
     // Moderate the face image. videoUrl is a motion clip — we trust
     // those (face-swap doesn't surface the source video to the output).
     try {
@@ -86,7 +134,8 @@ export default async function handler(req, res) {
       return res.status(500).json({ error: 'Moderation check failed.' });
     }
 
-    const safeMode = mode === 'pro' ? 'pro' : 'std';
+    // Mode comes from the token (chosen before the charge), never the body.
+    const safeMode = paid.mode;
 
     createJob({
       jobId,
@@ -111,6 +160,13 @@ export default async function handler(req, res) {
       characterOrientation: 'video',
     });
     const normalized = normalizeStatus(prediction);
+
+    try {
+      await recordSwapUse(entitlement, paid.framePredictionId, prediction.id, (use?.count || 0) + 1);
+    } catch (err) {
+      // The job is already running; don't fail the response over it.
+      console.error('[swap] could not record swap use', err);
+    }
 
     console.log('[swap] prediction created', {
       jobId,
