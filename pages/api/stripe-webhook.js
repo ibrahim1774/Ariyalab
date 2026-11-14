@@ -210,6 +210,7 @@ async function handleInvoicePaymentSucceeded(invoice, req) {
   }
 
   const eventId = nsEventId(`pur-inv-${invoice.id}`);
+  // Reporting only: a Meta failure must not 500 an invoice already granted.
   await sendCapiEvent({
     eventName: 'Purchase',
     eventId,
@@ -224,7 +225,7 @@ async function handleInvoicePaymentSucceeded(invoice, req) {
       supabase_user_id: supabaseUserId,
       invoice_id: invoice.id,
     },
-  });
+  }).catch((err) => console.warn('[stripe-webhook] CAPI failed', err.message));
 }
 
 /*

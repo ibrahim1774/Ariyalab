@@ -12,6 +12,7 @@ const S = vi.hoisted(() => {
     charges: new Map(),
     failCustomerUpdates: 0,
     failSessionRetrieves: 0,
+    creditWrites: new Map(), // customer id -> number of customers.update calls
   };
   const tick = () => new Promise((r) => setTimeout(r, 1));
   const clone = (o) => (o === undefined ? o : structuredClone(o));
@@ -30,6 +31,8 @@ const S = vi.hoisted(() => {
           throw new Error('stripe unavailable');
         }
         const c = state.customers.get(id);
+        // In these flows only a grant writes customer metadata.
+        state.creditWrites.set(id, (state.creditWrites.get(id) || 0) + 1);
         c.metadata = { ...metadata };
         return clone(c);
       },
@@ -239,6 +242,7 @@ async function callRoute(route, { user, query = {}, cookies = {} }) {
 }
 const confirmAs = (user, sessionId, cookies) => callRoute(confirm, { user, query: { session_id: sessionId }, cookies });
 
+const creditWrites = (customerId) => S.state.creditWrites.get(customerId) || 0;
 const legacyCredits = (customerId) => parseInt(S.state.customers.get(customerId).metadata[KEY.credits] || '0', 10);
 const recorded = async (id) => (await db.query('select 1 from public.stripe_events where id = $1', [id])).rows.length > 0;
 const link = (userId, customerId) =>
@@ -271,6 +275,8 @@ describe('billing_v2 off (legacy metadata grants)', () => {
 
     for (const r of [...results, again, other]) expect(r.statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
+    // Two racing grants can lose an update and still end at 2,280: count the writes.
+    expect(creditWrites(customer)).toBe(1);
     expect(await recorded(event.id)).toBe(true);
     expect(await recorded(`checkout:${session.id}`)).toBe(true);
   });
@@ -285,6 +291,7 @@ describe('billing_v2 off (legacy metadata grants)', () => {
     expect(hook.statusCode).toBe(200);
     expect(conf.statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
+    expect(creditWrites(customer)).toBe(1);
   });
 
   it('a handler error returns 500 (so Stripe retries) and does not record the event', async () => {
