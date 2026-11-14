@@ -17,7 +17,10 @@ import { linkStripeCustomerToProfile } from '../../../lib/entitlement';
  *   { email }                — find Supabase user by email + Stripe
  *                              customers by email and report state.
  *   { sessionId }            — load a specific Checkout session, find
- *                              its customer, find the user.
+ *                              its customer, find the user by the email on
+ *                              the payment. Add { email } to link the
+ *                              session's customer to THAT account instead
+ *                              (a buyer who paid with another email).
  *   { dryRun: false }        — actually relink. Defaults to dryRun: true
  *                              so the first call always shows what
  *                              would change without changing anything.
@@ -30,6 +33,15 @@ import { linkStripeCustomerToProfile } from '../../../lib/entitlement';
  * link state, credits available, and what the heal action would (or
  * did) do. Idempotent — running it twice with dryRun: false on the
  * same already-linked profile is a no-op that re-reports the state.
+ *
+ * This is also the support merge: when the user's profile already points at
+ * another live customer, the link goes through linkStripeCustomerToProfile
+ * with `via: 'admin'`, the only caller allowed to move a profile while
+ * relink_mode is 'support' (lib/entitlement.js). It moves this app's credit
+ * balances off the old customer (legacy mode), copies the other metadata
+ * keys the new customer lacks, and under billing_v2 delivers the grants
+ * parked for the new customer. Refused when the old customer still has a
+ * subscription or the copy would not fit Stripe's metadata limits.
  *
  * Gated by ADMIN_EMAILS, same as grant-credits.
  */
@@ -104,7 +116,9 @@ export default async function handler(req, res) {
         return res.status(404).json({ error: 'Session has no customer attached.' });
       }
       candidateCustomerIds = [cid];
-      resolvedEmail = (cs.customer_details?.email || cs.customer_email || '').toLowerCase();
+      // An explicit `email` names the account to link (the buyer may have
+      // typed another email at Stripe); otherwise the email on the payment.
+      resolvedEmail = targetEmail || (cs.customer_details?.email || cs.customer_email || '').toLowerCase();
     }
 
     // Path B: email — find every Stripe customer that matches.

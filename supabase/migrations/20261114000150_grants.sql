@@ -1,5 +1,8 @@
 -- Stripe grant bookkeeping (lib/grants.js). Applies after
--- 20261114000100_credit_ledger.sql. Creates a new table and two functions.
+-- 20261114000100_credit_ledger.sql. Creates one table (credit_reversals),
+-- adds one column (credit_pending_grants.original_amount) and creates four
+-- functions (credit_record_reversal, credit_link_customer,
+-- credit_reverse_grant, credit_lower_pending).
 -- No shared table's schema changes; credit_link_customer writes
 -- profiles.stripe_customer_id, the same column the app already writes.
 --
@@ -59,15 +62,20 @@ $$;
 -- one-to-one. Serialized per customer and per user with transaction-scoped
 -- advisory locks (customer first, then user), so two users linking the same
 -- customer, or two customers being linked to one user, cannot both win.
+-- Replacing an existing, different link is a compare-and-swap: it needs
+-- p_allow_replace AND p_expected_old equal to the customer the profile
+-- points at now (the one the caller checked and moved state away from).
 -- Returns:
 --   'linked'            the profile now points at p_customer
 --   'linked_elsewhere'  another profile holds p_customer (nothing written)
 --   'user_has_other'    the profile points at a different customer and
 --                       p_allow_replace is false (nothing written)
+--   'conflict'          a replacement was allowed, but the profile no longer
+--                       points at p_expected_old (nothing written)
 -- Writes the same row and column lib/entitlement.js linkStripeCustomerToProfile
 -- always upserted ({ id, stripe_customer_id }); profiles' schema is unchanged.
 create function public.credit_link_customer(
-  p_user uuid, p_customer text, p_allow_replace boolean default false
+  p_user uuid, p_customer text, p_allow_replace boolean default false, p_expected_old text default null
 )
 returns text
 language plpgsql
@@ -88,8 +96,13 @@ begin
     return 'linked_elsewhere';
   end if;
   select stripe_customer_id into v_current from profiles where id = p_user;
-  if v_current is not null and v_current <> p_customer and not p_allow_replace then
-    return 'user_has_other';
+  if v_current is not null and v_current <> p_customer then
+    if not p_allow_replace then
+      return 'user_has_other';
+    end if;
+    if p_expected_old is null or v_current <> p_expected_old then
+      return 'conflict';
+    end if;
   end if;
   insert into profiles (id, stripe_customer_id) values (p_user, p_customer)
     on conflict (id) do update set stripe_customer_id = excluded.stripe_customer_id;
@@ -105,11 +118,15 @@ alter table public.credit_pending_grants add column original_amount integer
 -- Reversal of a granted purchase (refund / dispute), computed and applied in
 -- one statement under a per-source lock: target = ceil(granted * covered /
 -- total) capped at granted, minus every refund/dispute clawback already
--- recorded for this source (refs '<source>:...'). Returns the amount clawed
--- now (0 when nothing is due or p_ref was already applied).
+-- recorded for this source (refs '<source>:...') and minus p_already.
+-- p_granted is what the purchase originally granted; p_already is the part
+-- of it that never reached the ledger because a refund lowered the grant
+-- while it was parked (original - claimed). Returns the amount clawed now (0
+-- when nothing is due or p_ref was already applied).
 create function public.credit_reverse_grant(
   p_source text, p_user uuid, p_currency text, p_granted integer,
-  p_covered integer, p_total integer, p_reason text, p_ref text, p_first_bucket text
+  p_covered integer, p_total integer, p_reason text, p_ref text, p_first_bucket text,
+  p_already integer default 0
 )
 returns integer
 language plpgsql
@@ -132,7 +149,8 @@ begin
     where user_id = p_user and currency = p_currency and op = 'clawback'
       and reason in ('stripe_refund', 'stripe_dispute')
       and left(ref, length(p_source) + 1) = p_source || ':';
-  v_amount := least(p_granted, ceil(p_granted::numeric * least(p_covered, p_total) / p_total)::integer) - v_done;
+  v_amount := least(p_granted, ceil(p_granted::numeric * least(p_covered, p_total) / p_total)::integer)
+              - v_done - greatest(coalesce(p_already, 0), 0);
   if v_amount <= 0 then
     return 0;
   end if;

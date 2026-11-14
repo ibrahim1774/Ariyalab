@@ -127,6 +127,13 @@ export default async function handler(req, res) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
       }
+      // A relink for this user or their old customer is already running.
+      if (linkErr instanceof GrantInProgressError) {
+        return res.status(409).json({
+          error: 'Your payment is still being processed. Try again in a couple of minutes.',
+          retryable: true,
+        });
+      }
       throw linkErr;
     }
 

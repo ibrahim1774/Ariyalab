@@ -293,10 +293,12 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
 }
 
 // The buyer id comes from the session, written server-side by /api/checkout.
-// A refused link (409: the customer or the profile belongs elsewhere) never
-// fails the webhook: the grant already landed on the customer, or is parked
-// for support. Other failures are best-effort for top-ups (their grant has
-// already claimed) but rethrown with `rethrow` so Stripe retries.
+// A refused link (409: the customer or the profile belongs elsewhere, which
+// includes every buyer whose profile already points at another live customer
+// while relink_mode is 'support') never fails the webhook: the grant already
+// landed on the customer, or is parked for support. Other failures are
+// best-effort for top-ups (their grant has already claimed) but rethrown
+// with `rethrow` so Stripe retries.
 async function linkBuyer(userId, customerId, { rethrow = false } = {}) {
   try {
     await linkStripeCustomerToProfile(getSupabaseAdmin(), userId, customerId, { via: 'server' });

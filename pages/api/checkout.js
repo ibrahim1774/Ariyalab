@@ -351,7 +351,8 @@ export default async function handler(req, res) {
     // of this browser's newest nonces (lib/jobToken.js), so a second click,
     // another tab or a retry does not orphan an earlier session that gets
     // paid, and a cookie planted by someone else cannot make the new
-    // session's ticket one they know. /api/checkout/claim-ticket binds the
+    // session's ticket one they know. Each entry carries its issue time and
+    // stops counting after 24 hours (verifyClaimNonces drops it). /api/checkout/claim-ticket binds the
     // session only for a browser holding its nonce, so the session id in the
     // success URL is not enough on its own. SameSite=Lax so it survives
     // Stripe's redirect.
@@ -443,6 +444,9 @@ export default async function handler(req, res) {
       console.error('[checkout]', err.message, err.cause?.message);
       return res.status(503).json({ error: 'Please try again.' });
     }
-    return res.status(500).json({ error: err.message });
+    // Never send the raw error to the browser (it can name env vars or carry
+    // Stripe's message); the details go to the log.
+    console.error('[checkout] failed', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

@@ -17,6 +17,8 @@ const S = vi.hoisted(() => {
     updates: [], // customers.update calls: { id, metadata }
     failUpdatesFor: new Map(), // customer id -> failures left
     creditWrites: new Map(), // customer id -> number of customers.update calls
+    beforeUpdate: null, // async (id) => {}: lets a test hold a customers.update in flight
+    failSessionCreate: null, // error message for the next checkout.sessions.create
   };
   const tick = () => new Promise((r) => setTimeout(r, 1));
   const clone = (o) => (o === undefined ? o : structuredClone(o));
@@ -35,6 +37,7 @@ const S = vi.hoisted(() => {
       list: async ({ email }) => ({ data: [...state.customers.values()].filter((c) => c.email === email).map(clone) }),
       update: async (id, { metadata }) => {
         await tick();
+        if (state.beforeUpdate) await state.beforeUpdate(id);
         if (state.failCustomerUpdates > 0) {
           state.failCustomerUpdates -= 1;
           throw new Error('stripe unavailable');
@@ -74,6 +77,11 @@ const S = vi.hoisted(() => {
           data: [...state.sessions.values()].filter((s) => s.payment_intent === payment_intent).map(clone),
         }),
         create: async (params) => {
+          if (state.failSessionCreate) {
+            const message = state.failSessionCreate;
+            state.failSessionCreate = null;
+            throw new Error(message);
+          }
           state.created.push(params);
           const id = `cs_test_new_${state.created.length}_${Math.random().toString(36).slice(2, 10)}`;
           const s = { id, object: 'checkout.session', ...structuredClone(params), payment_status: 'unpaid', created: Math.floor(Date.now() / 1000), url: `https://checkout.stripe.test/${id}` };
@@ -84,11 +92,14 @@ const S = vi.hoisted(() => {
     },
     subscriptions: {
       retrieve: async (id) => clone(state.subs.get(id)),
-      list: async ({ customer, status }) => ({
-        data: [...state.subs.values()]
-          .filter((x) => x.customer === customer && (status === 'all' || x.status === status))
-          .map(clone),
-      }),
+      // Paginated like Stripe: `limit` per page, `starting_after`, `has_more`.
+      list: async ({ customer, status, limit = 10, starting_after: after }) => {
+        const all = [...state.subs.values()].filter(
+          (x) => x.customer === customer && (status === 'all' || x.status === status)
+        );
+        const from = after ? all.findIndex((x) => x.id === after) + 1 : 0;
+        return { data: all.slice(from, from + limit).map(clone), has_more: from + limit < all.length };
+      },
     },
     invoices: { retrieve: async (id) => clone(state.invoices.get(id)) },
     charges: { retrieve: async (id) => clone(state.charges.get(id)) },
@@ -100,7 +111,7 @@ const S = vi.hoisted(() => {
   return { state, api };
 });
 
-const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false }));
+const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false, users: [] }));
 
 vi.mock('../../lib/stripe', async (importOriginal) => {
   const actual = await importOriginal();
@@ -115,6 +126,8 @@ vi.mock('../../lib/meta', () => ({ sendCapiEvent: vi.fn(async () => {}) }));
 vi.mock('../../lib/supabaseServer', () => {
   // Writes profile links into the PGlite profiles table.
   const profileClient = {
+    // pages/api/admin/heal-topups.js finds the account by email.
+    auth: { admin: { listUsers: async () => ({ data: { users: auth.users }, error: null }) } },
     from: () => ({
       select: () => ({
         eq: (_col, id) => ({
@@ -145,16 +158,18 @@ import { TOPUPS, PLANS } from '../../lib/stripe';
 import { KEY } from '../../lib/metaKeys';
 import { setCreditsDb, getBalance } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
-import { setGrantsDb, hashClaimTicket } from '../../lib/grants.js';
+import { setGrantsDb, hashClaimTicket, checkSessionOwner, GrantInProgressError } from '../../lib/grants.js';
 import { signClaimNonces, verifyClaimNonces } from '../../lib/jobToken.js';
 const signClaimNonce = (nonce) => signClaimNonces([nonce]);
-const verifyClaimNonce = (signed) => verifyClaimNonces(signed)?.[0] ?? null;
+const verifyClaimNonce = (signed) => verifyClaimNonces(signed)?.[0]?.nonce ?? null;
 import webhook from '../../pages/api/stripe-webhook.js';
 import confirm from '../../pages/api/checkout/confirm.js';
 import claimTicket from '../../pages/api/checkout/claim-ticket.js';
 import claim from '../../pages/api/checkout/claim.js';
 import checkout from '../../pages/api/checkout.js';
-import { getEntitlement, linkStripeCustomerToProfile } from '../../lib/entitlement';
+import heal from '../../pages/api/admin/heal-topups.js';
+import { getEntitlement, linkStripeCustomerToProfile, assertCanLink } from '../../lib/entitlement';
+import { relinkModeStrict } from '../../lib/billingFlags.js';
 import { getSupabaseAdmin } from '../../lib/supabaseServer';
 import { renewPlanCredits } from '../../lib/credits.js';
 
@@ -178,6 +193,8 @@ beforeEach(() => {
   auth.user = null;
   S.state.failCustomerUpdates = 0;
   S.state.failSessionRetrieves = 0;
+  S.state.beforeUpdate = null;
+  S.state.failSessionCreate = null;
 });
 
 // ---- builders -------------------------------------------------------
@@ -320,6 +337,15 @@ const link = (userId, customerId) =>
 async function setBillingV2(on) {
   await db.query("delete from public.pricing_config where key = 'billing_v2'");
   if (on) await db.query("insert into public.pricing_config (key, value) values ('billing_v2', 'true'::jsonb)");
+  _resetPricingCache();
+}
+// 'support' is the default (no row). 'auto' lets customer-triggered paths move
+// a profile off an existing customer.
+async function setRelinkMode(mode) {
+  await db.query("delete from public.pricing_config where key = 'relink_mode'");
+  if (mode !== 'support') {
+    await db.query("insert into public.pricing_config (key, value) values ('relink_mode', $1::jsonb)", [JSON.stringify(mode)]);
+  }
   _resetPricingCache();
 }
 
@@ -843,6 +869,7 @@ describe('review fixes, billing_v2 off', () => {
   });
 
   it('refuses to move a profile off a customer with a live plan, allows it when that customer is gone', async () => {
+    await setRelinkMode('auto');
     const buyer = newUser();
     const existing = newCustomer();
     await link(buyer.id, existing);
@@ -856,6 +883,8 @@ describe('review fixes, billing_v2 off', () => {
     );
     expect(legacyCredits(other)).toBe(0);
 
+    // A customer deleted in Stripe counts as no customer, in either mode.
+    await setRelinkMode('support');
     S.state.customers.get(existing).deleted = true;
     expect((await confirmAs(buyer, session.id)).statusCode).toBe(200);
     expect(legacyCredits(other)).toBe(TOPUP_S.credits);
@@ -1053,7 +1082,11 @@ function pairUp(pattern) {
 }
 
 describe('review fixes round 2, billing_v2 off', () => {
-  beforeAll(() => setBillingV2(false));
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('auto'); // N2 exercises the automatic relink
+  });
+  afterAll(() => setRelinkMode('support'));
   beforeEach(() => {
     auth.failProfileRead = false;
   });
@@ -1157,6 +1190,7 @@ describe('review fixes round 2, billing_v2 on', () => {
   });
 
   it('N2: a parked first invoice lands after a returning customer claims on a new customer', async () => {
+    await setRelinkMode('auto');
     const user = newUser();
     const old = newCustomer();
     await link(user.id, old);
@@ -1172,6 +1206,7 @@ describe('review fixes round 2, billing_v2 on', () => {
     expect(res.statusCode).toBe(200);
     expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
     expect(S.state.customers.get(fresh).metadata[KEY.relinkedFrom]).toBe(old);
+    await setRelinkMode('support');
   });
 
   it('M1: a grant for a linked user also claims its parked rows, and a transient claim failure is retryable', async () => {
@@ -1261,7 +1296,11 @@ const ticketSession = (customer, cookieRes) => {
 };
 
 describe('review fixes round 3, billing_v2 off', () => {
-  beforeAll(() => setBillingV2(false));
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('auto'); // R2 and m1/m2 exercise the automatic relink rules
+  });
+  afterAll(() => setRelinkMode('support'));
 
   it('R1: a planted (validly signed) claim cookie cannot claim the victim\'s next session; the victim\'s browser can', async () => {
     // Attacker gets a signed cookie from one anonymous checkout and plants it.
@@ -1296,7 +1335,7 @@ describe('review fixes round 3, billing_v2 off', () => {
     expect(new Set(tickets).size).toBe(7);
     const list = verifyClaimNonces(cookie);
     expect(list).toHaveLength(5);
-    expect(hashClaimTicket(list[0])).toBe(tickets[6]);
+    expect(hashClaimTicket(list[0].nonce)).toBe(tickets[6]);
 
     // Pay the session from checkout #6 (two checkouts ago): its nonce is still listed.
     const target = [...S.state.sessions.values()].find((x) => x.metadata?.claim_ticket === tickets[5]);
@@ -1434,7 +1473,11 @@ describe('review fixes round 3, billing_v2 on', () => {
 // Round 3 follow-up: state follows the profile on a permitted relink
 // =====================================================================
 describe('relink carries state, billing_v2 off', () => {
-  beforeAll(() => setBillingV2(false));
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('auto');
+  });
+  afterAll(() => setRelinkMode('support'));
   const numeric = (md) => Object.fromEntries(Object.entries(md).filter(([, v]) => /^\d+$/.test(v)).map(([k, v]) => [k, Number(v)]));
 
   it('a former legacy subscriber is relinked: credits moved once, shared keys copied, old keys untouched', async () => {
@@ -1512,5 +1555,495 @@ describe('relink carries state, billing_v2 off', () => {
     expect(S.state.customers.get(fresh).metadata).toEqual(newMd);
     const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [user.id]);
     expect(row.rows[0].stripe_customer_id).toBe(old);
+  });
+});
+
+// =====================================================================
+// Review fix round 4: relink_mode ('support' by default), NB1 to NB8
+// =====================================================================
+const BILLING_PROFILE_MESSAGE =
+  'You already have a billing profile on this account. Contact support so we can merge your new purchase.';
+const mdOf = (customerId) => S.state.customers.get(customerId).metadata;
+const profileOf = async (userId) =>
+  (await db.query('select stripe_customer_id from public.profiles where id = $1', [userId])).rows[0]?.stripe_customer_id ?? null;
+const sumOf = (key, ids) => ids.reduce((n, id) => n + parseInt(mdOf(id)[key] || '0', 10), 0);
+
+// A user whose profile already points at a live customer, plus a second
+// customer they have now paid on. `expectUntouched` asserts that nothing was
+// written to either Stripe customer or to the profile since.
+async function returningBuyer() {
+  const user = newUser();
+  const old = newCustomer({ [KEY.credits]: '100', creditsRemaining: '5' });
+  await link(user.id, old);
+  const fresh = newCustomer();
+  const before = { updates: S.state.updates.length, old: structuredClone(mdOf(old)), fresh: structuredClone(mdOf(fresh)) };
+  const expectUntouched = async () => {
+    expect(S.state.updates.length).toBe(before.updates);
+    expect(mdOf(old)).toEqual(before.old);
+    expect(mdOf(fresh)).toEqual(before.fresh);
+    expect(await profileOf(user.id)).toBe(old);
+  };
+  return { user, old, fresh, expectUntouched };
+}
+const ticketCookies = (session, nonce) => ({ ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) });
+function ticketSub(customer, { email = null } = {}) {
+  const nonce = 'r4-' + randomUUID();
+  const session = subSession({ customer, email, metadata: { pending_supabase_link: 'true', claim_ticket: hashClaimTicket(nonce) } });
+  return { session, cookies: ticketCookies(session, nonce) };
+}
+
+const ADMIN = { id: randomUUID(), email: 'owner-r4@example.test', email_confirmed_at: '2026-11-01T00:00:00Z' };
+async function healAs(body) {
+  const prev = process.env.ADMIN_EMAILS;
+  process.env.ADMIN_EMAILS = ADMIN.email;
+  auth.user = ADMIN;
+  const res = makeRes();
+  try {
+    await heal({ method: 'POST', body, headers: {}, query: {}, cookies: {} }, res);
+  } finally {
+    if (prev === undefined) delete process.env.ADMIN_EMAILS;
+    else process.env.ADMIN_EMAILS = prev;
+  }
+  return res;
+}
+const knownAccount = (user) => auth.users.push({ id: user.id, email: user.email });
+
+describe('round 4: relink_mode reader', () => {
+  afterAll(() => setRelinkMode('support'));
+
+  it("is 'support' unless pricing_config says exactly 'auto', and fails closed on a cold instance", async () => {
+    await setRelinkMode('support');
+    expect(await relinkModeStrict()).toBe('support');
+    await setRelinkMode('auto');
+    expect(await relinkModeStrict()).toBe('auto');
+    await setRelinkMode('AUTO please');
+    expect(await relinkModeStrict()).toBe('support');
+    setPricingDb({ query: async () => { throw new Error('db down'); } });
+    try {
+      await expect(relinkModeStrict()).rejects.toThrow();
+    } finally {
+      setPricingDb(db);
+    }
+  });
+});
+
+describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
+  "round 4: relink_mode 'support' (the default), billing_v2 $flag",
+  ({ v2 }) => {
+    beforeAll(async () => {
+      await setBillingV2(v2);
+      await setRelinkMode('support');
+    });
+    afterAll(() => setBillingV2(false));
+
+    it('/confirm: a buyer who already has a different customer gets 409 and nothing is written', async () => {
+      const { user, fresh, expectUntouched } = await returningBuyer();
+      const session = topupSession({ customer: fresh, buyer: user }); // client_reference_id proof
+      const res = await confirmAs(user, session.id);
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      await expectUntouched();
+      expect(await recorded(`checkout:${session.id}`)).toBe(false);
+      expect((await getBalance(user.id)).available).toBe(0);
+    });
+
+    it('/claim (verified email): 409 and nothing is written', async () => {
+      const { user, fresh, expectUntouched } = await returningBuyer();
+      const session = subSession({ customer: fresh, email: user.email, metadata: { pending_supabase_link: 'true' } });
+      const res = await callRoute(claim, { user, query: { session_id: session.id } });
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      await expectUntouched();
+    });
+
+    it('claim-ticket (ticket proof): 409 and nothing is written', async () => {
+      const { user, fresh, expectUntouched } = await returningBuyer();
+      const { cookies } = ticketSub(fresh);
+      const res = await callRoute(claimTicket, { user, cookies });
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      await expectUntouched();
+    });
+
+    it('webhook buyer link: refused with the same message, the profile and the old customer stay as they were', async () => {
+      const { user, old, fresh, expectUntouched } = await returningBuyer();
+      await expect(assertCanLink(user.id, fresh, { via: 'server' })).rejects.toThrow(BILLING_PROFILE_MESSAGE);
+      const oldBefore = structuredClone(mdOf(old));
+      const session = topupSession({ customer: fresh, buyer: user });
+      const res = await deliver(completedEvent(session));
+      expect(res.statusCode).toBe(200);
+      expect(await profileOf(user.id)).toBe(old);
+      expect(mdOf(old)).toEqual(oldBefore);
+      if (v2) {
+        // Parked for the new customer; no Stripe customer was written at all.
+        await expectUntouched();
+        const parked = await db.query(
+          'select claimed_by from public.credit_pending_grants where ref = $1',
+          [`checkout:${session.id}`]
+        );
+        expect(parked.rows).toEqual([{ claimed_by: null }]);
+        expect((await getBalance(user.id)).available).toBe(0);
+      } else {
+        // Legacy: the payment sits on the new customer (the grant), nothing else.
+        expect(legacyCredits(fresh)).toBe(TOPUP_S.credits);
+        expect(S.state.updates.filter((u) => u.id === old)).toHaveLength(0);
+      }
+    });
+
+    if (v2) {
+      it('webhook subscription link: refused, nothing written', async () => {
+        const { user, fresh, expectUntouched } = await returningBuyer();
+        const session = subSession({ customer: fresh, extra: { client_reference_id: user.id } });
+        const res = await deliver(completedEvent(session));
+        expect(res.statusCode).toBe(200);
+        await expectUntouched();
+      });
+
+      it('the grant stays parked after the 409 and is delivered when the admin route merges', async () => {
+        const { user, fresh, expectUntouched } = await returningBuyer();
+        knownAccount(user);
+        const invoice = paidInvoice({ customer: fresh, subId: newSub(fresh) });
+        await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
+        const { session, cookies } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
+        const refused = await callRoute(claimTicket, { user, cookies });
+        expect(refused.statusCode).toBe(409);
+        expect(refused.body.error).toBe(BILLING_PROFILE_MESSAGE);
+        await expectUntouched();
+        const pending = () =>
+          db.query('select claimed_by from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
+        expect((await pending()).rows).toEqual([{ claimed_by: null }]);
+        expect((await getBalance(user.id)).available).toBe(0);
+
+        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false });
+        expect(merged.statusCode).toBe(200);
+        expect(await profileOf(user.id)).toBe(fresh);
+        expect(String((await pending()).rows[0].claimed_by)).toBe(user.id);
+        expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+      });
+    } else {
+      it('the admin route performs the merge: profile moved, credits moved once', async () => {
+        const { user, old, fresh } = await returningBuyer();
+        knownAccount(user);
+        const { session, cookies } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
+        expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(409);
+        const dry = await healAs({ sessionId: session.id, email: user.email });
+        expect(dry.body.dryRun).toBe(true);
+        expect(await profileOf(user.id)).toBe(old);
+
+        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false });
+        expect(merged.statusCode).toBe(200);
+        expect(await profileOf(user.id)).toBe(fresh);
+        expect(mdOf(old)[KEY.credits]).toBe('0');
+        expect(mdOf(fresh)[KEY.credits]).toBe('100');
+        expect(mdOf(fresh)[KEY.relinkedFrom]).toBe(old);
+      });
+    }
+
+    it('a user with no customer links normally', async () => {
+      const user = newUser();
+      const fresh = newCustomer();
+      const { cookies } = ticketSub(fresh);
+      expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(200);
+      expect(await profileOf(user.id)).toBe(fresh);
+    });
+
+    it('NB1: the same email plus the ticket is a ticket proof (and still 409 in support mode)', async () => {
+      const { user, fresh, expectUntouched } = await returningBuyer();
+      const { session, cookies } = ticketSub(fresh, { email: user.email });
+      const nonce = verifyClaimNonce(cookies.ugc2_claim_nonce);
+      expect(checkSessionOwner(session, user, { claimNonces: [nonce] })).toEqual({ ok: true, via: 'ticket' });
+      expect(checkSessionOwner({ ...session, client_reference_id: user.id }, user, { claimNonces: [nonce] }).via).toBe(
+        'client_reference_id'
+      );
+      expect(checkSessionOwner(session, user, { claimNonces: [] })).toEqual({ ok: true, via: 'email' });
+      const res = await callRoute(claimTicket, { user, cookies });
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      await expectUntouched();
+    });
+  }
+);
+
+describe("round 4: relink_mode 'auto', billing_v2 off", () => {
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('auto');
+  });
+  afterAll(() => setRelinkMode('support'));
+  const admin = () => getSupabaseAdmin();
+  const settle = (p) => p.then(() => 'ok', (e) => e);
+
+  it('NB1: the same email plus the ticket relinks (ticket outranks email)', async () => {
+    const { user, old, fresh } = await returningBuyer();
+    const { cookies } = ticketSub(fresh, { email: user.email });
+    const res = await callRoute(claimTicket, { user, cookies });
+    expect(res.statusCode).toBe(200);
+    expect(await profileOf(user.id)).toBe(fresh);
+    expect(mdOf(old)[KEY.credits]).toBe('0');
+  });
+
+  it('a user with no customer links normally, and the admin route merges here too', async () => {
+    const newcomer = newUser();
+    const first = newCustomer();
+    expect((await callRoute(claimTicket, { user: newcomer, cookies: ticketSub(first).cookies })).statusCode).toBe(200);
+    expect(await profileOf(newcomer.id)).toBe(first);
+
+    const { user, old, fresh } = await returningBuyer();
+    knownAccount(user);
+    const { session } = ticketSub(fresh, { email: user.email });
+    const merged = await healAs({ sessionId: session.id, dryRun: false });
+    expect(merged.statusCode).toBe(200);
+    expect(await profileOf(user.id)).toBe(fresh);
+    expect(sumOf(KEY.credits, [old, fresh])).toBe(100);
+  });
+
+  it('NB2: two relinks of one user to two new customers, forced to overlap: one wins, the balance exists once', async () => {
+    const user = newUser();
+    const a = newCustomer({ [KEY.credits]: '100', [KEY.imageCredits]: '9' });
+    const b = newCustomer();
+    const c = newCustomer();
+    await link(user.id, a);
+    // Hold the first relink after it has read A: its first write to A waits.
+    let release;
+    const gate = new Promise((r) => (release = r));
+    let reached;
+    const atGate = new Promise((r) => (reached = r));
+    let held = false;
+    S.state.beforeUpdate = async (id) => {
+      if (id === a && !held) {
+        held = true;
+        reached();
+        await gate;
+      }
+    };
+    const first = settle(linkStripeCustomerToProfile(admin(), user.id, b, { via: 'admin' }));
+    await atGate;
+    const cBefore = structuredClone(mdOf(c));
+    const second = await settle(linkStripeCustomerToProfile(admin(), user.id, c, { via: 'admin' }));
+    release();
+    expect(await first).toBe('ok');
+    S.state.beforeUpdate = null;
+
+    expect(second).toBeInstanceOf(GrantInProgressError); // retryable
+    expect(mdOf(c)).toEqual(cBefore); // the loser's customer is untouched
+    expect(S.state.updates.filter((u) => u.id === c)).toHaveLength(0);
+    expect(sumOf(KEY.credits, [a, b, c])).toBe(100);
+    expect(sumOf(KEY.imageCredits, [a, b, c])).toBe(9);
+    expect(mdOf(b)[KEY.credits]).toBe('100');
+    expect(await profileOf(user.id)).toBe(b);
+  });
+
+  it('NB2: a relink that checked the old link before another relink finished does not act on the stale read', async () => {
+    const user = newUser();
+    const a = newCustomer({ [KEY.credits]: '100' });
+    const b = newCustomer();
+    const c = newCustomer();
+    await link(user.id, a);
+    // Hold the relink to C just before it takes the old-customer lock; by then
+    // it has already read "the profile points at A".
+    let release;
+    const gate = new Promise((r) => (release = r));
+    let reached;
+    const atGate = new Promise((r) => (reached = r));
+    let held = false;
+    const cBefore = structuredClone(mdOf(c));
+    const [toC] = await withQueryHook(
+      (sql, params, run) => {
+        if (!held && /insert into public\.stripe_events/.test(sql) && String(params?.[0]).startsWith('relink_old:')) {
+          held = true;
+          reached();
+          return gate.then(run);
+        }
+        return run();
+      },
+      async () => {
+        const stale = settle(linkStripeCustomerToProfile(admin(), user.id, c, { via: 'admin' }));
+        await atGate;
+        await linkStripeCustomerToProfile(admin(), user.id, b, { via: 'admin' }); // completes A -> B
+        release();
+        return [await stale];
+      }
+    );
+    expect(toC).toBeInstanceOf(GrantInProgressError);
+    expect(mdOf(c)).toEqual(cBefore);
+    expect(sumOf(KEY.credits, [a, b, c])).toBe(100);
+    expect(await profileOf(user.id)).toBe(b);
+  });
+
+  it('NB2: credit_link_customer replaces a link only when it is still the expected one', async () => {
+    const user = newUser();
+    const [a, b] = [`cus_cas_${randomUUID().slice(0, 8)}`, `cus_cas_${randomUUID().slice(0, 8)}`];
+    await link(user.id, a);
+    const call = async (customer, replace, expected) =>
+      (await db.query('select public.credit_link_customer($1, $2, $3, $4) as r', [user.id, customer, replace, expected])).rows[0].r;
+    expect(await call(b, true, 'cus_someone_else')).toBe('conflict');
+    expect(await call(b, true, null)).toBe('conflict');
+    expect(await call(b, false, a)).toBe('user_has_other');
+    expect(await profileOf(user.id)).toBe(a);
+    expect(await call(b, true, a)).toBe('linked');
+    expect(await profileOf(user.id)).toBe(b);
+  });
+
+  it('NB4: a relink already in flight answers "try again in a couple of minutes" on /confirm and both claim routes', async () => {
+    const lock = async (old, fresh) => {
+      await lockRow(`relink_old:${old}`);
+      await lockRow(`relink:${old}:${fresh}`);
+    };
+    const unlock = (old, fresh) =>
+      db.query('delete from public.stripe_events where id = any($1)', [[`relink_old:${old}`, `relink:${old}:${fresh}`]]);
+
+    const one = await returningBuyer();
+    const topup = topupSession({ customer: one.fresh, buyer: one.user });
+    await lock(one.old, one.fresh);
+    const confirmRes = await confirmAs(one.user, topup.id);
+    expect(confirmRes.statusCode).toBe(409);
+    expect(confirmRes.body.retryable).toBe(true);
+    expect(confirmRes.body.error).toMatch(/couple of minutes/);
+    expect(await profileOf(one.user.id)).toBe(one.old);
+    await unlock(one.old, one.fresh);
+    expect((await confirmAs(one.user, topup.id)).statusCode).toBe(200);
+    expect(await profileOf(one.user.id)).toBe(one.fresh);
+    expect(legacyCredits(one.fresh)).toBe(TOPUP_S.credits + 100);
+
+    const two = await returningBuyer();
+    const ticket = ticketSub(two.fresh);
+    await lock(two.old, two.fresh);
+    const ticketRes = await callRoute(claimTicket, { user: two.user, cookies: ticket.cookies });
+    expect(ticketRes.statusCode).toBe(409);
+    expect(ticketRes.body.retryable).toBe(true);
+    expect(ticketRes.body.error).toMatch(/couple of minutes/);
+
+    const three = await returningBuyer();
+    const byRef = subSession({ customer: three.fresh, extra: { client_reference_id: three.user.id } });
+    await lock(three.old, three.fresh);
+    const claimRes = await callRoute(claim, { user: three.user, query: { session_id: byRef.id } });
+    expect(claimRes.statusCode).toBe(409);
+    expect(claimRes.body.retryable).toBe(true);
+    expect(claimRes.body.error).toMatch(/couple of minutes/);
+  });
+
+  it('NB8: a live subscription beyond the first 100 on the old customer still refuses the relink', async () => {
+    const user = newUser();
+    const old = newCustomer({ [KEY.credits]: '5' });
+    await link(user.id, old);
+    for (let i = 0; i < 100; i += 1) S.state.subs.get(newSub(old)).status = 'canceled';
+    S.state.subs.get(newSub(old)).status = 'past_due'; // number 101
+    const fresh = newCustomer();
+    await expect(linkStripeCustomerToProfile(admin(), user.id, fresh, { via: 'admin' })).rejects.toThrow(/active plan/);
+    expect(await profileOf(user.id)).toBe(old);
+    expect(mdOf(old)[KEY.credits]).toBe('5');
+  });
+
+  it('a merge that died after zeroing the old customer keeps its carry record until that same merge is retried', async () => {
+    const user = newUser();
+    const a = newCustomer({ [KEY.credits]: '100' });
+    const b = newCustomer();
+    const c = newCustomer();
+    await link(user.id, a);
+    S.state.failUpdatesFor.set(b, 1); // crediting B fails after A was zeroed
+    await expect(linkStripeCustomerToProfile(admin(), user.id, b, { via: 'admin' })).rejects.toThrow('stripe unavailable');
+    expect(mdOf(a)[KEY.credits]).toBe('0');
+    expect(mdOf(a)[KEY.relinkCarry]).toBe('100:0');
+    expect(await profileOf(user.id)).toBe(a);
+
+    // A different merge must not overwrite the record of what B is owed.
+    const cBefore = structuredClone(mdOf(c));
+    await expect(linkStripeCustomerToProfile(admin(), user.id, c, { via: 'admin' })).rejects.toThrow(/Contact support/);
+    expect(mdOf(a)[KEY.relinkCarry]).toBe('100:0');
+    expect(mdOf(a)[KEY.relinkedTo]).toBe(b);
+    expect(mdOf(c)).toEqual(cBefore);
+
+    await linkStripeCustomerToProfile(admin(), user.id, b, { via: 'admin' });
+    expect(mdOf(b)[KEY.credits]).toBe('100');
+    expect(await profileOf(user.id)).toBe(b);
+  });
+});
+
+describe('round 4: NB3, NB6, NB7', () => {
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('support');
+  });
+
+  it('NB3: a parked grant lowered by a refund, claimed, then refunded further ends at the fair amount', async () => {
+    await setBillingV2(true);
+    try {
+      const user = newUser();
+      const customer = newCustomer();
+      const invoice = paidInvoice({ customer, subId: newSub(customer) });
+      await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
+      const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 400, amount_refunded: 100, invoice: invoice.id };
+      S.state.charges.set(charge.id, charge);
+      await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } }); // 25% while parked
+      await linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, customer, { via: 'server' }); // claim
+      expect((await getBalance(user.id)).available).toBe(V2_MONTHLY - Math.ceil(V2_MONTHLY * 0.25)); // 120
+      charge.amount_refunded = 300; // 75% in total
+      const res = await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
+      expect(res.statusCode).toBe(200);
+      expect(V2_MONTHLY).toBe(160);
+      expect((await getBalance(user.id)).available).toBe(40); // 160 - ceil(160 * 0.75), not 30
+      // Redelivery claws nothing more.
+      await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
+      expect((await getBalance(user.id)).available).toBe(40);
+    } finally {
+      await setBillingV2(false);
+    }
+  });
+
+  it('NB6: a 500 from /api/checkout does not leak the internal error', async () => {
+    S.state.failSessionCreate = 'CRON_SECRET is not set; refusing to sign or verify.';
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' } });
+      expect(res.statusCode).toBe(500);
+      expect(typeof res.body.error).toBe('string');
+      expect(res.body.error).not.toMatch(/CRON_SECRET|refusing/);
+      expect(errors).toHaveBeenCalled(); // details go to the log
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
+  it('NB7a: a claim nonce stops proving ownership 24 hours after it was issued', async () => {
+    const res = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' } });
+    const { paid, cookie } = ticketSession(newCustomer(), res);
+    const cookies = { ugc2_claim_sid: paid.id, ugc2_claim_nonce: cookie };
+    const realNow = Date.now();
+    const clock = vi.spyOn(Date, 'now');
+    try {
+      clock.mockReturnValue(realNow + 25 * 3600 * 1000);
+      expect((await callRoute(claimTicket, { user: newUser(), cookies })).statusCode).toBe(403);
+      clock.mockReturnValue(realNow + 23 * 3600 * 1000);
+      expect((await callRoute(claimTicket, { user: newUser(), cookies })).statusCode).toBe(200);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('NB7b: claiming one paid session keeps the ticket of a second one paid in the same browser', async () => {
+    const firstRes = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' } });
+    const first = ticketSession(newCustomer(), firstRes);
+    const secondRes = await callCheckout({
+      body: { plan: 'monthly', returnTo: '/ugc-2' },
+      cookie: `ugc2_claim_nonce=${first.cookie}`,
+    });
+    const second = ticketSession(newCustomer(), secondRes);
+
+    const claimed = await callRoute(claimTicket, {
+      user: newUser(),
+      cookies: { ugc2_claim_sid: first.paid.id, ugc2_claim_nonce: second.cookie },
+    });
+    expect(claimed.statusCode).toBe(200);
+    const left = cookieValue(claimed, 'ugc2_claim_nonce');
+    const entries = verifyClaimNonces(left);
+    expect(entries).toHaveLength(1);
+    expect(hashClaimTicket(entries[0].nonce)).toBe(second.paid.metadata.claim_ticket);
+
+    const other = await callRoute(claimTicket, {
+      user: newUser(),
+      cookies: { ugc2_claim_sid: second.paid.id, ugc2_claim_nonce: left },
+    });
+    expect(other.statusCode).toBe(200);
+    expect(cookieValue(other, 'ugc2_claim_nonce')).toBe(''); // nothing left: cleared
   });
 });

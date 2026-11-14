@@ -13,6 +13,7 @@ import {
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
   claimNoncesFromCookie,
+  claimCookieWithoutSession,
 } from '../../../lib/grants';
 
 /*
@@ -29,7 +30,8 @@ import {
  *     or Google account. The session id alone is NOT enough (it travels in
  *     the success URL): the binding is authorized by the claim ticket
  *     /api/checkout issued to this browser when checkout started — a
- *     random nonce in the httpOnly `ugc2_claim_nonce` cookie whose SHA-256
+ *     random nonce in the httpOnly `ugc2_claim_nonce` cookie (a signed list
+ *     of the browser's newest five, each valid for 24 hours) whose SHA-256
  *     is stored on the session as metadata.claim_ticket. The usual owner
  *     checks (client_reference_id, verified email) also pass.
  *   - Ticket-flow sessions created before tickets carried a nonce are
@@ -45,10 +47,16 @@ import {
 const CLAIM_COOKIE = 'ugc2_claim_sid';
 const TICKET_TTL_S = 1800;
 
-function clearClaimCookie(res) {
+// Clears the session-id cookie and removes only this session's nonce from
+// the browser's list, so a second paid session keeps its ticket. The nonce
+// cookie is cleared when nothing is left.
+function clearClaimCookie(res, nonceCookie, checkoutSession) {
+  const left = claimCookieWithoutSession(nonceCookie, checkoutSession);
   res.setHeader('Set-Cookie', [
     `${CLAIM_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
-    `${CLAIM_NONCE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
+    left
+      ? `${CLAIM_NONCE_COOKIE}=${left}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
+      : `${CLAIM_NONCE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
   ]);
 }
 
@@ -159,11 +167,18 @@ export default async function handler(req, res) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
       }
+      // A relink for this user or their old customer is already running.
+      if (linkErr instanceof GrantInProgressError) {
+        return res.status(409).json({
+          error: 'Your payment is still being processed. Try again in a couple of minutes.',
+          retryable: true,
+        });
+      }
       throw linkErr;
     }
 
-    // Ticket is spent — clear the cookies so it can't be replayed.
-    clearClaimCookie(res);
+    // Ticket is spent: drop it so it can't be replayed.
+    clearClaimCookie(res, req.cookies?.[CLAIM_NONCE_COOKIE], checkoutSession);
 
     if (!grant.granted && grant.skipped !== 'granted_per_invoice') {
       // Nothing seeded by this call: already claimed (refresh / double tab /
