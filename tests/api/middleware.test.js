@@ -33,10 +33,12 @@ describe('middleware', () => {
     expect(res.headers.get('location')).toBeNull();
   });
 
-  it('leaves the provider webhook public', async () => {
-    const res = await run('/api/webhooks/kie?token=x');
-    expect(res.status).toBe(200);
-    expect(res.headers.get('location')).toBeNull();
+  it('leaves the provider webhook and the story cron outside the matcher (they check their own secrets)', async () => {
+    const { config } = await import('../../middleware.js');
+    const { pathToRegexp } = await import('next/dist/compiled/path-to-regexp');
+    for (const path of ['/api/webhooks/kie', '/api/cron/story-tick']) {
+      expect(config.matcher.some((m) => pathToRegexp(m).test(path)), path).toBe(false);
+    }
   });
 
   it('answers 401 JSON to other /api/story paths without a session', async () => {
