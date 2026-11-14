@@ -14,6 +14,8 @@ const S = vi.hoisted(() => {
     failCustomerUpdates: 0,
     failSessionRetrieves: 0,
     created: [], // checkout.sessions.create params
+    updates: [], // customers.update calls: { id, metadata }
+    failUpdatesFor: new Map(), // customer id -> failures left
     creditWrites: new Map(), // customer id -> number of customers.update calls
   };
   const tick = () => new Promise((r) => setTimeout(r, 1));
@@ -37,11 +39,22 @@ const S = vi.hoisted(() => {
           state.failCustomerUpdates -= 1;
           throw new Error('stripe unavailable');
         }
+        if (state.failUpdatesFor.get(id) > 0) {
+          state.failUpdatesFor.set(id, state.failUpdatesFor.get(id) - 1);
+          throw new Error('stripe unavailable');
+        }
         const c = state.customers.get(id);
         if (!c || c.deleted) throw Object.assign(new Error(`No such customer: ${id}`), { code: 'resource_missing' });
+        state.updates.push({ id, metadata: { ...metadata } });
         // In these flows only a grant writes customer metadata.
         state.creditWrites.set(id, (state.creditWrites.get(id) || 0) + 1);
-        c.metadata = { ...metadata };
+        // Stripe merges metadata: listed keys are set, '' removes a key.
+        const next = { ...c.metadata };
+        for (const [k, v] of Object.entries(metadata || {})) {
+          if (v === '') delete next[k];
+          else next[k] = v;
+        }
+        c.metadata = next;
         return clone(c);
       },
     },
@@ -72,7 +85,9 @@ const S = vi.hoisted(() => {
     subscriptions: {
       retrieve: async (id) => clone(state.subs.get(id)),
       list: async ({ customer, status }) => ({
-        data: [...state.subs.values()].filter((x) => x.customer === customer && x.status === status).map(clone),
+        data: [...state.subs.values()]
+          .filter((x) => x.customer === customer && (status === 'all' || x.status === status))
+          .map(clone),
       }),
     },
     invoices: { retrieve: async (id) => clone(state.invoices.get(id)) },
@@ -131,7 +146,9 @@ import { KEY } from '../../lib/metaKeys';
 import { setCreditsDb, getBalance } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
 import { setGrantsDb, hashClaimTicket } from '../../lib/grants.js';
-import { signClaimNonce, verifyClaimNonce } from '../../lib/jobToken.js';
+import { signClaimNonces, verifyClaimNonces } from '../../lib/jobToken.js';
+const signClaimNonce = (nonce) => signClaimNonces([nonce]);
+const verifyClaimNonce = (signed) => verifyClaimNonces(signed)?.[0] ?? null;
 import webhook from '../../pages/api/stripe-webhook.js';
 import confirm from '../../pages/api/checkout/confirm.js';
 import claimTicket from '../../pages/api/checkout/claim-ticket.js';
@@ -1223,5 +1240,186 @@ describe('review fixes round 2, billing_v2 on', () => {
     charge.amount_refunded = 500;
     await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
     expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - Math.ceil((V2_TOPUP_S * 2) / 3));
+  });
+});
+
+// =====================================================================
+// Review fix round 3
+// =====================================================================
+// Marks the session /api/checkout just created as paid on `customer`.
+const ticketSession = (customer, cookieRes) => {
+  const params = lastCreated();
+  const paid = [...S.state.sessions.values()].find((x) => x.metadata?.claim_ticket === params.metadata.claim_ticket);
+  const subId = newSub(customer);
+  Object.assign(paid, {
+    payment_status: 'paid',
+    customer,
+    subscription: structuredClone(S.state.subs.get(subId)),
+    line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+  });
+  return { paid, cookie: cookieValue(cookieRes, 'ugc2_claim_nonce') };
+};
+
+describe('review fixes round 3, billing_v2 off', () => {
+  beforeAll(() => setBillingV2(false));
+
+  it('R1: a planted (validly signed) claim cookie cannot claim the victim\'s next session; the victim\'s browser can', async () => {
+    // Attacker gets a signed cookie from one anonymous checkout and plants it.
+    const attackerRes = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' } });
+    const attackerCookie = cookieValue(attackerRes, 'ugc2_claim_nonce');
+    const victimRes = await callCheckout({
+      body: { plan: 'monthly', returnTo: '/ugc-2' },
+      cookie: `ugc2_claim_nonce=${attackerCookie}`,
+    });
+    const { paid, cookie: victimCookie } = ticketSession(newCustomer(), victimRes);
+
+    const stolen = await callRoute(claimTicket, {
+      user: newUser(),
+      cookies: { ugc2_claim_sid: paid.id, ugc2_claim_nonce: attackerCookie },
+    });
+    expect(stolen.statusCode).toBe(403);
+    const mine = await callRoute(claimTicket, {
+      user: newUser(),
+      cookies: { ugc2_claim_sid: paid.id, ugc2_claim_nonce: victimCookie },
+    });
+    expect(mine.statusCode).toBe(200);
+  });
+
+  it('R1: every checkout gets a fresh ticket, the browser keeps its newest 5, and the first paid session still claims', async () => {
+    let cookie = '';
+    const tickets = [];
+    for (let i = 0; i < 7; i += 1) {
+      const res = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' }, cookie: cookie ? `ugc2_claim_nonce=${cookie}` : '' });
+      tickets.push(lastCreated().metadata.claim_ticket);
+      cookie = cookieValue(res, 'ugc2_claim_nonce');
+    }
+    expect(new Set(tickets).size).toBe(7);
+    const list = verifyClaimNonces(cookie);
+    expect(list).toHaveLength(5);
+    expect(hashClaimTicket(list[0])).toBe(tickets[6]);
+
+    // Pay the session from checkout #6 (two checkouts ago): its nonce is still listed.
+    const target = [...S.state.sessions.values()].find((x) => x.metadata?.claim_ticket === tickets[5]);
+    const customer = newCustomer();
+    const subId = newSub(customer);
+    Object.assign(target, {
+      payment_status: 'paid',
+      customer,
+      subscription: structuredClone(S.state.subs.get(subId)),
+      line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+    });
+    const res = await callRoute(claimTicket, { user: newUser(), cookies: { ugc2_claim_sid: target.id, ugc2_claim_nonce: cookie } });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('R2: an email-only owner is never moved off an existing customer', async () => {
+    const user = newUser('r2@example.test');
+    const old = newCustomer({ [KEY.credits]: '100' });
+    await link(user.id, old);
+    const fresh = newCustomer();
+    // Someone paid anonymously typing the victim's verified email.
+    const session = topupSession({ customer: fresh, buyer: null, email: 'r2@example.test' });
+    const res = await confirmAs(user, session.id);
+    expect(res.statusCode).toBe(409);
+    const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [user.id]);
+    expect(row.rows[0].stripe_customer_id).toBe(old);
+    expect(S.state.customers.get(old).metadata[KEY.credits]).toBe('100');
+  });
+
+  it('R2: a past_due plan or foreign metadata on the old customer refuses the relink', async () => {
+    // Ownership by client_reference_id (a replacing proof); only the old customer differs.
+    const u1 = newUser();
+    const old1 = newCustomer();
+    await link(u1.id, old1);
+    const pastDue = newSub(old1);
+    S.state.subs.get(pastDue).status = 'past_due';
+    expect((await confirmAs(u1, topupSession({ customer: newCustomer(), buyer: u1 }).id)).statusCode).toBe(409);
+
+    const u2 = newUser();
+    const old2 = newCustomer({ creditsRemaining: '7' }); // haelabs-style key
+    await link(u2.id, old2);
+    expect((await confirmAs(u2, topupSession({ customer: newCustomer(), buyer: u2 }).id)).statusCode).toBe(409);
+    const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [u2.id]);
+    expect(row.rows[0].stripe_customer_id).toBe(old2);
+  });
+
+  it('m1/m2: a relink that fails midway resumes on retry without losing or doubling credits, sending only changed keys', async () => {
+    const user = newUser();
+    const old = newCustomer({ [KEY.credits]: '100', [KEY.plan]: 'monthly' });
+    await link(user.id, old);
+    const fresh = newCustomer();
+    const session = topupSession({ customer: fresh, buyer: user });
+    S.state.failUpdatesFor.set(old, 1); // zeroing the old customer fails once
+    expect((await confirmAs(user, session.id)).statusCode).toBe(500);
+    expect((await confirmAs(user, session.id)).statusCode).toBe(200);
+    expect(S.state.customers.get(old).metadata[KEY.credits]).toBe('0');
+    expect(S.state.customers.get(fresh).metadata[KEY.credits]).toBe(String(TOPUP_S.credits + 100));
+    const relinkWrites = S.state.updates.filter((u) => (u.id === old || u.id === fresh) && Object.keys(u.metadata).some((k) => k.includes('relink')));
+    expect(relinkWrites.length).toBeGreaterThan(0);
+    for (const u of relinkWrites) expect(u.metadata[KEY.plan]).toBeUndefined();
+  });
+
+  it('m5: a 500 from /confirm does not leak the internal error', async () => {
+    const buyer = newUser();
+    const session = topupSession({ customer: newCustomer(), buyer });
+    S.state.failSessionRetrieves = 1;
+    const res = await confirmAs(buyer, session.id);
+    expect(res.statusCode).toBe(500);
+    expect(res.body.error).not.toMatch(/stripe unavailable/);
+  });
+});
+
+describe('review fixes round 3, billing_v2 on', () => {
+  beforeAll(() => setBillingV2(true));
+  afterAll(() => setBillingV2(false));
+
+  it('m3: a transient link failure for a subscription session makes Stripe retry', async () => {
+    const buyer = newUser();
+    const session = subSession({ customer: newCustomer(), extra: { client_reference_id: buyer.id } });
+    const res = await withQueryHook(
+      (sql, params, run) => {
+        if (sql.includes('credit_link_customer(')) throw new Error('connection reset');
+        return run();
+      },
+      () => deliver(completedEvent(session))
+    );
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('m6: a refund and a dispute racing on one purchase never claw back more than it granted', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    await link(buyer.id, customer);
+    const session = topupSession({ customer, buyer });
+    await deliver(completedEvent(session));
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 1500, amount_refunded: 750, disputed: true, payment_intent: session.payment_intent };
+    S.state.charges.set(charge.id, charge);
+    const dispute = { id: `dp_${randomUUID().slice(0, 8)}`, object: 'dispute', charge: charge.id, amount: 750 };
+    S.state.disputes.set(dispute.id, dispute);
+    await withQueryHook(pairUp(/credit_clawback\(|credit_reverse_grant\(/), () =>
+      Promise.all([
+        deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } }),
+        deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: dispute } }),
+      ])
+    );
+    const clawed = await db.query(
+      "select coalesce(sum(amount), 0)::int as n from public.credit_ledger where user_id = $1 and op = 'clawback'",
+      [buyer.id]
+    );
+    expect(clawed.rows[0].n).toBeLessThanOrEqual(V2_TOPUP_S);
+    expect((await getBalance(buyer.id)).available).toBe(0);
+  });
+
+  it('m6: successive refunds lower a parked grant from the amount it was parked with', async () => {
+    const customer = newCustomer();
+    const invoice = paidInvoice({ customer, subId: newSub(customer) });
+    await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 400, amount_refunded: 100, invoice: invoice.id };
+    S.state.charges.set(charge.id, charge);
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
+    charge.amount_refunded = 200;
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
+    const rows = await db.query('select amount from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
+    expect(rows.rows).toEqual([{ amount: V2_MONTHLY - Math.ceil(V2_MONTHLY / 2) }]);
   });
 });

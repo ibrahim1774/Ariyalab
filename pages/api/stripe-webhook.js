@@ -2,7 +2,7 @@ import { stripe, planFromPrice, topupFromPrice, PLANS } from '../../lib/stripe';
 import { sendCapiEvent } from '../../lib/meta';
 import { KEY, nsEventId } from '../../lib/metaKeys';
 import { getSupabaseAdmin } from '../../lib/supabaseServer';
-import { linkStripeCustomerToProfile } from '../../lib/entitlement';
+import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../lib/entitlement';
 import { isBillingV2Strict } from '../../lib/billingFlags';
 import {
   grantForCheckoutSession,
@@ -251,7 +251,7 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
     // signed-in buyer here so a closed tab does not leave the grant parked.
     // client_reference_id is set by /api/checkout for signed-in buyers only.
     if (plan && fullSession.client_reference_id && (await isBillingV2Strict())) {
-      await linkBuyer(fullSession.client_reference_id, customerId);
+      await linkBuyer(fullSession.client_reference_id, customerId, { rethrow: true });
     }
     return;
   }
@@ -292,12 +292,16 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
   }).catch(() => {});
 }
 
-// Best-effort: a refused or failed link never fails the webhook (the grant
-// already landed on the customer, or is parked for the next link).
-async function linkBuyer(userId, customerId) {
+// The buyer id comes from the session, written server-side by /api/checkout.
+// A refused link (409: the customer or the profile belongs elsewhere) never
+// fails the webhook: the grant already landed on the customer, or is parked
+// for support. Other failures are best-effort for top-ups (their grant has
+// already claimed) but rethrown with `rethrow` so Stripe retries.
+async function linkBuyer(userId, customerId, { rethrow = false } = {}) {
   try {
-    await linkStripeCustomerToProfile(getSupabaseAdmin(), userId, customerId);
+    await linkStripeCustomerToProfile(getSupabaseAdmin(), userId, customerId, { via: 'server' });
   } catch (linkErr) {
+    if (rethrow && !(linkErr instanceof CustomerLinkedElsewhereError)) throw linkErr;
     console.warn('[stripe-webhook] profile link failed', customerId, linkErr.message);
   }
 }

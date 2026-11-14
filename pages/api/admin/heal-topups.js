@@ -208,7 +208,7 @@ export default async function handler(req, res) {
       });
     }
 
-    await linkStripeCustomerToProfile(admin, user.id, targetCustomerId);
+    await linkStripeCustomerToProfile(admin, user.id, targetCustomerId, { via: 'admin' });
 
     // Also backfill supabase_user_id on the customer metadata so future
     // webhook-only paths can self-heal.

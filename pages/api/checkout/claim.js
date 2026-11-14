@@ -12,7 +12,7 @@ import {
   grantForCheckoutSession,
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
-  claimNonceFromCookie,
+  claimNoncesFromCookie,
 } from '../../../lib/grants';
 
 /*
@@ -75,13 +75,17 @@ export default async function handler(req, res) {
     // Security: the caller must own this session (normally: the signed-in
     // user's verified email matches the email Stripe collected).
     const owner = checkSessionOwner(checkoutSession, session.user, {
-      claimNonce: claimNonceFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
+      claimNonces: claimNoncesFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
     });
     if (!owner.ok) {
       return res.status(403).json({
         error: 'Email mismatch. Sign in with the same email you used at checkout.',
       });
     }
+
+    // How ownership was proven: only non-email proofs may move a profile
+    // off an existing customer (lib/entitlement.js assertCanLink).
+    const ownedVia = owner.via;
 
     const price = checkoutSession.line_items?.data?.[0]?.price;
     const plan = planFromPrice(price);
@@ -92,7 +96,7 @@ export default async function handler(req, res) {
     // Grant before linking (the entitlement reader must never see a linked
     // but unseeded customer), but only once the link is known to be allowed.
     try {
-      await assertCanLink(session.user.id, customerId);
+      await assertCanLink(session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -118,7 +122,7 @@ export default async function handler(req, res) {
 
     // Authoritative link in our profiles table.
     try {
-      await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
+      await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -169,6 +173,7 @@ export default async function handler(req, res) {
       meta: { eventId, eventName, value: reportedValue, currency: 'USD' },
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[checkout/claim] failed', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

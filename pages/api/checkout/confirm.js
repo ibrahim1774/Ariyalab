@@ -12,7 +12,7 @@ import {
   grantForCheckoutSession,
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
-  claimNonceFromCookie,
+  claimNoncesFromCookie,
 } from '../../../lib/grants';
 
 /*
@@ -67,7 +67,7 @@ export default async function handler(req, res) {
     }
 
     const owner = checkSessionOwner(checkoutSession, session.user, {
-      claimNonce: claimNonceFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
+      claimNonces: claimNoncesFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
     });
     if (!owner.ok) {
       return res.status(403).json({ error: 'This checkout belongs to a different account.' });
@@ -80,6 +80,10 @@ export default async function handler(req, res) {
         : null) ||
       session.user.email;
 
+    // How ownership was proven: only non-email proofs may move a profile
+    // off an existing customer (lib/entitlement.js assertCanLink).
+    const ownedVia = owner.via;
+
     const price = checkoutSession.line_items?.data?.[0]?.price;
     const plan = planFromPrice(price);
     const topup = plan ? null : topupFromPrice(price);
@@ -88,7 +92,7 @@ export default async function handler(req, res) {
     }
 
     try {
-      await assertCanLink(session.user.id, customerId);
+      await assertCanLink(session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -109,7 +113,7 @@ export default async function handler(req, res) {
 
     // Bind Stripe customer <-> Supabase profile (authoritative link).
     try {
-      await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
+      await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -170,6 +174,7 @@ export default async function handler(req, res) {
       meta: { eventId, eventName, value: reportedValue, currency: 'USD' },
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[checkout/confirm] failed', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

@@ -12,7 +12,7 @@ import {
   grantForCheckoutSession,
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
-  claimNonceFromCookie,
+  claimNoncesFromCookie,
 } from '../../../lib/grants';
 
 /*
@@ -107,13 +107,17 @@ export default async function handler(req, res) {
     // NOTE: intentionally NO email-match gate here. Authorization is the
     // claim ticket issued to this browser. See file header.
     const owner = checkSessionOwner(checkoutSession, session.user, {
-      claimNonce: claimNonceFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
+      claimNonces: claimNoncesFromCookie(req.cookies?.[CLAIM_NONCE_COOKIE]),
     });
     if (!owner.ok && !isPreTicketSession(checkoutSession)) {
       return res.status(403).json({
         error: 'This payment was started in a different browser. Contact support to link it.',
       });
     }
+
+    // How ownership was proven: only non-email proofs may move a profile
+    // off an existing customer (lib/entitlement.js assertCanLink).
+    const ownedVia = owner.ok ? owner.via : 'pre_ticket';
 
     const price = checkoutSession.line_items?.data?.[0]?.price;
     const plan = planFromPrice(price);
@@ -124,7 +128,7 @@ export default async function handler(req, res) {
     // Grant before linking (the entitlement reader must never see a linked
     // but unseeded customer), but only once the link is known to be allowed.
     try {
-      await assertCanLink(session.user.id, customerId);
+      await assertCanLink(session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -150,7 +154,7 @@ export default async function handler(req, res) {
 
     // Authoritative link in our profiles table.
     try {
-      await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
+      await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId, { via: ownedVia });
     } catch (linkErr) {
       if (linkErr instanceof CustomerLinkedElsewhereError) {
         return res.status(409).json({ error: linkErr.message });
@@ -205,6 +209,7 @@ export default async function handler(req, res) {
       meta: { eventId, eventName, value: reportedValue, currency: 'USD' },
     });
   } catch (err) {
-    return res.status(500).json({ error: err.message });
+    console.error('[checkout/claim-ticket] failed', err);
+    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
   }
 }

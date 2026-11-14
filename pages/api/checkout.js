@@ -12,12 +12,11 @@ import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../lib/entitlement';
 import { CLAIM_NONCE_COOKIE, hashClaimTicket, usersForCustomer } from '../../lib/grants';
-import { signClaimNonce, verifyClaimNonce } from '../../lib/jobToken';
+import { signClaimNonces, verifyClaimNonces } from '../../lib/jobToken';
 
 // Session metadata keys only the server sets; never taken from the
 // attribution cookie (ownership and claims read them).
 const RESERVED_METADATA = new Set(['supabase_user_id', 'pending_supabase_link', 'claim_ticket']);
-const NONCE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
 
 // The origin to send the buyer back to. Stays on the host the buyer is on
 // when it is APP_URL's host or its www/apex twin, so host-only cookies (the
@@ -151,7 +150,7 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
   // Authoritative link in our profiles table. A refused link means this
   // customer belongs elsewhere: do not use it.
   try {
-    await linkStripeCustomerToProfile(admin, userId, customerId);
+    await linkStripeCustomerToProfile(admin, userId, customerId, { via: 'server' });
   } catch (linkErr) {
     if (linkErr instanceof CustomerLinkedElsewhereError) {
       console.warn('[customer-find] not adopting customer', customerId, linkErr.message);
@@ -347,23 +346,23 @@ export default async function handler(req, res) {
       ? { pending_supabase_link: 'true' }
       : { supabase_user_id: session.user.id };
 
-    // Pay-first ticket flow: the claim ticket is a random nonce kept in
-    // this browser (httpOnly cookie); only its hash rides on the session.
-    // /api/checkout/claim-ticket binds the session only for the browser
-    // holding the nonce, so the session id in the success URL is not
-    // enough on its own. SameSite=Lax so it survives Stripe's redirect.
+    // Pay-first ticket flow: every checkout gets a FRESH random nonce; only
+    // its hash rides on the session. The httpOnly cookie keeps a signed list
+    // of this browser's newest nonces (lib/jobToken.js), so a second click,
+    // another tab or a retry does not orphan an earlier session that gets
+    // paid, and a cookie planted by someone else cannot make the new
+    // session's ticket one they know. /api/checkout/claim-ticket binds the
+    // session only for a browser holding its nonce, so the session id in the
+    // success URL is not enough on its own. SameSite=Lax so it survives
+    // Stripe's redirect.
     let claimTicket = null;
     if (isTicketFlow) {
-      // Reuse this browser's nonce: a second click, another tab or a retry
-      // must not orphan an earlier session that gets paid.
-      // Only a nonce this server signed is reused; a planted cookie is
-      // replaced (nonce fixation).
-      const existing = verifyClaimNonce(parseCookies(req.headers?.cookie || '')[CLAIM_NONCE_COOKIE]);
-      const nonce = existing && NONCE_PATTERN.test(existing) ? existing : randomBytes(24).toString('base64url');
+      const nonce = randomBytes(24).toString('base64url');
+      const previous = verifyClaimNonces(parseCookies(req.headers?.cookie || '')[CLAIM_NONCE_COOKIE]) || [];
       claimTicket = hashClaimTicket(nonce);
       appendCookie(
         res,
-        `${CLAIM_NONCE_COOKIE}=${signClaimNonce(nonce)}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
+        `${CLAIM_NONCE_COOKIE}=${signClaimNonces([nonce, ...previous])}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
       );
     }
 
