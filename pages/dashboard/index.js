@@ -200,7 +200,7 @@ export default function DashboardPage() {
         {canSwap ? (
           <>
             <div style={{ textAlign: 'center', marginTop: 24 }}>
-              <a href="/" className={styles.submit + ' ' + styles.submitReady}>
+              <a href="/legacy-home" className={styles.submit + ' ' + styles.submitReady}>
                 Go to upload →
               </a>
             </div>

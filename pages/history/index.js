@@ -120,7 +120,7 @@ export default function HistoryPage() {
               UGC clip, or image-to-video and come back.
             </div>
             <div style={{ marginTop: 20, display: 'flex', gap: 8, justifyContent: 'center' }}>
-              <Link href="/" className={`${styles.btn} ${styles.btnPrimary}`} style={{ flex: '0 0 auto', padding: '10px 22px' }}>
+              <Link href="/legacy-home" className={`${styles.btn} ${styles.btnPrimary}`} style={{ flex: '0 0 auto', padding: '10px 22px' }}>
                 Start a face swap
               </Link>
             </div>

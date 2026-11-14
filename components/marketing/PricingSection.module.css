@@ -1,0 +1,56 @@
+.toggle {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 32px;
+  padding: 4px;
+  gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-card);
+}
+.opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 18px;
+  border-radius: var(--radius-pill);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+.on { background: var(--text); color: #fff; }
+.save { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-deep); }
+.on .save { background: var(--accent); color: #fff; }
+.grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: stretch; }
+.plan { display: flex; flex-direction: column; min-width: 0; }
+.top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.name { margin: 0; font-size: 20px; font-weight: 600; }
+.blurb { margin: 8px 0 0; font-size: 14px; line-height: 1.5; opacity: 0.7; }
+.price { margin-top: 22px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.amount { font-size: 44px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; }
+.per { font-size: 14px; opacity: 0.65; }
+.billed { margin: 6px 0 0; font-size: 13px; opacity: 0.6; }
+.list { list-style: none; margin: 22px 0 26px; padding: 0; display: grid; gap: 10px; font-size: 14px; flex: 1; }
+.list li { display: flex; gap: 10px; }
+.list li::before { content: '\2713'; color: var(--accent); font-weight: 700; }
+.cta { width: 100%; }
+.ticks {
+  list-style: none;
+  margin: 28px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 22px;
+  font-size: 13px;
+  color: var(--text-dim);
+}
+.ticks span { color: var(--accent); font-weight: 700; }
+@media (min-width: 820px) {
+  .grid { grid-template-columns: repeat(3, 1fr); }
+  .plan[data-plan='creator'] { transform: translateY(-8px); }
+}

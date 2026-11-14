@@ -8,7 +8,7 @@ import { subscribeEntitlement } from '../lib/entitlementBus';
 
 // Always visible to everyone.
 const ALWAYS_TABS = [
-  { href: '/', label: 'Image to Video' },
+  { href: '/legacy-home', label: 'Image to Video' },
   { href: '/support', label: 'Support' },
 ];
 
