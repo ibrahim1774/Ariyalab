@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/router';
 
+import { getBrowserSupabase } from '../../lib/supabase';
 import Button from '../ui/Button';
 import styles from './MarketingNav.module.css';
 
@@ -16,6 +17,17 @@ const LINKS = [
 export default function MarketingNav() {
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+
+  useEffect(() => {
+    const supabase = getBrowserSupabase();
+    if (!supabase) return undefined;
+    supabase.auth.getUser().then(({ data }) => setSignedIn(Boolean(data?.user)));
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+      setSignedIn(Boolean(session?.user));
+    });
+    return () => listener?.subscription?.unsubscribe?.();
+  }, []);
 
   useEffect(() => {
     setOpen(false);
@@ -42,8 +54,14 @@ export default function MarketingNav() {
         </div>
 
         <div className={styles.actions}>
-          <Link href="/sign-in" className={styles.login}>Login</Link>
-          <Button href="/sign-up" size="sm">Get Started</Button>
+          {signedIn ? (
+            <Button href="/app" size="sm">Dashboard</Button>
+          ) : (
+            <>
+              <Link href="/sign-in" className={styles.login}>Login</Link>
+              <Button href="/sign-up" size="sm">Get Started</Button>
+            </>
+          )}
         </div>
 
         <button
@@ -65,8 +83,14 @@ export default function MarketingNav() {
               {l.label}
             </Link>
           ))}
-          <Link href="/sign-in" className={styles.sheetLink}>Login</Link>
-          <Button href="/sign-up">Get Started</Button>
+          {signedIn ? (
+            <Button href="/app">Dashboard</Button>
+          ) : (
+            <>
+              <Link href="/sign-in" className={styles.sheetLink}>Login</Link>
+              <Button href="/sign-up">Get Started</Button>
+            </>
+          )}
         </div>
       )}
     </header>

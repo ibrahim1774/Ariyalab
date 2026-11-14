@@ -18,8 +18,8 @@ const jsxInJs = {
 
 export default defineConfig({
   plugins: [jsxInJs],
-  css: { modules: { classNameStrategy: 'non-scoped' } },
   test: {
+    css: { modules: { classNameStrategy: 'non-scoped' } },
     environment: 'node',
     include: ['tests/**/*.test.js'],
     setupFiles: ['./tests/helpers/mockEnv.js'],

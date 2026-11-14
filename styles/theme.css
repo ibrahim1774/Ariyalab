@@ -17,3 +17,9 @@
   --shadow-float: 0 18px 50px -18px rgba(22, 19, 15, .22);
   --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--accent);
 }
+
+/* One accent word per headline: italic, in the accent colour. */
+.accent-word {
+  font-style: italic;
+  color: var(--accent);
+}

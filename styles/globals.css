@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:ital,wght@0,400;0,500;0,600;0,700;0,800;1,500;1,600;1,700&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
 
 :root {
   /* ───────────────────────────────────────────────────────────
@@ -48,9 +48,9 @@
   --shadow-lg: 0 24px 60px -28px rgba(22, 19, 15, 0.2);
   --shadow-xl: 0 40px 100px -44px rgba(22, 19, 15, 0.26);
 
-  /* Type: one family (Outfit) for display and body */
-  --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
-  --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  /* Type: one family (Plus Jakarta Sans) for display and body */
+  --font-display: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-body: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
 
   /* Shape */
@@ -83,7 +83,7 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-    min-height: 100%;
+  min-height: 100%;
 }
 
 body {

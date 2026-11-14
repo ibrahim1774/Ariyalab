@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 
+import { getBrowserSupabase } from '../../lib/supabase';
 import { subscribeEntitlement } from '../../lib/entitlementBus';
 import Pill from '../ui/Pill';
 
 /** Credit balance pill for the app shell. Reads /api/entitlement. */
 export default function CreditBadge() {
   const [entitlement, setEntitlement] = useState(null);
+  const [signedIn, setSignedIn] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -17,11 +19,25 @@ export default function CreditBadge() {
   }, []);
 
   useEffect(() => {
+    const supabase = getBrowserSupabase();
+    if (!supabase) return undefined;
+    supabase.auth.getUser().then(({ data }) => setSignedIn(Boolean(data?.user)));
+    const { data: listener } = supabase.auth.onAuthStateChange((_e, session) => {
+      setSignedIn(Boolean(session?.user));
+    });
+    return () => listener?.subscription?.unsubscribe?.();
+  }, []);
+
+  useEffect(() => {
+    if (!signedIn) {
+      setEntitlement(null);
+      return undefined;
+    }
     load();
     return subscribeEntitlement(load);
-  }, [load]);
+  }, [signedIn, load]);
 
-  if (!entitlement) return null;
+  if (!signedIn || !entitlement) return null;
   const n = entitlement.creditsRemaining ?? 0;
   const label = entitlement.isAdmin ? 'Unlimited' : `${n} credit${n === 1 ? '' : 's'}`;
 
