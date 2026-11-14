@@ -1490,3 +1490,88 @@ describe('round 2', () => {
     expect(STORY_RPCS.story_oauth_use_access_token).toBe('set');
   });
 });
+
+// ============================================================ fix round 3
+
+describe('round 3', () => {
+  it('1: a busy grant cannot push a quiet one off Connected apps, and the quiet one can be disconnected', async () => {
+    await oauth.revokeTokensForUser(ALICE.id);
+    const quiet = await newGrant();
+    const busy = await newGrant();
+    const busyRow = await tokenRow(busy.tokens.access_token);
+    await raw.query(
+      `insert into story_oauth_tokens (family_id, code_id, client_id, user_id, scope, resource, redirect_uri, family_created_at,
+         access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, family_expires_at, rotated_at, created_at)
+       select family_id, code_id, client_id, user_id, scope, resource, redirect_uri, family_created_at,
+              'busy-a' || g, now(), 'busy-r' || g, now() + interval '20 days', family_expires_at, now(), now() + make_interval(secs => g)
+         from story_oauth_tokens, generate_series(1, 1200) g where id = $1`,
+      [busyRow.id]
+    );
+    const list = await call(connectionsHandler, { method: 'GET' });
+    expect(list.body.connections.map((c) => c.clientId).sort()).toEqual([quiet.client.client_id, busy.client.client_id].sort());
+    const off = await call(connectionsHandler, { method: 'POST', body: { client_id: quiet.client.client_id }, headers: { ...JSON_CT, origin: ISSUER } });
+    expect(off.statusCode).toBe(200);
+    await expect(oauth.verifyAccessToken(bearer(quiet.tokens.access_token))).rejects.toMatchObject({ status: 401 });
+    expect((await call(connectionsHandler, { method: 'GET' })).body.connections.map((c) => c.clientId)).toEqual([busy.client.client_id]);
+    await raw.query(`delete from story_oauth_tokens where access_token_hash like 'busy-a%'`);
+  });
+
+  it('2: first use is stamped only on a currently valid pair', async () => {
+    const revoked = await newGrant();
+    await raw.query(`update story_oauth_tokens set revoked_at = now() where access_token_hash = $1`, [hash(revoked.tokens.access_token)]);
+    await expect(oauth.verifyAccessToken(bearer(revoked.tokens.access_token))).rejects.toMatchObject({ status: 401 });
+    expect((await tokenRow(revoked.tokens.access_token)).access_used_at).toBeNull();
+    const expired = await newGrant();
+    await raw.query(`update story_oauth_tokens set access_expires_at = now() - interval '1 second' where access_token_hash = $1`, [hash(expired.tokens.access_token)]);
+    await expect(oauth.verifyAccessToken(bearer(expired.tokens.access_token))).rejects.toMatchObject({ status: 401 });
+    expect((await tokenRow(expired.tokens.access_token)).access_used_at).toBeNull();
+  });
+
+  describe('3: cached metadata documents at the token endpoint', () => {
+    const CIMD_URL = 'https://claude.ai/oauth/claude-code-client-metadata';
+    const DOC = { client_id: CIMD_URL, client_name: 'Claude Code', redirect_uris: ['http://localhost/callback'], token_endpoint_auth_method: 'none' };
+    beforeEach(async () => {
+      await raw.query(`delete from story_oauth_clients where kind = 'metadata_document'`);
+      await raw.query('delete from story_oauth_cimd_failures');
+      await raw.query('delete from story_oauth_rate_limits');
+      dnsAnswers.set('claude.ai', ['160.79.104.10']);
+      net.fetchMock = vi.fn(async () => new Response(JSON.stringify(DOC), { status: 200 }));
+    });
+    const expire = () =>
+      raw.query(`update story_oauth_clients set metadata_fetched_at = now() - interval '1 day', metadata_expires_at = now() - interval '1 minute' where client_id = $1`, [CIMD_URL]);
+
+    it('a transient refetch failure within 30 days still serves the stale row, so refresh succeeds', async () => {
+      const { verifier, challenge } = pkce();
+      const { result } = await consent(authorizeQuery(CIMD_URL, challenge, { redirect_uri: 'http://localhost:4000/callback' }));
+      const code = new URL((await decide(result.props.requestToken)).location).searchParams.get('code');
+      const tok = await exchange({
+        grant_type: 'authorization_code', code, code_verifier: verifier,
+        redirect_uri: 'http://localhost:4000/callback', client_id: CIMD_URL, resource: RESOURCE,
+      });
+      expect(tok.statusCode).toBe(200);
+      await expire();
+      net.fetchMock.mockRejectedValue(new Error('temporarily down'));
+      const res = await exchange({ grant_type: 'refresh_token', refresh_token: tok.body.refresh_token, client_id: CIMD_URL });
+      expect(res.statusCode).toBe(200);
+      expect(net.fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it('concurrent requests at cache expiry share one fetch (single-flight)', async () => {
+      await consent(authorizeQuery(CIMD_URL, pkce().challenge, { redirect_uri: 'http://localhost:4000/callback' }));
+      await expire();
+      net.fetchMock.mockClear();
+      let release;
+      const gate = new Promise((r) => { release = r; });
+      net.fetchMock.mockImplementation(async () => {
+        await gate;
+        return new Response(JSON.stringify(DOC), { status: 200 });
+      });
+      const loads = Array.from({ length: 5 }, () => clients.loadClient(CIMD_URL, { refetchKnown: true, ip: '203.0.113.9' }));
+      await new Promise((r) => setTimeout(r, 20));
+      release();
+      const rows = await Promise.all(loads);
+      expect(rows.every((r) => r.client_id === CIMD_URL)).toBe(true);
+      expect(net.fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+});

@@ -351,7 +351,8 @@ end
 $$;
 
 -- Looks up an access token by hash for verifyAccessToken and marks its
--- first use, in one statement: the conditional update takes the row lock,
+-- first use (only while the pair is valid: not revoked, not expired), in
+-- one statement: the conditional update takes the row lock,
 -- so it serializes with story_oauth_rotate_refresh's lock on a successor
 -- (either the use is marked first and the grace window is closed, or the
 -- grace retry revoked the pair first and the returned row shows it).
@@ -366,6 +367,7 @@ begin
   return query
     update story_oauth_tokens t set access_used_at = now()
      where t.access_token_hash = p_access_hash and t.access_used_at is null
+       and t.revoked_at is null and t.access_expires_at > now()
     returning *;
   if not found then
     return query select * from story_oauth_tokens t where t.access_token_hash = p_access_hash;
