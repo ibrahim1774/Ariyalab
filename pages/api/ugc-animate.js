@@ -88,8 +88,8 @@ export default async function handler(req, res) {
   }
 
   // Content moderation: pre-filter prompts + image BEFORE charging.
-  // Fail-closed for any thrown ModerationError; fail-open for transient
-  // classifier errors (logged in lib/moderation.js).
+  // Fail-closed: a thrown ModerationError blocks, including when the
+  // classifier is unavailable (reason 'unavailable', returned as 503).
   try {
     const textsToScreen = [
       script || '',
