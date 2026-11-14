@@ -28,7 +28,7 @@ export default function AppHome() {
 
   return (
     <>
-      <Head><title>Projects — Ariya Lab</title></Head>
+      <Head><title>Projects | Ariya Lab</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>
@@ -43,7 +43,7 @@ export default function AppHome() {
         ) : projects.length === 0 ? (
           <Card className={styles.empty}>
             <h2>No videos yet</h2>
-            <p>Start with an idea or a reference video and we will turn it into a finished animated story.</p>
+            <p>Start with an idea or a reference video and build it into an animated story.</p>
             <Button href="/app/new">New video</Button>
           </Card>
         ) : (

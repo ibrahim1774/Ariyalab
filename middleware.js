@@ -126,7 +126,8 @@ export async function middleware(req) {
       }
       if (!enabled) {
         const redirect = req.nextUrl.clone();
-        redirect.pathname = '/app/tools';
+        // Signed-out visitors go to the homepage; signed-in non-admins to the tools list.
+        redirect.pathname = user ? '/app/tools' : '/';
         redirect.search = '';
         return NextResponse.redirect(redirect);
       }

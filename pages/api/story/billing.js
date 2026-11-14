@@ -2,8 +2,23 @@ import { getUserFromRequest, getSupabaseAdmin } from '../../../lib/supabaseServe
 import { getEntitlement } from '../../../lib/entitlement.js';
 import { getBalance } from '../../../lib/credits.js';
 import { isBillingV2 } from '../../../lib/billingFlags.js';
+import { PLANS, TOPUPS } from '../../../lib/stripe.js';
 
 const HISTORY_LIMIT = 50;
+
+// What the existing /api/checkout actually sells today (lib/stripe.js), for the
+// page to show while billing v2 is off.
+function legacyOffers() {
+  const plans = {};
+  for (const [key, p] of Object.entries(PLANS)) {
+    plans[key] = { usd: p.amountCents / 100, credits: p.cap, interval: p.interval };
+  }
+  const topups = {};
+  for (const [key, t] of Object.entries(TOPUPS)) {
+    if (t.kind === 'video') topups[key] = { usd: t.amountCents / 100, credits: t.credits };
+  }
+  return { plans, topups };
+}
 
 /*
  * GET /api/story/billing -> { v2, balance, history }
@@ -28,6 +43,7 @@ export default async function handler(req, res) {
         v2: false,
         balance: { plan: null, topup: null, held: 0, available: ent?.creditsRemaining ?? 0 },
         history: [],
+        offers: legacyOffers(),
       });
     }
 
@@ -43,6 +59,7 @@ export default async function handler(req, res) {
     if (error) throw error;
     return res.status(200).json({ v2: true, balance, history: data || [] });
   } catch (err) {
-    return res.status(500).json({ error: err.message || 'Could not load billing.' });
+    console.error('[api/story/billing]', err);
+    return res.status(500).json({ error: 'Could not load billing.' });
   }
 }

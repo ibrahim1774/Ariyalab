@@ -12,6 +12,11 @@ const REASON_LABELS = {
   'project-fee': 'Project setup',
   refund: 'Refund adjustment',
   clawback: 'Refund adjustment',
+  clawback_deferred: 'Refund adjustment',
+  plan_expiry: 'Unused credits expired',
+  settle: 'Video shot',
+  release: 'Released',
+  hold_release: 'Released',
 };
 
 export function reasonLabel(reason) {
@@ -37,14 +42,27 @@ export default function BillingPage() {
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/story/billing')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive) setBilling(d || { v2: false, balance: { available: 0 }, history: [] }); })
-      .catch(() => { if (alive) setBilling({ v2: false, balance: { available: 0 }, history: [] }); });
-    fetch('/api/story/pricing')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => { if (alive && d) setOffers(d); })
-      .catch(() => {});
+    const empty = { v2: false, balance: { available: 0 }, history: [], offers: null };
+    (async () => {
+      let data = empty;
+      try {
+        const r = await fetch('/api/story/billing');
+        if (r.ok) data = await r.json();
+      } catch {}
+      if (!alive) return;
+      setBilling(data);
+      if (data.v2) {
+        try {
+          const r = await fetch('/api/story/pricing');
+          if (r.ok) {
+            const p = await r.json();
+            if (alive) setOffers({ plans: p.plans, topups: p.topups });
+          }
+        } catch {}
+      } else if (data.offers) {
+        setOffers(data.offers);
+      }
+    })();
     return () => { alive = false; };
   }, []);
 
@@ -59,7 +77,7 @@ export default function BillingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...body, returnTo: '/app/billing' }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.url) throw new Error(data.error || 'Could not start checkout.');
       window.location.href = data.url;
     } catch (err) {
@@ -72,7 +90,7 @@ export default function BillingPage() {
 
   return (
     <>
-      <Head><title>Billing — Ariya Lab</title></Head>
+      <Head><title>Billing | Ariya Lab</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>
@@ -123,8 +141,8 @@ export default function BillingPage() {
                 {Object.entries(offers.plans).map(([key, p]) => (
                   <Card key={key} className={styles.offer}>
                     <span className={styles.offerName}>{key}</span>
-                    <span className={styles.offerPrice}>{money(p.usd)}<small>/mo</small></span>
-                    <span className={styles.offerCredits}>{count(p.credits)} credits every month</span>
+                    <span className={styles.offerPrice}>{money(p.usd)}<small>{p.interval === 'year' ? '/yr' : '/mo'}</small></span>
+                    <span className={styles.offerCredits}>{count(p.credits)} credits every {p.interval === 'year' ? 'year' : 'month'}</span>
                     <Button onClick={() => checkout(`plan-${key}`, { plan: key })} disabled={busy !== null}>
                       {busy === `plan-${key}` ? 'Redirecting…' : 'Choose plan'}
                     </Button>

@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, waitFor, fireEvent } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
 import AppHome from '../../pages/app/index';
 import BillingPage, { reasonLabel } from '../../pages/app/billing';
+import { PLANS, TOPUPS } from '../../lib/stripe';
+import { PLANS_V2, TOPUPS_V2 } from '../../lib/pricing';
 import ProjectCard, { projectStatus } from '../../components/app/ProjectCard';
 
 vi.mock('next/router', () => ({ useRouter: () => ({ pathname: '/app', asPath: '/app' }) }));
@@ -55,7 +57,7 @@ describe('ProjectCard', () => {
 
 describe('/app/billing', () => {
   const offers = {
-    '/api/story/pricing': { body: { plans: { starter: { usd: 29, credits: 1500 } }, topups: { s: { usd: 15, credits: 700 } }, yearlyDiscount: 0.2 } },
+    '/api/story/pricing': { body: { plans: PLANS_V2, topups: TOPUPS_V2, yearlyDiscount: 0.2 } },
   };
 
   it('shows the plan, top-up and held split in v2 mode, with plain ledger labels', async () => {
@@ -75,7 +77,7 @@ describe('/app/billing', () => {
     expect(screen.getByTestId('balance-held')).toHaveTextContent('90');
     expect(screen.queryByTestId('balance-single')).toBeNull();
     expect(screen.getByText('Monthly credits')).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByRole('button', { name: /choose plan/i })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getAllByRole('button', { name: /choose plan/i })).toHaveLength(Object.keys(PLANS_V2).length));
   });
 
   it('shows a single Credits number when billing v2 is off', async () => {
@@ -94,5 +96,53 @@ describe('/app/billing', () => {
     expect(reasonLabel('clip')).toBe('Video shot');
     expect(reasonLabel('clawback')).toBe('Refund adjustment');
     expect(reasonLabel('narration_regen')).toBe('Narration regen');
+  });
+
+  it('v2 mode shows the v2 plan and top-up amounts from lib/pricing', async () => {
+    stubFetch({
+      ...offers,
+      '/api/story/billing': { body: { v2: true, balance: { plan: 1, topup: 1, held: 0, available: 2 }, history: [] } },
+    });
+    render(<BillingPage />);
+    await screen.findByText('Plans');
+    for (const p of Object.values(PLANS_V2)) {
+      expect(screen.getByText(`${p.credits.toLocaleString()} credits every month`)).toBeInTheDocument();
+    }
+    for (const t of Object.values(TOPUPS_V2)) {
+      expect(screen.getByText(`${t.credits.toLocaleString()} credits, no expiry`)).toBeInTheDocument();
+    }
+  });
+
+  it('legacy mode shows the legacy plans and packs with their real credit counts', async () => {
+    const legacy = {
+      plans: Object.fromEntries(Object.entries(PLANS).map(([k, p]) => [k, { usd: p.amountCents / 100, credits: p.cap, interval: p.interval }])),
+      topups: Object.fromEntries(Object.entries(TOPUPS).filter(([, t]) => t.kind === 'video').map(([k, t]) => [k, { usd: t.amountCents / 100, credits: t.credits }])),
+    };
+    stubFetch({
+      '/api/story/billing': { body: { v2: false, balance: { plan: null, topup: null, held: 0, available: 9 }, history: [], offers: legacy } },
+    });
+    render(<BillingPage />);
+    await screen.findByText('Plans');
+    for (const p of Object.values(PLANS)) {
+      const per = p.interval === 'year' ? 'year' : 'month';
+      expect(screen.getByText(`${p.cap.toLocaleString()} credits every ${per}`)).toBeInTheDocument();
+    }
+    for (const t of Object.values(TOPUPS).filter((x) => x.kind === 'video')) {
+      expect(screen.getByText(`${t.credits.toLocaleString()} credits, no expiry`)).toBeInTheDocument();
+    }
+    expect(screen.queryByText('700 credits, no expiry')).toBeNull();
+  });
+
+  it('sends the legacy plan key to /api/checkout in legacy mode', async () => {
+    const legacy = { plans: { monthly: { usd: 5, credits: 760, interval: 'month' } }, topups: {} };
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (url === '/api/checkout') { calls.push(JSON.parse(init.body)); return { ok: false, status: 400, json: async () => { throw new Error('not json'); } }; }
+      return { ok: true, json: async () => ({ v2: false, balance: { available: 1 }, history: [], offers: legacy }) };
+    }));
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /choose plan/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Could not start checkout.');
+    expect(calls[0]).toMatchObject({ plan: 'monthly', returnTo: '/app/billing' });
   });
 });

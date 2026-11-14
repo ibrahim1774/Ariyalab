@@ -3,14 +3,14 @@ import { useState } from 'react';
 import { useRouter } from 'next/router';
 
 import AuthModal from '../../components/AuthModal';
+import { safeReturnTo } from '../../lib/safeReturnTo';
 
 export default function SignInPage() {
   const [open] = useState(true);
   const router = useRouter();
   // After sign-in go back to where the visitor was headed, else the app.
   // Same-origin paths only, so this can never be an open redirect.
-  const rawReturnTo = typeof router.query.returnTo === 'string' ? router.query.returnTo : '';
-  const returnTo = rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '/app';
+  const returnTo = safeReturnTo(router.query.returnTo, '/app');
   return (
     <>
       <Head>

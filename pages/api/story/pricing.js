@@ -11,6 +11,7 @@ export default async function handler(req, res) {
     res.setHeader('Cache-Control', 'public, max-age=60');
     return res.status(200).json({ pricing, plans: PLANS_V2, topups: TOPUPS_V2, yearlyDiscount: YEARLY_DISCOUNT });
   } catch (err) {
-    return res.status(500).json({ error: err.message || 'Could not load pricing.' });
+    console.error('[api/story/pricing]', err);
+    return res.status(500).json({ error: 'Could not load pricing.' });
   }
 }

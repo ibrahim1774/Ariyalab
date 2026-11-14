@@ -1,4 +1,5 @@
 import { createSupabaseServer } from '../../../lib/supabaseServer';
+import { safeReturnTo } from '../../../lib/safeReturnTo';
 
 /*
  * Google OAuth redirect handler. Supabase redirects back here with
@@ -18,8 +19,6 @@ export default async function handler(req, res) {
     }
   }
 
-  const next = typeof req.query.next === 'string' && req.query.next.startsWith('/')
-    ? req.query.next
-    : '/';
+  const next = safeReturnTo(req.query.next, '/');
   return res.redirect(302, next);
 }

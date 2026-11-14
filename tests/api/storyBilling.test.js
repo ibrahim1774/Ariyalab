@@ -28,6 +28,7 @@ vi.mock('../../lib/billingFlags.js', () => ({ isBillingV2: async () => v2 }));
 vi.mock('../../lib/credits.js', () => ({ getBalance: async () => ({ plan: 100, topup: 40, held: 10, available: 130 }) }));
 vi.mock('../../lib/entitlement.js', () => ({ getEntitlement: async () => ({ creditsRemaining: 7 }) }));
 
+import { PLANS, TOPUPS } from '../../lib/stripe.js';
 const handler = (await import('../../pages/api/story/billing.js')).default;
 
 const row = (over) => ({ user_id: 'u1', currency: 'video', delta: 5, reason: 'topup', balance_after: 5, created_at: '2026-11-01T00:00:00Z', ...over });
@@ -75,6 +76,13 @@ describe('GET /api/story/billing', () => {
     rows = [row()];
     const res = makeRes();
     await handler(makeReq({ method: 'GET' }), res);
-    expect(res.body).toEqual({ v2: false, balance: { plan: null, topup: null, held: 0, available: 7 }, history: [] });
+    expect(res.body).toMatchObject({ v2: false, balance: { plan: null, topup: null, held: 0, available: 7 }, history: [] });
+    for (const [k, p] of Object.entries(PLANS)) {
+      expect(res.body.offers.plans[k]).toEqual({ usd: p.amountCents / 100, credits: p.cap, interval: p.interval });
+    }
+    for (const [k, t] of Object.entries(TOPUPS).filter(([, x]) => x.kind === 'video')) {
+      expect(res.body.offers.topups[k]).toEqual({ usd: t.amountCents / 100, credits: t.credits });
+    }
+    expect(Object.keys(res.body.offers.topups).sort()).toEqual(['l', 'm', 's']);
   });
 });

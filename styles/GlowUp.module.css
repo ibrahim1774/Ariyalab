@@ -314,7 +314,8 @@
 }
 
 .cta:disabled {
-  opacity: 0.38;
+  background: var(--surface-2);
+  color: var(--text-dim);
   cursor: not-allowed;
   box-shadow: none;
 }

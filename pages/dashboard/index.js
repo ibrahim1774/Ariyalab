@@ -8,6 +8,7 @@ import TopupRow from '../../components/TopupRow';
 import { getBrowserSupabase } from '../../lib/supabase';
 import { log } from '../../lib/debugLog';
 import { META_PRODUCT } from '../../components/MetaPixel';
+import { safeReturnTo } from '../../lib/safeReturnTo';
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -56,10 +57,7 @@ export default function DashboardPage() {
       const returnToRaw = params.get('returnTo');
       // Same-origin guard: only honor returnTo values that look like
       // relative paths starting with a single /.
-      const returnTo =
-        returnToRaw && returnToRaw.startsWith('/') && !returnToRaw.startsWith('//')
-          ? returnToRaw
-          : null;
+      const returnTo = safeReturnTo(returnToRaw, '');
 
       // The dashboard now lives at /app. This page only stays to finalize a
       // Stripe checkout (success_url points here); everything else moves on.

@@ -1071,7 +1071,7 @@ export default function RealEstatePage() {
                   style={{
                     padding: '9px 20px',
                     borderRadius: 999,
-                    border: active ? '1px solid transparent' : '1px solid transparent',
+                    border: '1px solid transparent',
                     background: active ? 'var(--accent)' : 'transparent',
                     color: active ? '#fff' : 'var(--text-dim)',
                     fontFamily: 'var(--font-body)',

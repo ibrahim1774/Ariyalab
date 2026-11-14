@@ -154,7 +154,7 @@ const pillStyle = {
   textAlign: 'center',
 };
 const pillActiveStyle = {
-  borderColor: 'rgba(22, 19, 15, 0.2)',
-  background: 'rgba(22, 19, 15, 0.06)',
+  borderColor: 'var(--accent)',
+  background: 'var(--accent-tint)',
   fontWeight: 600,
 };

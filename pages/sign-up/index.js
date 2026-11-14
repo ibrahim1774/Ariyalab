@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/router';
 
 import AuthModal from '../../components/AuthModal';
+import { safeReturnTo as safeReturnToPath } from '../../lib/safeReturnTo';
 
 /*
  * Two flows live on /sign-up:
@@ -58,8 +59,7 @@ export default function SignUpPage() {
   // When absent, success goes to /app and closing the modal goes home.
   const rawReturnTo =
     typeof router.query.returnTo === 'string' ? router.query.returnTo : '';
-  const safeReturnTo =
-    rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
+  const safeReturnTo = safeReturnToPath(rawReturnTo, '');
 
   return (
     <>
@@ -135,7 +135,7 @@ const loadingSpinnerStyle = {
   height: 14,
   borderRadius: '50%',
   border: '2px solid rgba(22, 19, 15, 0.135)',
-  borderTopColor: 'rgba(255,255,255,0.7)',
+  borderTopColor: 'var(--accent)',
   animation: 'spin 0.9s linear infinite',
   flexShrink: 0,
 };

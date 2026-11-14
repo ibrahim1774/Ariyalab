@@ -80,7 +80,7 @@ export default function DurationSlider({
                   borderRadius: 10,
                   border: selected
                     ? '1px solid var(--accent)'
-                    : '1px solid rgba(255,255,255,0.12)',
+                    : '1px solid rgba(22, 19, 15, 0.14)',
                   background: selected ? 'var(--accent)' : 'var(--surface)',
                   color: selected ? '#fff' : 'var(--text)',
                   fontFamily: 'inherit',

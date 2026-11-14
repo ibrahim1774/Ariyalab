@@ -26,7 +26,7 @@ export default function ToolsPage() {
 
   return (
     <>
-      <Head><title>More tools — Ariya Lab</title></Head>
+      <Head><title>More tools | Ariya Lab</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>
