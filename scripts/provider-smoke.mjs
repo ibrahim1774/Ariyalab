@@ -14,7 +14,8 @@
  *   music                Lyria 30 s clip; writes /tmp/smoke-music.mp3
  *   stt                  transcribes tests/fixtures/voice.mp3 (Groq, else Replicate)
  *   fetch <postUrl>      downloads a public Instagram/TikTok/Facebook video
- *   storage              putObject + deleteObject of a tiny text file
+ *   storage [publicUrl]  putObject + deleteObject of a tiny text file; with a
+ *                        public media URL also mirrorUrl (streamed upload) + delete
  *
  * A missing key prints the ProviderError 'config' message naming the variable.
  */
@@ -118,13 +119,19 @@ const RUNNERS = {
     const { fetchReference } = await lib('fetchVideo');
     console.log(await fetchReference(url));
   },
-  async storage() {
-    const { putObject, deleteObject, storageBackend } = await lib('storage');
+  async storage(srcUrl) {
+    const { putObject, mirrorUrl, deleteObject, storageBackend } = await lib('storage');
     const key = `smoke/${Date.now()}.txt`;
     console.log('backend', storageBackend());
     const put = await putObject({ key, body: 'smoke test', contentType: 'text/plain' });
     console.log('put', put);
     console.log('deleted', await deleteObject({ key: put.key }));
+    if (srcUrl) {
+      const ext = path.extname(new URL(srcUrl).pathname) || '.bin';
+      const mirrored = await mirrorUrl({ srcUrl, key: `smoke/${Date.now()}-mirror${ext}` });
+      console.log('mirrored', mirrored, '(open the url to check it plays)');
+      console.log('deleted', await deleteObject({ key: mirrored.key }));
+    }
   },
 };
 

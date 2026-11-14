@@ -157,6 +157,32 @@ describe('mirrorUrl SSRF guard', () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it('refuses a redirect to a private address without fetching it', async () => {
+    realMode({ BLOB_READ_WRITE_TOKEN: 't' });
+    const fetchSpy = vi.fn(async () => new Response(null, {
+      status: 302, headers: { location: 'http://127.0.0.1/x.mp4' },
+    }));
+    vi.stubGlobal('fetch', fetchSpy);
+    await expect(mirrorUrl({ srcUrl: 'https://cdn.example.com/x.mp4', key: 'x.mp4' })).rejects.toMatchObject({ code: 'failed' });
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(blob.put).toHaveLength(0);
+  });
+
+  it('follows a public redirect and drops auth headers across origins', async () => {
+    const { downloadToFile } = await import('../../lib/providers/http.js');
+    const calls = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      calls.push({ url, init });
+      if (calls.length === 1) return new Response(null, { status: 302, headers: { location: 'https://cdn2.example.com/y.mp4' } });
+      return new Response('ok', { status: 200 });
+    }));
+    const out = await downloadToFile('https://api.example.com/y', { headers: { Authorization: 'Bearer secret' } });
+    expect(readFileSync(out.filePath, 'utf8')).toBe('ok');
+    expect(calls[0].init.headers).toEqual({ Authorization: 'Bearer secret' });
+    expect(calls[1].url).toBe('https://cdn2.example.com/y.mp4');
+    expect(calls[1].init.headers).toBeUndefined();
+  });
+
   it('streams a public file into storage', async () => {
     realMode({ BLOB_READ_WRITE_TOKEN: 't' });
     vi.stubGlobal('fetch', vi.fn(async () => new Response(Buffer.from('video-bytes'), {

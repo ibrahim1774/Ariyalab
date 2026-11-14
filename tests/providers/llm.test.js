@@ -26,7 +26,7 @@ vi.mock('@anthropic-ai/sdk', () => {
 import Anthropic from '@anthropic-ai/sdk';
 import { chatWithTools, completeJSON } from '../../lib/providers/llm.js';
 import { MODEL_IDS } from '../../lib/providers/config.js';
-import { _resetMocks, registerMock } from '../../lib/providers/mock.js';
+import { _resetMocks, registerMock, unregisterMock } from '../../lib/providers/mock.js';
 
 const schema = {
   type: 'object',
@@ -171,6 +171,18 @@ describe('chatWithTools', () => {
       onToolCall: async () => { throw new Error('scene not found'); },
     });
     expect(messages[2].content[0]).toMatchObject({ tool_use_id: 'tu_9', is_error: true, content: 'scene not found' });
+  });
+
+  it('passes onToolCall to a registered chatWithTools mock', async () => {
+    registerMock('chatWithTools', async ({ messages, onToolCall }) => {
+      const result = await onToolCall({ name: 'update_scene', input: { id: 's2' }, id: 'mock_tu_1' });
+      return { messages: [...messages, { role: 'assistant', content: [{ type: 'text', text: JSON.stringify(result) }] }] };
+    });
+    const onToolCall = vi.fn(async () => ({ ok: true }));
+    const { messages } = await chatWithTools({ tools, messages: [{ role: 'user', content: 'edit' }], onToolCall });
+    expect(onToolCall).toHaveBeenCalledWith({ name: 'update_scene', input: { id: 's2' }, id: 'mock_tu_1' });
+    expect(messages[1].content[0].text).toBe('{"ok":true}');
+    unregisterMock('chatWithTools');
   });
 
   it('returns a deterministic reply in mock mode', async () => {
