@@ -3,7 +3,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 
-vi.mock('next/router', () => ({ useRouter: () => ({ pathname: '/app/connections', asPath: '/app/connections' }) }));
+const router = vi.hoisted(() => ({ pathname: '/app/connections', asPath: '/app/connections', replace: null }));
+vi.mock('next/router', () => ({ useRouter: () => router }));
 
 const ConnectionsPage = (await import('../../pages/app/connections.js')).default;
 const AppShell = (await import('../../components/app/AppShell.js')).default;
@@ -44,6 +45,26 @@ describe('/app/connections', () => {
     vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ connections: [] }) })));
     render(<ConnectionsPage />);
     expect(await screen.findByText(/No apps are connected/)).toBeInTheDocument();
+  });
+
+  it('a failed load shows a retryable error, not the empty state', async () => {
+    let fail = true;
+    vi.stubGlobal('fetch', vi.fn(async () => (fail
+      ? { ok: false, status: 500, json: async () => ({}) }
+      : { ok: true, status: 200, json: async () => ({ connections: [] }) })));
+    render(<ConnectionsPage />);
+    expect(await screen.findByText(/could not load your connected apps/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No apps are connected/)).not.toBeInTheDocument();
+    fail = false;
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    expect(await screen.findByText(/No apps are connected/)).toBeInTheDocument();
+  });
+
+  it('a signed-out load goes to sign-in and back', async () => {
+    router.replace = vi.fn();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 401, json: async () => ({}) })));
+    render(<ConnectionsPage />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/sign-in?returnTo=%2Fapp%2Fconnections'));
   });
 
   it('the sidebar has a Connected apps item', () => {

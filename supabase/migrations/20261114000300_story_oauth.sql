@@ -2,6 +2,10 @@
 -- connector (spec 7.7, Task 25). lib/mcp/oauth.js is the only reader and
 -- writer.
 --
+-- This file replaces any earlier draft of itself (an earlier draft named
+-- the rate-limit table story_oauth_registrations). It was never applied to
+-- a hosted database before this version.
+--
 -- BEFORE APPLYING ON THE SHARED SUPABASE PROJECT, run:
 --   select tablename from pg_tables where schemaname = 'public' and tablename like 'story\_oauth\_%';
 --   select proname from pg_proc
@@ -43,6 +47,12 @@ create table public.story_oauth_clients (
   -- max-age clamped to 5 minutes .. 24 hours). A failed refetch keeps
   -- serving the cached row.
   metadata_expires_at timestamptz,
+  -- The document URL answered 404 or 410: the client is withdrawn (no
+  -- longer honoured) until a later fetch succeeds.
+  metadata_withdrawn_at timestamptz,
+  -- The latest end (family_expires_at) of any grant this client got. The
+  -- sweep keeps the client until 90 days after it.
+  last_grant_ends_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -112,6 +122,10 @@ create table public.story_oauth_tokens (
   user_id uuid not null,
   scope text not null,
   resource text not null,
+  -- The redirect URI used at authorization (names the grant on the
+  -- Connected apps page) and when that authorization happened.
+  redirect_uri text not null,
+  family_created_at timestamptz not null,
   access_token_hash text not null unique,
   access_expires_at timestamptz not null,
   refresh_token_hash text not null unique,
@@ -231,13 +245,16 @@ begin
   end if;
   return query
     insert into story_oauth_tokens (
-      family_id, code_id, client_id, user_id, scope, resource,
+      family_id, code_id, client_id, user_id, scope, resource, redirect_uri, family_created_at,
       access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, family_expires_at
     ) values (
-      v.id, v.id, v.client_id, v.user_id, v.scope, v.resource,
+      v.id, v.id, v.client_id, v.user_id, v.scope, v.resource, v.redirect_uri, now(),
       p_access_hash, least(p_access_expires, v_family_end), p_refresh_hash, least(p_refresh_expires, v_family_end), v_family_end
     )
     returning *;
+  update story_oauth_clients k
+     set last_grant_ends_at = greatest(coalesce(k.last_grant_ends_at, v_family_end), v_family_end)
+   where k.client_id = v.client_id;
 end
 $$;
 
@@ -320,16 +337,39 @@ begin
     update story_oauth_tokens t set revoked_at = now() where t.id = s.id;
   end if;
   insert into story_oauth_tokens (
-    family_id, code_id, client_id, user_id, scope, resource,
+    family_id, code_id, client_id, user_id, scope, resource, redirect_uri, family_created_at,
     access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, family_expires_at
   ) values (
-    v.family_id, v.code_id, v.client_id, v.user_id, v.scope, v.resource,
+    v.family_id, v.code_id, v.client_id, v.user_id, v.scope, v.resource, v.redirect_uri, v.family_created_at,
     p_access_hash, least(p_access_expires, v.family_expires_at),
     p_new_refresh_hash, least(p_refresh_expires, v.family_expires_at), v.family_expires_at
   )
   returning id into v_new;
   update story_oauth_tokens t set rotated_at = coalesce(t.rotated_at, now()), replaced_by = v_new where t.id = v.id;
   return query select 'ok'::text, v_new, v.user_id, v.scope, v.resource;
+end
+$$;
+
+-- Looks up an access token by hash for verifyAccessToken and marks its
+-- first use, in one statement: the conditional update takes the row lock,
+-- so it serializes with story_oauth_rotate_refresh's lock on a successor
+-- (either the use is marked first and the grace window is closed, or the
+-- grace retry revoked the pair first and the returned row shows it).
+-- Returns the row (marked or not), or no row for an unknown hash.
+create function public.story_oauth_use_access_token(p_access_hash text)
+returns setof public.story_oauth_tokens
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  return query
+    update story_oauth_tokens t set access_used_at = now()
+     where t.access_token_hash = p_access_hash and t.access_used_at is null
+    returning *;
+  if not found then
+    return query select * from story_oauth_tokens t where t.access_token_hash = p_access_hash;
+  end if;
 end
 $$;
 
@@ -362,12 +402,13 @@ $$;
 
 -- Daily sweep (pages/api/cron/oauth-cleanup.js). Deletes:
 --   consent requests and codes a day past expiry;
---   token pairs revoked more than a day ago, pairs whose refresh token or
---   family ended more than a day ago, and rotated pairs a week after
---   rotation once their access token expired (after that, presenting such
---   a refresh token is plain invalid_grant, not reuse detection);
+--   token pairs revoked more than a day ago, and pairs whose refresh token
+--   or family ended more than a day ago (rotated pairs of a live family are
+--   kept, so presenting an old rotated refresh token still revokes the
+--   family, however long the real client was away);
 --   rate-limit rows older than yesterday and expired fetch failures;
---   clients older than 7 days with no consent request, code or token left.
+--   clients older than 7 days with no consent request, code or token left
+--   whose last grant (if any) ended more than 90 days ago.
 -- Returns the counts as jsonb.
 create function public.story_oauth_cleanup()
 returns jsonb
@@ -390,8 +431,7 @@ begin
   delete from story_oauth_tokens t
    where t.revoked_at < now() - interval '1 day'
       or t.refresh_expires_at < now() - interval '1 day'
-      or t.family_expires_at < now() - interval '1 day'
-      or (t.rotated_at < now() - interval '7 days' and t.access_expires_at < now());
+      or t.family_expires_at < now() - interval '1 day';
   get diagnostics n_tokens = row_count;
   delete from story_oauth_rate_limits l where l.day < current_date - 1;
   get diagnostics n_limits = row_count;
@@ -399,6 +439,7 @@ begin
   get diagnostics n_failures = row_count;
   delete from story_oauth_clients c
    where c.created_at < now() - interval '7 days'
+     and (c.last_grant_ends_at is null or c.last_grant_ends_at < now() - interval '90 days')
      and not exists (select 1 from story_oauth_tokens t where t.client_id = c.client_id)
      and not exists (select 1 from story_oauth_codes k where k.client_id = c.client_id)
      and not exists (select 1 from story_oauth_requests r where r.client_id = c.client_id);
@@ -428,7 +469,7 @@ begin
       where n.nspname = 'public'
         and p.proname = any (array[
           'story_oauth_take_code', 'story_oauth_issue_code_tokens', 'story_oauth_rotate_refresh',
-          'story_oauth_rate_take', 'story_oauth_cleanup'
+          'story_oauth_rate_take', 'story_oauth_cleanup', 'story_oauth_use_access_token'
         ])
   loop
     execute format('revoke all on function %s from public', fn);

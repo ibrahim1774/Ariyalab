@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
@@ -16,21 +17,30 @@ function formatDate(value) {
  * their account through the MCP connector, with a Disconnect button for each.
  * Reads and writes /api/oauth/connections. Rendered inside AppShell by _app.
  */
+const LOAD_ERROR = 'We could not load your connected apps. Please try again.';
+
 export default function ConnectionsPage() {
+  const router = useRouter();
   const [connections, setConnections] = useState(null);
+  const [loadFailed, setLoadFailed] = useState(false);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
+    setLoadFailed(false);
     try {
       const r = await fetch('/api/oauth/connections');
-      const data = r.ok ? await r.json() : { connections: [] };
+      if (r.status === 401) {
+        router.replace(`/sign-in?returnTo=${encodeURIComponent('/app/connections')}`);
+        return;
+      }
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      const data = await r.json();
       setConnections(data.connections || []);
     } catch {
-      setConnections([]);
-      setError('We could not load your connected apps. Please try again.');
+      setLoadFailed(true);
     }
-  }, []);
+  }, [router]);
 
   useEffect(() => {
     load();
@@ -71,7 +81,15 @@ export default function ConnectionsPage() {
           </div>
         </div>
         {error && <p className={styles.error}>{error}</p>}
-        {connections === null ? (
+        {loadFailed ? (
+          <Card className={styles.empty}>
+            <h2>Something went wrong</h2>
+            <p>{LOAD_ERROR}</p>
+            <Button variant="ghost" arrow={false} onClick={load}>
+              Try again
+            </Button>
+          </Card>
+        ) : connections === null ? (
           <p className={styles.note}>Loading your connected apps…</p>
         ) : connections.length === 0 ? (
           <Card className={styles.empty}>

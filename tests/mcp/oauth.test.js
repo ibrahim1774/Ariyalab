@@ -1187,9 +1187,10 @@ describe('I5 limits and cleanup', () => {
     const { client, tokens } = await newGrant();
     const row = await tokenRow(tokens.access_token);
     await raw.query(
-      `insert into story_oauth_tokens (family_id, client_id, user_id, scope, resource, access_token_hash, access_expires_at,
-         refresh_token_hash, refresh_expires_at, family_expires_at, rotated_at)
-       select $1, client_id, user_id, scope, resource, 'fa' || g, now(), 'fr' || g, now(), family_expires_at, now() - interval '1 hour'
+      `insert into story_oauth_tokens (family_id, client_id, user_id, scope, resource, redirect_uri, family_created_at,
+         access_token_hash, access_expires_at, refresh_token_hash, refresh_expires_at, family_expires_at, rotated_at)
+       select $1, client_id, user_id, scope, resource, redirect_uri, family_created_at,
+              'fa' || g, now(), 'fr' || g, now(), family_expires_at, now() - interval '1 hour'
          from story_oauth_tokens, generate_series(1, $2::int) g where id = $3`,
       [row.family_id, oauth.REFRESHES_PER_GRANT_PER_DAY, row.id]
     );
@@ -1327,5 +1328,165 @@ describe('Opus discovery minors', () => {
   it('story_oauth_codes is indexed by user_id', async () => {
     const { rows } = await raw.query(`select indexdef from pg_indexes where tablename = 'story_oauth_codes'`);
     expect(rows.some((r) => /\(user_id\)/.test(r.indexdef))).toBe(true);
+  });
+});
+
+// ============================================================ fix round 2
+
+describe('round 2', () => {
+  const sweep = async () => {
+    vi.stubEnv('CRON_SECRET', 's3cret');
+    const res = await call(cleanupHandler, { method: 'GET', headers: { authorization: 'Bearer s3cret' } });
+    expect(res.statusCode).toBe(200);
+    return res;
+  };
+
+  it('1: the sweep keeps rotated rows of a live grant, so an old token still revokes the family', async () => {
+    const { client, tokens } = await newGrant();
+    const next = await refresh(client, tokens.refresh_token);
+    await oauth.verifyAccessToken(bearer(next.body.access_token));
+    await raw.query(
+      `update story_oauth_tokens set rotated_at = now() - interval '8 days', access_expires_at = now() - interval '8 days',
+              created_at = now() - interval '8 days' where refresh_token_hash = $1`,
+      [hash(tokens.refresh_token)]
+    );
+    await sweep();
+    expect(await tokenRow(tokens.access_token)).toBeTruthy();
+    expect((await refresh(client, tokens.refresh_token)).body.error).toBe('invalid_grant');
+    await expect(oauth.verifyAccessToken(bearer(next.body.access_token))).rejects.toMatchObject({ status: 401 });
+  });
+
+  it('2: first use of an access token is marked once, atomically, in the database', async () => {
+    const { tokens } = await newGrant();
+    await oauth.verifyAccessToken(bearer(tokens.access_token));
+    const first = (await tokenRow(tokens.access_token)).access_used_at;
+    expect(first).toBeTruthy();
+    await oauth.verifyAccessToken(bearer(tokens.access_token));
+    expect((await tokenRow(tokens.access_token)).access_used_at).toEqual(first);
+    const { rows } = await raw.query(`select 1 from pg_proc where proname = 'story_oauth_use_access_token'`);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('3: Connected apps headlines a grant by the redirect URI it actually used', async () => {
+    await oauth.revokeTokensForUser(ALICE.id);
+    const { body: client } = await register({ client_name: 'Claude', redirect_uris: [CLAUDE_CALLBACK, 'https://evil.example/cb'] });
+    const { verifier, challenge } = pkce();
+    const redirect = await authorize(client.client_id, challenge, { redirect_uri: 'https://evil.example/cb' });
+    const tok = await exchange({
+      grant_type: 'authorization_code', code: redirect.searchParams.get('code'), code_verifier: verifier,
+      redirect_uri: 'https://evil.example/cb', client_id: client.client_id, resource: RESOURCE,
+    });
+    expect(tok.statusCode).toBe(200);
+    expect((await tokenRow(tok.body.access_token)).redirect_uri).toBe('https://evil.example/cb');
+    const list = await call(connectionsHandler, { method: 'GET' });
+    expect(list.body.connections).toEqual([expect.objectContaining({ headline: 'evil.example', verified: false })]);
+  });
+
+  it('4: the sweep keeps a client for 90 days after its last grant ended', async () => {
+    const { client, tokens } = await newGrant();
+    expect((await raw.query('select last_grant_ends_at from story_oauth_clients where client_id = $1', [client.client_id])).rows[0].last_grant_ends_at).toBeTruthy();
+    await raw.query(`update story_oauth_tokens set revoked_at = now() - interval '2 days' where access_token_hash = $1`, [hash(tokens.access_token)]);
+    await raw.query(`delete from story_oauth_codes where client_id = $1`, [client.client_id]);
+    await raw.query(`delete from story_oauth_requests where client_id = $1`, [client.client_id]);
+    await raw.query(`update story_oauth_clients set created_at = now() - interval '200 days' where client_id = $1`, [client.client_id]);
+    const exists = async () => (await raw.query('select count(*)::int as n from story_oauth_clients where client_id = $1', [client.client_id])).rows[0].n;
+    await sweep();
+    expect(await exists()).toBe(1);
+    await raw.query(`update story_oauth_clients set last_grant_ends_at = now() - interval '91 days' where client_id = $1`, [client.client_id]);
+    await sweep();
+    expect(await exists()).toBe(0);
+  });
+
+  describe('5: stale metadata documents', () => {
+    const CIMD_URL = 'https://claude.ai/oauth/claude-code-client-metadata';
+    const DOC = {
+      client_id: CIMD_URL, client_name: 'Claude Code', redirect_uris: ['http://localhost/callback'],
+      token_endpoint_auth_method: 'none',
+    };
+    const q = () => authorizeQuery(CIMD_URL, pkce().challenge, { redirect_uri: 'http://localhost:4000/callback' });
+    beforeEach(async () => {
+      await raw.query(`delete from story_oauth_clients where kind = 'metadata_document'`);
+      await raw.query('delete from story_oauth_cimd_failures');
+      await raw.query('delete from story_oauth_rate_limits');
+      dnsAnswers.set('claude.ai', ['160.79.104.10']);
+      net.fetchMock = vi.fn(async () => new Response(JSON.stringify(DOC), { status: 200 }));
+      await consent(q());
+    });
+    const age = (fetchedDaysAgo) =>
+      raw.query(
+        `update story_oauth_clients set metadata_fetched_at = now() - make_interval(days => $1::int),
+                metadata_expires_at = now() - interval '1 minute' where client_id = $2`,
+        [fetchedDaysAgo, CIMD_URL]
+      );
+
+    it('serves a stale row at most 30 days', async () => {
+      await age(31);
+      net.fetchMock.mockRejectedValue(new Error('down'));
+      const { result } = await consent(q());
+      expect(result.props.error).toBeTruthy();
+    });
+
+    it('treats 404 or 410 as withdrawal, also at the token endpoint', async () => {
+      for (const status of [404, 410]) {
+        await raw.query('delete from story_oauth_cimd_failures');
+        await raw.query(`update story_oauth_clients set metadata_withdrawn_at = null where client_id = $1`, [CIMD_URL]);
+        await age(1);
+        net.fetchMock.mockResolvedValue(new Response('gone', { status }));
+        const { result } = await consent(q());
+        expect(result.props.error, String(status)).toBeTruthy();
+        const tok = await exchange({ grant_type: 'refresh_token', refresh_token: 'x', client_id: CIMD_URL });
+        expect(tok.body.error).toBe('invalid_client');
+      }
+    });
+
+    it('the token endpoint refetches a known client whose cache expired, never an unknown one', async () => {
+      await age(1);
+      net.fetchMock.mockClear();
+      const tok = await exchange({ grant_type: 'refresh_token', refresh_token: 'x', client_id: CIMD_URL });
+      expect(tok.body.error).toBe('invalid_grant');
+      expect(net.fetchMock).toHaveBeenCalledTimes(1);
+      const unknown = await exchange({ grant_type: 'refresh_token', refresh_token: 'x', client_id: 'https://other.example/c.json' });
+      expect(unknown.body.error).toBe('invalid_client');
+      expect(net.fetchMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('7: Connected shows the original authorization time, even after old rows are pruned', async () => {
+    await oauth.revokeTokensForUser(ALICE.id);
+    const { client, tokens } = await newGrant();
+    const original = await tokenRow(tokens.access_token);
+    await raw.query(`update story_oauth_tokens set family_created_at = '2026-01-02T03:04:05Z' where family_id = $1`, [original.family_id]);
+    const next = await refresh(client, tokens.refresh_token);
+    await raw.query('delete from story_oauth_tokens where id = $1', [original.id]);
+    expect((await tokenRow(next.body.access_token)).family_created_at).toEqual(new Date('2026-01-02T03:04:05Z'));
+    const list = await call(connectionsHandler, { method: 'GET' });
+    expect(list.body.connections[0].connectedAt).toBe('2026-01-02T03:04:05.000Z');
+  });
+
+  it('8: the per-IP token limit comes from OAUTH_TOKEN_IP_DAILY_LIMIT and logs a warning line on 429', async () => {
+    await raw.query(`delete from story_oauth_rate_limits where bucket like 'token:%'`);
+    vi.stubEnv('OAUTH_TOKEN_IP_DAILY_LIMIT', '2');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      for (let i = 0; i < 2; i += 1) expect((await exchange({ grant_type: 'password' })).statusCode).toBe(400);
+      expect((await exchange({ grant_type: 'password' })).statusCode).toBe(429);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('[oauth] token_ip_limit'), expect.anything());
+    } finally {
+      warn.mockRestore();
+      vi.stubEnv('OAUTH_TOKEN_IP_DAILY_LIMIT', '');
+      await raw.query(`delete from story_oauth_rate_limits where bucket like 'token:%'`);
+    }
+    expect(oauth.tokenIpDailyLimit()).toBe(20000);
+  });
+
+  it('9: strips invisible filler characters from names', () => {
+    expect(clients.cleanDisplayText('AㅤB⠀CᅟᅠﾠD͏')).toBe('ABCD');
+  });
+
+  it('10: the allow-lists carry only the new table names', async () => {
+    const { STORY_TABLES, STORY_RPCS } = await import('../../lib/story/db.js');
+    expect(STORY_TABLES).not.toContain('story_oauth_registrations');
+    expect(Object.keys(STORY_RPCS)).not.toContain('story_oauth_registration_take');
+    expect(STORY_RPCS.story_oauth_use_access_token).toBe('set');
   });
 });
