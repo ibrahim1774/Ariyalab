@@ -15,9 +15,9 @@
   margin: 0;
   padding: 0 8px;
   list-style: none;
-  animation: slide 60s linear infinite;
 }
-.rail:hover .track { animation-play-state: paused; }
+.animated { animation: slide 60s linear infinite; }
+.rail:hover .animated { animation-play-state: paused; }
 .card {
   position: relative;
   flex: none;
@@ -26,7 +26,7 @@
   border-radius: 18px;
   overflow: hidden;
   background: var(--surface);
-  border: 3px solid #fff;
+  border: 3px solid var(--surface);
   box-shadow: var(--shadow-card);
 }
 .big { width: 168px; box-shadow: var(--shadow-float); }
@@ -42,7 +42,7 @@
   font-weight: 500;
   text-align: center;
   color: var(--text);
-  background: rgba(255, 255, 255, 0.9);
+  background: var(--surface);
 }
 .tone0 { background: linear-gradient(160deg, #FFD9BF, #F7A878); }
 .tone1 { background: linear-gradient(160deg, #D9E4FF, #A9BEF2); }
@@ -60,6 +60,5 @@
   .big { width: 208px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .track { animation: none; }
   .rail { overflow-x: auto; }
 }

@@ -22,9 +22,9 @@
   cursor: pointer;
   transition: background 0.2s, color 0.2s;
 }
-.on { background: var(--text); color: #fff; }
+.on { background: var(--text); color: var(--bg); }
 .save { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--accent-tint); color: var(--accent-deep); }
-.on .save { background: var(--accent); color: #fff; }
+.on .save { background: var(--accent); color: var(--surface); }
 .grid { display: grid; grid-template-columns: 1fr; gap: 16px; align-items: stretch; }
 .plan { display: flex; flex-direction: column; min-width: 0; }
 .top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

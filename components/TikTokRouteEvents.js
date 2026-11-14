@@ -12,8 +12,9 @@ import { useRouter } from 'next/router';
  * path so TikTok's "Content ID is missing" diagnostic stays clear.
  */
 function pageContentId(path) {
-  if (!path || path === '/') return 'face-swap';
-  return path.replace(/^\/+/, '').replace(/\/$/, '') || 'face-swap';
+  if (!path || path === '/') return 'home';
+  if (path === '/legacy-home') return 'face-swap';
+  return path.replace(/^\/+/, '').replace(/\/$/, '') || 'home';
 }
 
 export default function TikTokRouteEvents() {

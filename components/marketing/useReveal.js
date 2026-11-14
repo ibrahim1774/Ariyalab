@@ -27,6 +27,9 @@ export default function useReveal() {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') return undefined;
     if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return undefined;
+    // Already on screen at hydration: leave it visible, no hide and fade.
+    const rect = el.getBoundingClientRect();
+    if (rect.top < window.innerHeight && rect.bottom > 0) return undefined;
     const io = getObserver();
     el.setAttribute('data-reveal', 'pending');
     io.observe(el);

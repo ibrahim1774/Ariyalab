@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import manifest from '../../public/examples/manifest.json';
 import styles from './VideoRail.module.css';
 
@@ -9,7 +10,7 @@ const PLACEHOLDERS = [
   'Local services',
   'Personal brands',
   'A story with no pitch',
-  'Ads and reels',
+  'Online course',
 ];
 
 const CENTRE = 3;
@@ -33,7 +34,7 @@ function Card({ card, big, dup = false }) {
           loop
           autoPlay
           playsInline
-          preload="metadata"
+          preload={dup ? 'none' : 'metadata'}
           aria-label={card.label}
         />
       ) : (
@@ -46,13 +47,20 @@ function Card({ card, big, dup = false }) {
 
 export default function VideoRail() {
   const cards = buildCards();
+  // The second copy only exists to loop the slide seamlessly, so it is added
+  // after hydration and only when motion is allowed.
+  const [animate, setAnimate] = useState(false);
+  useEffect(() => {
+    const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    setAnimate(!reduce);
+  }, []);
   const mid = Math.min(CENTRE, cards.length - 1);
   return (
     <section id="examples" className={styles.rail} data-section="video-rail" aria-label="Example videos">
-      <ul className={styles.track}>
+      <ul className={`${styles.track} ${animate ? styles.animated : ''}`}>
         {cards.map((c, i) => <Card key={c.key} card={c} big={i === mid} />)}
         {/* Second copy makes the loop seamless; hidden from assistive tech. */}
-        {cards.map((c, i) => <Card key={`dup-${c.key}`} card={c} big={i === mid} dup />)}
+        {animate && cards.map((c, i) => <Card key={`dup-${c.key}`} card={c} big={i === mid} dup />)}
       </ul>
     </section>
   );

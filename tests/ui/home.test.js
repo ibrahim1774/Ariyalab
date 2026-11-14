@@ -1,7 +1,21 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, within, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
+
+const mocks = vi.hoisted(() => ({ session: null, manifest: [] }));
+
+vi.mock('../../lib/supabase', () => ({
+  getBrowserSupabase: () => ({
+    auth: {
+      getSession: () => Promise.resolve({ data: { session: mocks.session } }),
+      getUser: () => Promise.resolve({ data: { user: mocks.session?.user || null } }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe() {} } } }),
+    },
+  }),
+}));
+
+vi.mock('../../public/examples/manifest.json', () => ({ default: mocks.manifest }));
 
 vi.mock('next/router', () => ({
   useRouter: () => ({ pathname: '/', asPath: '/', push: vi.fn() }),
@@ -10,9 +24,16 @@ vi.mock('next/router', () => ({
 import Home from '../../pages/index';
 import MarketingNav from '../../components/marketing/MarketingNav';
 import MarketingFooter from '../../components/marketing/MarketingFooter';
+import useReveal from '../../components/marketing/useReveal';
 import { PLANS, YEARLY_DISCOUNT, videosFor } from '../../components/marketing/pricingData';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  mocks.session = null;
+  mocks.manifest.length = 0;
+  delete process.env.NEXT_PUBLIC_VIDEOS_THIS_WEEK;
+  vi.unstubAllGlobals();
+});
 
 function renderPage() {
   return render(
@@ -80,5 +101,79 @@ describe('pricing data', () => {
     expect(YEARLY_DISCOUNT).toBe(0.2);
     expect(videosFor(1500)).toBe(2);
     expect(videosFor(5400)).toBe(7);
+  });
+});
+
+describe('homepage behaviour', () => {
+  it('sends signed-out visitors to sign up and signed-in visitors to the maker', async () => {
+    renderPage();
+    const link = () => screen.getAllByRole('link', { name: /make your first video/i })[0];
+    expect(link()).toHaveAttribute('href', '/sign-up');
+    cleanup();
+    mocks.session = { user: { id: 'u1' } };
+    renderPage();
+    await waitFor(() => expect(link()).toHaveAttribute('href', '/app/new'));
+  });
+
+  it('shows the live counter line only when the env count is set', () => {
+    process.env.NEXT_PUBLIC_VIDEOS_THIS_WEEK = '42';
+    renderPage();
+    expect(screen.getByText('42 videos made this week')).toBeInTheDocument();
+    expect(screen.queryByText('Made for ads, reels and shorts')).toBeNull();
+  });
+
+  it('renders video cards from a non-empty manifest', () => {
+    mocks.manifest.push({ src: '/examples/a.mp4', poster: '/examples/a.jpg', label: 'Barber shop' });
+    const { container } = renderPage();
+    const rail = container.querySelector('[data-section="video-rail"]');
+    expect(rail.querySelector('video')).not.toBeNull();
+    expect(rail.querySelector('video').getAttribute('src')).toBe('/examples/a.mp4');
+    expect(rail.querySelector('[role="img"]')).toBeNull();
+  });
+
+  it('shows each rail card once under reduced motion and twice otherwise', async () => {
+    const matches = (v) => vi.stubGlobal('matchMedia', () => ({ matches: v, addEventListener() {}, removeEventListener() {} }));
+    matches(true);
+    const a = renderPage();
+    expect(a.container.querySelectorAll('[data-section="video-rail"] li')).toHaveLength(7);
+    cleanup();
+    matches(false);
+    const b = renderPage();
+    await waitFor(() => expect(b.container.querySelectorAll('[data-section="video-rail"] li')).toHaveLength(14));
+    expect(b.container.querySelectorAll('[data-section="video-rail"] li[aria-hidden="true"]')).toHaveLength(7);
+  });
+
+  it('has the Online course placeholder and no format-only label', () => {
+    renderPage();
+    expect(screen.getAllByText('Online course').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Ads and reels')).toBeNull();
+  });
+});
+
+describe('useReveal', () => {
+  function Probe() {
+    const ref = useReveal();
+    return <div ref={ref} data-testid="probe" />;
+  }
+  function setup(rect) {
+    const observe = vi.fn();
+    vi.stubGlobal('IntersectionObserver', class { observe = observe; unobserve() {} });
+    vi.stubGlobal('matchMedia', () => ({ matches: false }));
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockReturnValue(rect);
+    return observe;
+  }
+
+  it('does not hide an element that is already in view', () => {
+    const observe = setup({ top: 100, bottom: 400 });
+    render(<Probe />);
+    expect(screen.getByTestId('probe')).not.toHaveAttribute('data-reveal');
+    expect(observe).not.toHaveBeenCalled();
+  });
+
+  it('hides then reveals an element below the fold', () => {
+    const observe = setup({ top: 5000, bottom: 5300 });
+    render(<Probe />);
+    expect(screen.getByTestId('probe')).toHaveAttribute('data-reveal', 'pending');
+    expect(observe).toHaveBeenCalled();
   });
 });

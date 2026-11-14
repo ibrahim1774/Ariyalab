@@ -1,5 +1,6 @@
 import Head from 'next/head';
 
+import styles from '../styles/HomePage.module.css';
 import Hero from '../components/marketing/Hero';
 import VideoRail from '../components/marketing/VideoRail';
 import HowItWorks from '../components/marketing/HowItWorks';
@@ -17,7 +18,7 @@ export default function Home() {
           content="Describe your story or start from a video you like. Get a finished, captioned animated video in minutes."
         />
       </Head>
-      <main style={{ overflowX: 'clip' }}>
+      <main className={styles.main}>
         <Hero />
         <VideoRail />
         <HowItWorks />

@@ -449,7 +449,7 @@ export default function HomePage() {
           </div>
           <Paywall
             entitlement={entitlement}
-            returnTo="/"
+            returnTo="/legacy-home"
             onError={(msg) => setError(msg)}
             onTrialStarted={() => { fetchEntitlement(); setStep('choose'); }}
           />
@@ -810,7 +810,7 @@ export default function HomePage() {
         </div>
         <Paywall
           entitlement={entitlement}
-          returnTo="/"
+          returnTo="/legacy-home"
           onError={(msg) => setError(msg)}
           onTrialStarted={() => { fetchEntitlement(); setStep(storyScenes.length > 0 ? 'result' : 'choose'); }}
         />
@@ -980,7 +980,7 @@ export default function HomePage() {
           open={authModalOpen}
           onClose={() => setAuthModalOpen(false)}
           initialMode="signup"
-          redirectTo="/"
+          redirectTo="/legacy-home"
         />
       </>
     );
@@ -1301,7 +1301,7 @@ export default function HomePage() {
         open={authModalOpen}
         onClose={() => setAuthModalOpen(false)}
         initialMode="signup"
-        redirectTo="/"
+        redirectTo="/legacy-home"
       />
     </>
   );
