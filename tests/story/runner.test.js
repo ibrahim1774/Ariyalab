@@ -523,6 +523,7 @@ describe('handleProviderCallback', () => {
       handleProviderCallback('mock', kieDone(job.provider_task_id), { token: 's3cret', now: at(20) }),
       tick({ projectId: project.id, now: at(20) }),
     ]);
+    expect(mirror.calls).toHaveLength(2); // both callers reached the guarded update
     expect(calls.done).toHaveLength(1);
     expect([cb.outcome === 'done' ? 1 : 0, t.done].reduce((a, b) => a + b)).toBe(1);
     expect(await jobRow(job.id)).toMatchObject({ status: 'done' });
