@@ -56,14 +56,17 @@ export async function middleware(req) {
   // Gate the private API routes. Note:
   //   - /api/checkout is not here — subscription path supports
   //     anonymous users (pay first, sign up after).
-  //   - /api/upload-token is not here — anonymous visitors on the
-  //     face-swap page need to upload before hitting the paywall.
-  //     The route returns short-lived Blob tokens with size caps
-  //     enforced upstream.
+  //   - /api/upload-token is not here — signed-out visitors on the
+  //     pre-paywall pages (/, /ugc-2, /ugc-3, /local-business,
+  //     /real-estate) upload a photo before sign-up. The route itself
+  //     requires a session except for its 25 MB image-only
+  //     'anon-image' tokens, and Vercel's upload callbacks carry no
+  //     cookie.
   const privateApiPrefixes = [
     '/api/character-frame',
     '/api/swap',
     '/api/status',
+    '/api/moderate-image',
     '/api/entitlement',
     '/api/extract-frame',
     '/api/image-to-video',
@@ -139,6 +142,7 @@ export const config = {
     '/api/character-frame/:path*',
     '/api/swap/:path*',
     '/api/status/:path*',
+    '/api/moderate-image/:path*',
     '/api/entitlement/:path*',
     '/api/extract-frame/:path*',
     '/api/image-to-video/:path*',

@@ -19,10 +19,11 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Anon-friendly: /ugc and /image-to-video allow anon uploads up to
-  // the paywall. We still moderate those — better to clear bad images
-  // before a non-paying user tries to sign up to use them.
-  await getUserFromRequest(req, res);
+  // Signed-in only: this makes a paid vision call. Signed-out uploads on
+  // the pre-paywall pages skip this pre-screen (lib/uploader.js); every
+  // generation route still screens the image before spending.
+  const session = await getUserFromRequest(req, res);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
   const { url } = req.body || {};
   if (typeof url !== 'string' || !url.startsWith('https://')) {

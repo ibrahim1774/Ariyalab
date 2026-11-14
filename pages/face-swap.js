@@ -49,6 +49,8 @@ export default function Home() {
     referenceImageUrl: null,
     hybridFrameUrl: null,
     swapMode: null,
+    // Charge token from /api/character-frame; /api/swap needs it.
+    swapToken: null,
   });
   const pendingSwapRef = useRef(false);
   const paRetryRef = useRef(false);
@@ -107,6 +109,7 @@ export default function Home() {
         referenceImageUrl: saved.referenceImageUrl || null,
         hybridFrameUrl: null,
         swapMode: saved.swapMode || null,
+        swapToken: saved.swapToken || null,
       });
       setSwapMode(saved.swapMode || null);
       setFrameJob({
@@ -119,6 +122,7 @@ export default function Home() {
         ...prev,
         sourceVideoUrl: saved.sourceVideoUrl || prev.sourceVideoUrl,
         hybridFrameUrl: saved.hybridFrameUrl || prev.hybridFrameUrl,
+        swapToken: saved.swapToken || prev.swapToken,
       }));
       setActiveJob({
         predictionId: saved.predictionId,
@@ -147,6 +151,7 @@ export default function Home() {
       referenceImageUrl: null,
       hybridFrameUrl: null,
       swapMode: null,
+      swapToken: null,
     });
   }, []);
 
@@ -212,7 +217,12 @@ export default function Home() {
       const res = await fetch('/api/character-frame', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ firstFrameUrl: sourceFrameUrl, referenceImageUrl, swapMode }),
+        body: JSON.stringify({
+          firstFrameUrl: sourceFrameUrl,
+          referenceImageUrl,
+          sourceVideoUrl,
+          swapMode,
+        }),
       });
       const rawText = await res.text();
       let data = {};
@@ -242,6 +252,7 @@ export default function Home() {
         referenceImageUrl,
         hybridFrameUrl: null,
         swapMode,
+        swapToken: data.swapToken || null,
       });
 
       const startedAt = Date.now();
@@ -253,6 +264,7 @@ export default function Home() {
         sourceFrameUrl,
         referenceImageUrl,
         swapMode,
+        swapToken: data.swapToken || null,
       });
       setFrameJob({ predictionId: data.predictionId, startedAt });
 
@@ -272,7 +284,7 @@ export default function Home() {
 
   // Stage 2: kick off the motion-transfer model using the approved frame + source video.
   const proceedWithSwap = useCallback(async () => {
-    const { sourceVideoUrl, hybridFrameUrl } = uploadedUrls;
+    const { sourceVideoUrl, hybridFrameUrl, swapToken } = uploadedUrls;
     if (!sourceVideoUrl || !hybridFrameUrl) return;
     setPreviewBusy('proceed');
     setError('');
@@ -287,11 +299,17 @@ export default function Home() {
           mode,
           videoFileName: videoFile?.name || 'source.mp4',
           faceFileName: faceFile?.name || 'character.jpg',
+          swapToken,
         }),
       });
       const data = await res.json().catch(() => ({}));
       log(res.ok ? 'info' : 'warn', 'swap response', { httpStatus: res.status, body: data });
 
+      if (res.status === 402 && data.code === 'SWAP_TOKEN_INVALID') {
+        // The paid preview expired (30 min) or doesn't match; the user
+        // needs a fresh preview, which charges again.
+        throw new Error(data.message || 'This preview expired. Start a new swap.');
+      }
       if (res.status === 402) {
         await fetchEntitlement();
         setStep('paywall');
@@ -316,6 +334,7 @@ export default function Home() {
         startedAt,
         sourceVideoUrl,
         hybridFrameUrl,
+        swapToken,
         videoFileName: videoFile?.name,
         faceFileName: faceFile?.name,
       });

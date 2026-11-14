@@ -4,6 +4,7 @@ import { getEntitlement, reserveCredits, refundCredits } from '../../lib/entitle
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { FACE_SWAP_COST } from '../../lib/cost';
+import { signingConfigured, signJobId, signSwapToken } from '../../lib/jobToken';
 
 function isHttpUrl(value) {
   if (typeof value !== 'string') return false;
@@ -30,6 +31,12 @@ export default async function handler(req, res) {
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
+  // The job id and swap token are signed; refuse before charging if we can't sign.
+  if (!signingConfigured()) {
+    console.error('[character-frame] CRON_SECRET missing; refusing');
+    return res.status(503).json({ error: 'Face swap is temporarily unavailable.' });
+  }
+
   let entitlement;
   try {
     entitlement = await getEntitlement({
@@ -41,10 +48,10 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Entitlement check failed: ${err.message}` });
   }
 
-  const { firstFrameUrl, referenceImageUrl, swapMode } = req.body || {};
-  if (!isHttpUrl(firstFrameUrl) || !isHttpUrl(referenceImageUrl)) {
+  const { firstFrameUrl, referenceImageUrl, sourceVideoUrl, swapMode } = req.body || {};
+  if (!isHttpUrl(firstFrameUrl) || !isHttpUrl(referenceImageUrl) || !isHttpUrl(sourceVideoUrl)) {
     return res.status(400).json({
-      error: 'firstFrameUrl and referenceImageUrl are required (http/https URLs).',
+      error: 'firstFrameUrl, referenceImageUrl and sourceVideoUrl are required (http/https URLs).',
     });
   }
   const mode = swapMode === 'body' ? 'body' : swapMode === 'face' ? 'face' : null;
@@ -93,9 +100,16 @@ export default async function handler(req, res) {
         supabase_user_id: session.user.id,
       },
     }).catch(() => {});
+    // This is the one place the face-swap flow is charged. The swap
+    // token lets /api/swap run (and retry) on this frame for 30 minutes.
     return res.status(200).json({
-      predictionId: prediction.id,
+      predictionId: signJobId(session.user.id, prediction.id),
       status: prediction.status,
+      swapToken: signSwapToken({
+        userId: session.user.id,
+        videoUrl: sourceVideoUrl,
+        framePredictionId: prediction.id,
+      }),
     });
   } catch (err) {
     console.error('[character-frame] failed; refunding credit', err);

@@ -4,6 +4,7 @@ import {
 } from '../../lib/kie';
 import { createSeedancePrediction } from '../../lib/seedance';
 import { getUserFromRequest } from '../../lib/supabaseServer';
+import { signingConfigured, signJobId } from '../../lib/jobToken';
 import { getEntitlement, reserveCredits, refundCredits, trackPendingJob } from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
@@ -40,6 +41,12 @@ export default async function handler(req, res) {
 
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  // The returned job id is signed; refuse before charging if we can't sign.
+  if (!signingConfigured()) {
+    console.error('[ugc-animate] CRON_SECRET missing; refusing');
+    return res.status(503).json({ error: 'Generation is temporarily unavailable.' });
+  }
 
   const {
     imageUrl,
@@ -187,7 +194,7 @@ export default async function handler(req, res) {
       },
     }).catch(() => {});
     return res.status(200).json({
-      predictionId: prediction.id,
+      predictionId: signJobId(session.user.id, prediction.id),
       vendor: effectiveModel === 'studio-pro' ? 'kie-kling' : 'kie-seedance',
       status: 'queued',
       cost,

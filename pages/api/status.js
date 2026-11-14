@@ -2,6 +2,7 @@ import { getPrediction, normalizeStatus } from '../../lib/replicate';
 import { getKiePrediction, normalizeKieStatus } from '../../lib/kie';
 import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
 import { getEntitlement, settlePendingJob } from '../../lib/entitlement';
+import { verifyJobId } from '../../lib/jobToken';
 
 /*
  * Polling endpoint. Dispatches to either Replicate (default — used for
@@ -14,6 +15,10 @@ import { getEntitlement, settlePendingJob } from '../../lib/entitlement';
  * On the first poll that detects a completed prediction with a
  * resultUrl, we also insert into the `videos` table so the result
  * shows up in /history. Idempotent on prediction_id.
+ *
+ * Ownership: the creating routes hand the client `${id}.${hmac}` signed
+ * for that user (lib/jobToken.js). We verify it and use the raw id for
+ * the provider, refund settlement and history; anything else is 404.
  */
 
 const ALLOWED_KINDS = ['face-swap', 'image-to-video', 'ugc'];
@@ -50,13 +55,17 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { predictionId, vendor, historyKind } = req.query;
-  if (!predictionId || typeof predictionId !== 'string') {
+  const { predictionId: signedId, vendor, historyKind } = req.query;
+  if (!signedId || typeof signedId !== 'string') {
     return res.status(400).json({ error: 'predictionId is required.' });
   }
 
   const isKie = vendor === 'kie';
-  const session = await getUserFromRequest(req, res); // /api/status is gated by middleware so this is non-null
+  const session = await getUserFromRequest(req, res);
+  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+
+  const predictionId = verifyJobId(session.user.id, signedId);
+  if (!predictionId) return res.status(404).json({ error: 'Job not found.' });
 
   // Idempotently settle the credit reservation we made when the job
   // was queued. Refund on vendor failure, drop tracking on success.
@@ -90,7 +99,7 @@ export default async function handler(req, res) {
       }
       await settleIfTerminal(normalized.status);
       return res.status(200).json({
-        predictionId,
+        predictionId: signedId,
         status: normalized.status,
         resultUrl: normalized.resultUrl || null,
         error: normalized.status === 'error' ? normalized.error || 'Prediction failed' : null,
@@ -107,14 +116,14 @@ export default async function handler(req, res) {
       });
     }
     return res.status(200).json({
-      predictionId,
+      predictionId: signedId,
       status: normalized.status,
       resultUrl: normalized.resultUrl || null,
       error: normalized.status === 'error' ? normalized.error || 'Prediction failed' : null,
     });
   } catch (err) {
     return res.status(502).json({
-      predictionId,
+      predictionId: signedId,
       status: 'processing',
       error: err.message || 'Failed to reach provider.',
     });

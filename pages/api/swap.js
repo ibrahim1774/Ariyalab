@@ -1,9 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { createJob, updateJob } from '../../lib/jobs';
-import { createMotionTransferPrediction, normalizeStatus } from '../../lib/replicate';
+import { createMotionTransferPrediction, getPrediction, normalizeStatus } from '../../lib/replicate';
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
+import { signingConfigured, verifySwapToken, signJobId } from '../../lib/jobToken';
 
 function isHttpUrl(value) {
   if (typeof value !== 'string') return false;
@@ -11,6 +12,18 @@ function isHttpUrl(value) {
     const u = new URL(value);
     return u.protocol === 'http:' || u.protocol === 'https:';
   } catch {
+    return false;
+  }
+}
+
+async function verifySwapCharge({ swapToken, userId, videoUrl, imageUrl }) {
+  const token = verifySwapToken(swapToken, { userId, videoUrl });
+  if (!token) return false;
+  try {
+    const frame = normalizeStatus(await getPrediction(token.framePredictionId));
+    return frame.status === 'complete' && frame.resultUrl === imageUrl;
+  } catch (err) {
+    console.warn('[swap] frame lookup failed', err.message);
     return false;
   }
 }
@@ -26,9 +39,12 @@ export default async function handler(req, res) {
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
-  // No credit gate here: stage 1 (/api/character-frame) already
-  // reserved the credit. Re-gating here would 402 mid-flow when the
-  // user spent their last credit on stage 1 and never get a result.
+  // Fail closed: without the signing secret we cannot check the charge
+  // token, so we refuse rather than run an unpaid swap.
+  if (!signingConfigured()) {
+    console.error('[swap] CRON_SECRET missing; refusing');
+    return res.status(503).json({ error: 'Face swap is temporarily unavailable.' });
+  }
 
   try {
     const {
@@ -37,11 +53,26 @@ export default async function handler(req, res) {
       mode,
       videoFileName,
       faceFileName,
+      swapToken,
     } = req.body || {};
 
     if (!isHttpUrl(imageUrl) || !isHttpUrl(videoUrl)) {
       return res.status(400).json({
         error: 'imageUrl (character image) and videoUrl (motion video) are required.',
+      });
+    }
+
+    // No credit charge here. /api/character-frame takes FACE_SWAP_COST
+    // once and returns a swapToken bound to this user, the source video
+    // and its frame prediction. The token is reusable for 30 minutes so
+    // retries and resume stay free; imageUrl must be that paid frame's
+    // output, so the token cannot drive a swap on some other image.
+    const paid = await verifySwapCharge({ swapToken, userId: session.user.id, videoUrl, imageUrl });
+    if (!paid) {
+      return res.status(402).json({
+        error: 'paywall',
+        code: 'SWAP_TOKEN_INVALID',
+        message: 'This swap is not paid for, or the preview expired. Generate a new preview.',
       });
     }
 
@@ -94,7 +125,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       jobId,
-      predictionId: prediction.id,
+      predictionId: signJobId(session.user.id, prediction.id),
       status: 'processing',
     });
   } catch (err) {

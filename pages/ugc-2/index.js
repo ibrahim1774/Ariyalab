@@ -252,7 +252,7 @@ export default function Ugc2Page() {
     setImageBusy('upload');
     try {
       const compressed = await maybeCompressImage(file);
-      const url = await uploadTempFile(compressed);
+      const url = await uploadTempFile(compressed, 'auto', { anonymous: !authUser });
       setImageUrl(url);
       if (nextSceneType === 'new') {
         setPendingStartImage(url);

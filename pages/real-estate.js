@@ -194,7 +194,7 @@ export default function RealEstatePage() {
       const compressed = await maybeCompressImage(file);
       // Homepage keeps the upload-time NSFW/minor pre-screen ON — this is
       // the highest-traffic surface. Default screenMode screens images.
-      const url = await uploadTempFile(compressed);
+      const url = await uploadTempFile(compressed, 'auto', { anonymous: !authUser });
       setImageUrl(url);
       // If this upload is a "New scene" image, use it as the start
       // image for the next animation instead of replacing the story's

@@ -177,7 +177,7 @@ export default function Ugc3Page() {
       // pre-screen so the first page is frictionless. Generation-time
       // moderation in /api/ugc-animate + /api/ugc-image stays ON, so
       // nothing harmful is ever actually generated.
-      const url = await uploadTempFile(compressed, 'skip');
+      const url = await uploadTempFile(compressed, 'skip', { anonymous: !authUser });
       setImageUrl(url);
       // If this upload is a "New scene" image, use it as the start
       // image for the next animation instead of replacing the story's
