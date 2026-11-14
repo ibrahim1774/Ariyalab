@@ -276,6 +276,10 @@ The chat is Claude with tools that read and change the project (edit a scene, re
 - `/api/story/*` for the web app, `/api/mcp` for the connector, `/api/webhooks/kie` for callbacks.
 - Shared components replace the six near-copy creator pages for anything new.
 
+### 10.10 File retention (added 2026-11-14 at Ibrahim's request)
+
+To keep storage cost down, generated and uploaded project media is deleted automatically 30 days after it was created: reference uploads, stills, cast images, clips, narration and music tracks, and finished renders. A daily job removes the files and marks the project "expired"; the script, shot list and settings stay, so the customer can regenerate (at normal credit cost) but not re-download. The finish screen and each project card show the date the files will be removed, and the customer is told to download before then. Brand kit uploads (logo, product photos, recordings) and cloned voices are kept while the account exists. The retention period is one config value (`retentionDays`, default 30).
+
 ## 11. Fixes required before any advertising
 
 Found in the audit of the current code and confirmed by a second read:
