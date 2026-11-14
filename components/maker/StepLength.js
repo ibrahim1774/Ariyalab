@@ -3,6 +3,7 @@ import { useState } from 'react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
 import styles from './Steps.module.css';
 
 export const LENGTHS = [15, 30, 45, 60, 75];
@@ -89,11 +90,11 @@ export default function StepLength({ project, save, onNext, returnTo }) {
 
           <p className={styles.saveState} role="status" aria-live="polite">{saving ? 'Saving…' : ''}</p>
           <ErrorNotice error={error} returnTo={returnTo} />
-          <div className={styles.actions}>
-            <Button onClick={onNext} disabled={saving}>Continue to the script</Button>
-          </div>
         </div>
       </Card>
+      <StepFooter>
+        <Button onClick={onNext} disabled={saving}>Continue to the script</Button>
+      </StepFooter>
     </div>
   );
 }

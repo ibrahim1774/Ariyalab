@@ -4,19 +4,9 @@ import Button from '../ui/Button';
 import Card from '../ui/Card';
 import { STYLES } from '../../lib/story/prompts/styles';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
+import { StyleImage } from './Tiles';
 import styles from './Steps.module.css';
-
-// Sample images do not exist yet, so each style gets a gradient placeholder.
-const PLACEHOLDER = {
-  '3d_family': 'linear-gradient(135deg, #FFD6A5, #F08A4B)',
-  '2d_cartoon': 'linear-gradient(135deg, #FFE08A, #FF9F6B)',
-  anime: 'linear-gradient(135deg, #C9D6FF, #E2C2FF)',
-  clay: 'linear-gradient(135deg, #F4C7A8, #D98F6A)',
-  comic: 'linear-gradient(135deg, #FFF1A8, #FF8A7A)',
-  flat_motion: 'linear-gradient(135deg, #BDE8D2, #7BC4A4)',
-  watercolor: 'linear-gradient(135deg, #CFE7F5, #F6D6E4)',
-  custom: 'linear-gradient(135deg, #EDE6D6, #FBF8F1)',
-};
 
 export default function StepStyle({ project, save, onNext, returnTo }) {
   const [style, setStyle] = useState(project?.style || '');
@@ -46,15 +36,16 @@ export default function StepStyle({ project, save, onNext, returnTo }) {
         <h2>Pick the <span className="accent-word">look</span></h2>
         <p>Every picture in your video will follow this style.</p>
       </div>
+      <form onSubmit={submit} className={styles.step}>
       <Card>
-        <form onSubmit={submit} className={styles.form}>
+        <div className={styles.form}>
           <fieldset className={styles.styleGrid}>
             <legend className={styles.srOnly}>Style</legend>
             {Object.entries(STYLES).map(([key, s]) => (
-              <label key={key} className={`${styles.styleCard} ${style === key ? styles.optionOn : ''}`}>
+              <label key={key} className={`${styles.styleCard} ${style === key ? styles.optionOn : ''}`} data-media-card="">
                 <input type="radio" name="style" value={key} checked={style === key} onChange={() => setStyle(key)} />
-                <span className={styles.stylePreview} style={{ background: PLACEHOLDER[key] }} aria-hidden="true" />
-                <span className={styles.optionTitle}>{s.label}</span>
+                <StyleImage styleKey={key} label={s.label} />
+                <span className={styles.optionTitle} aria-hidden="true">{s.label}</span>
               </label>
             ))}
           </fieldset>
@@ -66,11 +57,12 @@ export default function StepStyle({ project, save, onNext, returnTo }) {
             </label>
           )}
           <ErrorNotice error={error} field={null} returnTo={returnTo} />
-          <div className={styles.actions}>
-            <Button type="submit" disabled={!ready || busy}>{busy ? 'Saving…' : 'Continue'}</Button>
-          </div>
-        </form>
+        </div>
       </Card>
+      <StepFooter>
+        <Button type="submit" disabled={!ready || busy}>{busy ? 'Saving…' : 'Continue'}</Button>
+      </StepFooter>
+      </form>
     </div>
   );
 }

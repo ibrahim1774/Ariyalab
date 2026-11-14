@@ -5,8 +5,10 @@ import Card from '../ui/Card';
 import { DEFAULTS } from '../../lib/pricingConstants';
 import { pickCast, regenCast, startCast } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import { AssetPickerSlot } from './slots';
+import { EmptyState, Skeleton, StyleNote, Tile } from './Tiles';
 import styles from './Steps.module.css';
 
 const CANDIDATE_SLOTS = 3;
@@ -56,20 +58,25 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       {pending && (
         <div className={styles.candidates} aria-busy="true">
           {Array.from({ length: CANDIDATE_SLOTS }).map((_, i) => (
-            <div key={i} className={`${styles.candidate} ${styles.shimmer}`} data-testid="candidate-pending" aria-label={`Option ${i + 1} is being made`} />
+            <div key={i} className={styles.candidate} data-media-card="">
+              <Skeleton ratio="3 / 4" status="Drawing your character" data-testid="candidate-pending" />
+            </div>
           ))}
-          <p className={styles.srOnly} role="status" aria-live="polite">Making pictures for {cast.name}</p>
         </div>
       )}
 
-      {cast.status === 'blocked' && (
-        <p className={styles.blocked} role="alert">{blockedReason(cast, jobs)}</p>
-      )}
-
-      {cast.status === 'failed' && (
-        <div className={styles.failed} role="alert">
-          <span>These pictures did not come out. Try again.</span>
-          <Button variant="ghost" size="sm" onClick={regenerate} disabled={busy === 'regen'}>Try again</Button>
+      {(cast.status === 'blocked' || cast.status === 'failed') && (
+        <div className={styles.candidates} data-media-card="">
+          <Tile
+            tone="error"
+            icon={cast.status === 'blocked' ? 'block' : 'alert'}
+            ratio="3 / 2"
+            className={styles.wideTile}
+            title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'}
+            text={cast.status === 'blocked' ? blockedReason(cast, jobs) : 'Try again, or describe a change below.'}
+          >
+            <Button variant="ghost" size="sm" onClick={regenerate} disabled={busy === 'regen'}>Try again</Button>
+          </Tile>
         </div>
       )}
 
@@ -78,7 +85,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
           {candidates.map((c, i) => {
             const chosen = cast.chosen_index === i;
             return (
-              <div key={c.key || c.url || i} className={`${styles.candidate} ${chosen ? styles.candidateChosen : ''}`}>
+              <div key={c.key || c.url || i} className={`${styles.candidate} ${chosen ? styles.candidateChosen : ''}`} data-media-card="">
                 <img src={c.url} alt={`${cast.name}, option ${i + 1}`} loading="lazy" />
                 <button
                   type="button"
@@ -142,21 +149,14 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       <div className={styles.stepHead}>
         <h2>Meet your <span className="accent-word">cast</span></h2>
         <p>Each character gets three options. Pick one, or describe a change and make new ones.</p>
+        <StyleNote project={project} />
       </div>
 
       {cast.length === 0 && (
-        <Card>
-          <div className={styles.form}>
-            <p>
-              Ready to make your characters?
-              {!project.fee_charged && ` The project setup fee of ${DEFAULTS.projectFee} credits is taken when the cast is first made.`}
-            </p>
-            <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
-            <div className={styles.actions}>
-              <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
-            </div>
-          </div>
-        </Card>
+        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${DEFAULTS.projectFee} credits is taken when the cast is first made.`}`}>
+          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+          <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
+        </EmptyState>
       )}
 
       <div className={styles.castList}>
@@ -167,10 +167,10 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
 
       <FilesNote project={project} />
       {cast.length > 0 && (
-        <div className={styles.actions}>
+        <StepFooter>
           <Button onClick={onNext} disabled={!allPicked}>Continue to the storyboard</Button>
           {!allPicked && <span className={styles.hint}>Pick one option for every character to continue.</span>}
-        </div>
+        </StepFooter>
       )}
     </div>
   );

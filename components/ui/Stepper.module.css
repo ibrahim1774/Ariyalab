@@ -68,3 +68,16 @@
   font-size: 11px;
   font-weight: 600;
 }
+
+/* fit: every step stays on screen on a desktop. Only a phone scrolls sideways. */
+@media (min-width: 761px) {
+  .fit { overflow-x: visible; gap: 0; }
+  .fit .step { flex: 0 1 auto; min-width: 0; gap: 6px; font-size: 13px; }
+  .fit .step + .step::before { width: 14px; margin: 0 6px; flex-shrink: 1; }
+  .fit .stepButton { margin: 0; padding: 4px 4px; }
+}
+/* Below a wide desktop, only the current step keeps its label (the others keep it for screen readers and as a tooltip). */
+@media (min-width: 761px) and (max-width: 1559px) {
+  .fit .quiet { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .fit .step + .step::before { width: 10px; margin: 0 2px; }
+}

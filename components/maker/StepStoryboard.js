@@ -1,11 +1,12 @@
 import { useState } from 'react';
 
 import Button from '../ui/Button';
-import Card from '../ui/Card';
 import { buildShots, makeStills } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import ShotCard from './ShotCard';
+import { EmptyState, StyleNote } from './Tiles';
 import { missingStills } from './steps';
 import styles from './Steps.module.css';
 
@@ -35,20 +36,16 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
       <div className={styles.stepHead}>
         <h2>Your <span className="accent-word">storyboard</span></h2>
         <p>One picture for every shot, in order. This step is cheap, and nothing expensive starts until you confirm.</p>
+        <StyleNote project={project} />
       </div>
 
       {shots.length === 0 ? (
-        <Card>
-          <div className={styles.form}>
-            <p>We will split your script into shots and show them here.</p>
-            <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
-            <div className={styles.actions}>
-              <Button onClick={() => run('shots', () => buildShots(project.id))} disabled={busy === 'shots'}>
-                {busy === 'shots' ? 'Building…' : 'Build my storyboard'}
-              </Button>
-            </div>
-          </div>
-        </Card>
+        <EmptyState icon="film" title="Your shots will appear here once the cast is picked" text="We split your script into shots and show each one as a picture.">
+          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+          <Button onClick={() => run('shots', () => buildShots(project.id))} disabled={busy === 'shots'}>
+            {busy === 'shots' ? 'Building…' : 'Build my storyboard'}
+          </Button>
+        </EmptyState>
       ) : (
         <>
           <div className={styles.toolbar}>
@@ -67,10 +64,10 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
             ))}
           </div>
           <FilesNote project={project} />
-          <div className={styles.actions}>
+          <StepFooter>
             <Button onClick={onNext} disabled={missing > 0}>Continue to voice and sound</Button>
             {missing > 0 && <span className={styles.hint}>{missing} shot{missing === 1 ? ' needs' : 's need'} a picture first.</span>}
-          </div>
+          </StepFooter>
         </>
       )}
     </div>

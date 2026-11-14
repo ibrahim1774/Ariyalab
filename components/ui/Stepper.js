@@ -11,7 +11,7 @@ import styles from './Stepper.module.css';
  * Passing `onSelect(id)` makes each step a button; a step with `locked: true`
  * stays disabled. Without `onSelect` it is a plain list, as before.
  */
-export default function Stepper({ steps, currentId, onSelect }) {
+export default function Stepper({ steps, currentId, onSelect, fit = false }) {
   const currentIndex = steps.findIndex((s) => s.id === currentId);
   const currentRef = useRef(null);
   // On a phone the list scrolls sideways: keep the current step in view.
@@ -20,7 +20,7 @@ export default function Stepper({ steps, currentId, onSelect }) {
   }, [currentId]);
 
   return (
-    <ol className={styles.stepper}>
+    <ol className={`${styles.stepper} ${fit ? styles.fit : ''}`}>
       {steps.map((step, i) => {
         let state = 'upcoming';
         if (step.stale) state = 'stale';
@@ -32,7 +32,7 @@ export default function Stepper({ steps, currentId, onSelect }) {
             <span className={styles.marker} aria-hidden="true">
               {state === 'done' ? '✓' : state === 'stale' ? '!' : i + 1}
             </span>
-            <span className={styles.label}>{step.label}</span>
+            <span className={`${styles.label} ${isCurrent || step.stale ? '' : styles.quiet}`}>{step.label}</span>
             {step.stale && <span className={styles.badge}>Needs update</span>}
           </>
         );
@@ -49,6 +49,7 @@ export default function Stepper({ steps, currentId, onSelect }) {
                 type="button"
                 className={styles.stepButton}
                 disabled={step.locked}
+                title={step.label}
                 aria-current={isCurrent ? 'step' : undefined}
                 onClick={() => onSelect(step.id)}
               >

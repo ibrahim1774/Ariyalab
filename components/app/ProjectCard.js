@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import Link from 'next/link';
 
 import Card from '../ui/Card';
 import Pill from '../ui/Pill';
+import { STYLES } from '../../lib/story/prompts/styles';
 import styles from './ProjectCard.module.css';
 
 const BADGES = {
@@ -26,7 +28,17 @@ function updatedLabel(value) {
   return `Edited ${d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`;
 }
 
+/** First ready still, else the chosen style's sample image, else a labelled tile. Never a letter on a flat colour. */
+export function thumbnailFor(project) {
+  const still = project?.thumbnail_url || project?.cover_url;
+  if (still) return still;
+  return project?.style && STYLES[project.style] && project.style !== 'custom' ? `/styles/${project.style}.jpg` : null;
+}
+
 export default function ProjectCard({ project }) {
+  const [broken, setBroken] = useState(false);
+  const src = broken ? null : thumbnailFor(project);
+  const styleLabel = STYLES[project?.style]?.label || 'Animated story';
   const status = projectStatus(project);
   const badge = BADGES[status];
   const title = project.title || 'Untitled story';
@@ -34,7 +46,11 @@ export default function ProjectCard({ project }) {
     <Link href={`/app/p/${project.id}`} className={styles.link} aria-label={`Open ${title}`}>
       <Card className={styles.card} padded={false}>
         <div className={styles.cover} aria-hidden="true">
-          {project.cover_url ? <img src={project.cover_url} alt="" /> : <span className={styles.coverMark}>{title.slice(0, 1).toUpperCase()}</span>}
+          {src ? (
+            <img src={src} alt="" loading="lazy" onError={() => setBroken(true)} />
+          ) : (
+            <span className={styles.coverTile} data-tile="cover">{styleLabel}</span>
+          )}
         </div>
         <div className={styles.body}>
           <h3 className={styles.title}>{title}</h3>

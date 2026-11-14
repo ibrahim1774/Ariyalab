@@ -3,13 +3,15 @@ import { useState } from 'react';
 import Button from '../ui/Button';
 import { rerollShot } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import GenerateConfirm from './GenerateConfirm';
 import ShotCard from './ShotCard';
+import { EmptyState } from './Tiles';
 import { isGenerated, rerollInfo } from './steps';
 import styles from './Steps.module.css';
 
-function ClipActions({ shot, project, status, refresh, onRetry, returnTo }) {
+function ClipActions({ shot, project, status, refresh, returnTo }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const info = rerollInfo(status, shot);
@@ -34,9 +36,6 @@ function ClipActions({ shot, project, status, refresh, onRetry, returnTo }) {
         // eslint-disable-next-line jsx-a11y/media-has-caption
         <video className={styles.clip} controls preload="metadata" poster={shot.still_url || undefined} src={shot.clip_url} aria-label={`Clip for shot ${shot.ord + 1}`} />
       )}
-      {(shot.status === 'failed' || shot.status === 'blocked') && (
-        <Button variant="ghost" size="sm" arrow={false} onClick={() => onRetry(shot.id)}>Try again</Button>
-      )}
       {shot.status === 'ready' && (
         <>
           <Button variant="ghost" size="sm" arrow={false} onClick={reroll} disabled={busy || inFlight}>
@@ -51,7 +50,7 @@ function ClipActions({ shot, project, status, refresh, onRetry, returnTo }) {
 }
 
 /** `status` is the whole /status payload (needed for the re-roll allowance). */
-export default function StepReview({ project, shots = [], status, refresh, onNext, returnTo }) {
+export default function StepReview({ project, shots = [], status, refresh, onNext, goTo, returnTo }) {
   const [retryIds, setRetryIds] = useState(null);
   const generated = shots.filter(isGenerated);
   return (
@@ -60,17 +59,31 @@ export default function StepReview({ project, shots = [], status, refresh, onNex
         <h2>Review <span className="accent-word">every shot</span></h2>
         <p>Play each clip. Re-roll any shot you want to try again.</p>
       </div>
-      <div className={styles.shotGrid}>
-        {shots.map((shot) => (
-          <ShotCard key={shot.id} shot={shot} project={project} editable={false} onChanged={refresh} returnTo={returnTo}>
-            <ClipActions shot={shot} project={project} status={status} refresh={refresh} onRetry={(id) => setRetryIds([id])} returnTo={returnTo} />
-          </ShotCard>
-        ))}
-      </div>
+      {shots.length === 0 ? (
+        <EmptyState icon="film" title="Your clips will appear here" text="Once your shots are made you can play and re-roll each one.">
+          {goTo && <Button variant="ghost" onClick={() => goTo('generate')}>Go to generate</Button>}
+        </EmptyState>
+      ) : (
+        <div className={styles.shotGrid}>
+          {shots.map((shot) => (
+            <ShotCard
+              key={shot.id}
+              shot={shot}
+              project={project}
+              editable={false}
+              onChanged={refresh}
+              returnTo={returnTo}
+              retry={shot.status === 'failed' || shot.status === 'blocked' ? <Button variant="ghost" size="sm" arrow={false} onClick={() => setRetryIds([shot.id])}>Try again</Button> : undefined}
+            >
+              <ClipActions shot={shot} project={project} status={status} refresh={refresh} returnTo={returnTo} />
+            </ShotCard>
+          ))}
+        </div>
+      )}
       <FilesNote project={project} />
-      <div className={styles.actions}>
+      <StepFooter>
         <Button onClick={onNext} disabled={generated.length === 0 || generated.some((s) => s.status !== 'ready')}>Continue to finish</Button>
-      </div>
+      </StepFooter>
       {retryIds && (
         <GenerateConfirm open project={project} shotIds={retryIds} returnTo={returnTo} onClose={() => setRetryIds(null)} onStarted={refresh} />
       )}

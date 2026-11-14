@@ -44,3 +44,8 @@
   color: #fff;
 }
 .dark:hover { background: #2a251e; }
+
+/* Tap targets on a phone. */
+@media (max-width: 760px) {
+  .btn { min-height: 44px; }
+}

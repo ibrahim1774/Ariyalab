@@ -7,6 +7,7 @@ import { DEFAULTS, QUALITY_LABELS } from '../../lib/pricingConstants';
 import { makeStills, updateShot } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
 import { AssetPickerSlot } from './slots';
+import { Skeleton, Tile } from './Tiles';
 import styles from './ShotCard.module.css';
 
 export const STATUS_LABELS = {
@@ -31,13 +32,41 @@ export function qualityChoices(project) {
  * One shot in the storyboard grid: still, line, seconds, quality, status. With `editable` it also has re-roll still,
  * edit description, change quality and the "my footage" slot. `children` is extra content (the review step puts the clip there).
  */
-export default function ShotCard({ shot, project, onChanged, returnTo, editable = true, children }) {
+export default function ShotCard({ shot, project, onChanged, returnTo, editable = true, retry, children }) {
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(shot.description || '');
+  const [more, setMore] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const locked = BUSY.has(shot.status) || Boolean(busy);
   const choices = qualityChoices(project);
+  const failed = shot.status === 'failed' || shot.status === 'blocked';
+  const waiting = shot.status === 'still_pending' || BUSY.has(shot.status);
+  const retryNode =
+    retry ??
+    (editable && failed ? (
+      <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('still', () => makeStills(project.id, [shot.id]))}>Try again</Button>
+    ) : null);
+  let media;
+  if (failed) {
+    media = (
+      <Tile tone="error" icon={shot.status === 'blocked' ? 'block' : 'alert'} title={shot.status === 'blocked' ? 'This shot was blocked' : 'This shot did not work'} text={shot.error || 'Change the description or try again.'}>
+        {retryNode}
+      </Tile>
+    );
+  } else if (waiting) {
+    media = (
+      <Skeleton
+        status={shot.status === 'still_pending' ? 'Sketching this shot' : 'Animating this shot'}
+        line={shot.line}
+        image={shot.status === 'still_pending' ? null : shot.still_url}
+      />
+    );
+  } else if (shot.still_url) {
+    media = <img src={shot.still_url} alt={`Shot ${shot.ord + 1}: ${shot.description || 'picture'}`} loading="lazy" />;
+  } else {
+    media = <Tile icon="image" title="No picture yet" text="Make pictures to see this shot here." />;
+  }
 
   async function run(kind, fn) {
     setBusy(kind);
@@ -61,15 +90,9 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   };
 
   return (
-    <Card className={styles.card} padded={false} data-shot={shot.id} data-status={shot.status}>
+    <Card className={styles.card} padded={false} data-shot={shot.id} data-status={shot.status} data-media-card="">
       <div className={styles.still}>
-        {shot.still_url ? (
-          <img src={shot.still_url} alt={`Shot ${shot.ord + 1}: ${shot.description || 'picture'}`} loading="lazy" />
-        ) : (
-          <div className={`${styles.placeholder} ${shot.status === 'still_pending' ? styles.shimmer : ''}`} role="img" aria-label={`Shot ${shot.ord + 1} has no picture yet`}>
-            <span>{shot.status === 'still_pending' ? 'Making the picture' : 'No picture yet'}</span>
-          </div>
-        )}
+        {media}
         <span className={styles.number}>{shot.ord + 1}</span>
       </div>
       <div className={styles.body}>
@@ -79,7 +102,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
           <span className={styles.seconds}>{shot.seconds} seconds</span>
           {shot.stale && <Pill tone="accent">Needs update</Pill>}
         </div>
-        {shot.line && <p className={styles.line}>{shot.line}</p>}
+        {shot.line && !waiting && <p className={styles.line} title={shot.line}>{shot.line}</p>}
 
         {editing ? (
           <form onSubmit={saveText} className={styles.edit}>
@@ -93,20 +116,22 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
             </div>
           </form>
         ) : (
-          shot.description && <p className={styles.description}>{shot.description}</p>
+          shot.description && <p className={styles.description} title={shot.description}>{shot.description}</p>
         )}
 
-        {(shot.status === 'failed' || shot.status === 'blocked') && shot.error && (
-          <p className={styles.reason} role="alert">{shot.error}</p>
-        )}
 
         {editable && !editing && (
-          <div className={styles.actions}>
-            <Button variant="ghost" size="sm" arrow={false} disabled={locked}
+          <button type="button" className={styles.moreToggle} aria-expanded={more} onClick={() => setMore((v) => !v)}>
+            {more ? 'Hide options' : 'Change this shot'}
+          </button>
+        )}
+        {editable && !editing && (
+          <div className={`${styles.actions} ${more ? styles.actionsOpen : ''}`}>
+            <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} title="Make a new picture for this shot"
               onClick={() => run('still', () => makeStills(project.id, [shot.id]))}>
-              {busy === 'still' ? 'Making a new picture…' : `Re-roll picture (${DEFAULTS.stillReroll} credits)`}
+              {busy === 'still' ? 'Making…' : `Re-roll, ${DEFAULTS.stillReroll} credits`}
             </Button>
-            <Button variant="ghost" size="sm" arrow={false} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>
+            <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>
             <label className={styles.quality}>
               <span>Quality</span>
               <select
@@ -122,8 +147,10 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
             <AssetPickerSlot label="Use my footage" />
           </div>
         )}
-        <ErrorNotice error={error} returnTo={returnTo} onRefresh={onChanged} />
-        {children}
+        <div className={styles.extra}>
+          <ErrorNotice error={error} returnTo={returnTo} onRefresh={onChanged} />
+          {children}
+        </div>
       </div>
     </Card>
   );

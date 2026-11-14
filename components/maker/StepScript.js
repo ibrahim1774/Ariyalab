@@ -4,6 +4,8 @@ import Button from '../ui/Button';
 import Card from '../ui/Card';
 import { getScript, reviseScript, updateScene, writeScript } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
+import { EmptyState } from './Tiles';
 import styles from './Steps.module.css';
 
 const SAVE_DELAY_MS = 800;
@@ -179,16 +181,11 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
       {script === undefined && <p className={styles.muted} role="status">Loading your script…</p>}
 
       {script === null && (
-        <Card>
-          <div className={styles.form}>
-            <p>Ready when you are. We will write a script from what you told us.</p>
-            <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
-            <div className={styles.actions}>
-              <Button onClick={write} disabled={busy === 'write'}>{busy === 'write' ? 'Writing your script…' : 'Write my script'}</Button>
-            </div>
-            <p className={styles.srOnly} role="status" aria-live="polite">{busy === 'write' ? 'Writing your script' : ''}</p>
-          </div>
-        </Card>
+        <EmptyState icon="text" title="Your script will appear here" text="We write it from what you told us. You can edit every line after.">
+          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+          <Button onClick={write} disabled={busy === 'write'}>{busy === 'write' ? 'Writing your script…' : 'Write my script'}</Button>
+          <p className={styles.srOnly} role="status" aria-live="polite">{busy === 'write' ? 'Writing your script' : ''}</p>
+        </EmptyState>
       )}
 
       {script && (
@@ -224,11 +221,13 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
                 <Button type="submit" variant="ghost" disabled={busy === 'revise' || !note.trim()}>
                   {busy === 'revise' ? 'Revising…' : 'Revise script'}
                 </Button>
-                <Button onClick={onNext}>Continue to the cast</Button>
               </div>
               <p className={styles.srOnly} role="status" aria-live="polite">{busy === 'revise' ? 'Revising your script' : ''}</p>
             </form>
           </Card>
+          <StepFooter>
+            <Button onClick={onNext}>Continue to the cast</Button>
+          </StepFooter>
         </>
       )}
     </div>

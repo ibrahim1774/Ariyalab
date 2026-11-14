@@ -3,6 +3,7 @@ import { useState } from 'react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import ErrorNotice from './ErrorNotice';
+import StepFooter from './StepFooter';
 import styles from './Steps.module.css';
 
 export const PURPOSES = [
@@ -48,8 +49,9 @@ export default function StepPurpose({ project, save, onNext, returnTo }) {
         <h2>What is this video <span className="accent-word">for</span>?</h2>
         <p>This helps the script fit your goal without feeling like an ad.</p>
       </div>
+      <form onSubmit={submit} className={styles.step}>
       <Card>
-        <form onSubmit={submit} className={styles.form}>
+        <div className={styles.form}>
           <fieldset className={styles.optionGrid}>
             <legend className={styles.srOnly}>Purpose of the video</legend>
             {PURPOSES.map((p) => (
@@ -75,11 +77,12 @@ export default function StepPurpose({ project, save, onNext, returnTo }) {
             </>
           )}
           <ErrorNotice error={error} field={null} returnTo={returnTo} />
-          <div className={styles.actions}>
-            <Button type="submit" disabled={!purpose || busy}>{busy ? 'Saving…' : 'Continue'}</Button>
-          </div>
-        </form>
+        </div>
       </Card>
+      <StepFooter>
+        <Button type="submit" disabled={!purpose || busy}>{busy ? 'Saving…' : 'Continue'}</Button>
+      </StepFooter>
+      </form>
     </div>
   );
 }

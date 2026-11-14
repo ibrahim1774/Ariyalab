@@ -70,7 +70,7 @@ export default function MakerPage({ id, returnTo }) {
   const stale = staleIds(project, shots);
   const steps = list.map((s) => ({ id: s.id, label: s.label, stale: stale.has(s.id), locked: index(s.id) > index(reachedId) }));
   const current = view || furthest;
-  const common = { project, returnTo, refresh, onNext: next };
+  const common = { project, returnTo, refresh, onNext: next, goTo };
   const showQuote = index(current) >= index('length');
   const reloadKey = `${project.step}:${jobs.filter((j) => j.status === 'done').length}`;
 

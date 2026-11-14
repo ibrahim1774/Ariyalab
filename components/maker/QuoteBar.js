@@ -78,7 +78,7 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
       )}
       {quote?.lines?.length > 0 && (
         <details className={styles.details}>
-          <summary>What is included</summary>
+          <summary>Details</summary>
           <ul>
             {quote.lines.map((l, i) => (
               <li key={`${l.label}-${i}`}>

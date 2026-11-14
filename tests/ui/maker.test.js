@@ -268,12 +268,47 @@ describe('brief steps', () => {
     expect(alert.closest('label')).toHaveTextContent('What are you offering?');
   });
 
-  it('offers the seven presets without referencing sample images that do not exist', () => {
+  it('shows every preset as a card with its sample image at /styles/<key>.jpg, lazy loaded', () => {
     const { container } = render(<StepStyle project={project({ style: null })} save={vi.fn()} onNext={vi.fn()} />);
     expect(screen.getByRole('radio', { name: '3D animated family film' })).toBeInTheDocument();
     expect(screen.getAllByRole('radio').length).toBe(8);
-    expect(container.querySelectorAll('img')).toHaveLength(0);
-    expect(container.innerHTML).not.toMatch(/\/styles\/.*\.jpg/);
+    for (const key of ['3d_family', '2d_cartoon', 'anime', 'clay', 'comic', 'flat_motion', 'watercolor', 'custom']) {
+      const img = container.querySelector(`img[src="/styles/${key}.jpg"]`);
+      expect(img, key).not.toBeNull();
+      expect(img.getAttribute('alt')).toBeTruthy();
+      expect(img).toHaveAttribute('loading', 'lazy');
+    }
+    expect(container.querySelector('img[src="/styles/clay.jpg"]')).toHaveAttribute('alt', 'Clay');
+  });
+
+  it('maps the eight style keys to eight distinct image paths, each from its own key', async () => {
+    const { STYLES } = await import('../../lib/story/prompts/styles');
+    const { styleImageSrc } = await import('../../components/maker/Tiles');
+    const keys = Object.keys(STYLES);
+    expect(keys).toHaveLength(8);
+    const paths = keys.map(styleImageSrc);
+    expect(new Set(paths).size).toBe(8);
+    expect(paths).toEqual(keys.map((k) => `/styles/${k}.jpg`));
+    const { container } = render(<StepStyle project={project({ style: null })} save={vi.fn()} onNext={vi.fn()} />);
+    for (const k of keys) expect(container.querySelector(`input[value="${k}"]`).closest('label').querySelector('img')).toHaveAttribute('src', `/styles/${k}.jpg`);
+  });
+
+  it('states the chosen style by name on the cast and storyboard steps', () => {
+    const p = project({ style: '3d_family' });
+    const { unmount } = render(<StepCast project={p} cast={[]} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByTestId('style-note')).toHaveTextContent('Style: 3D animated family film');
+    unmount();
+    render(<StepStoryboard project={p} shots={[shot(1)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByTestId('style-note')).toHaveTextContent('Style: 3D animated family film');
+  });
+
+  it('falls back to a labelled tile when a style image is missing', () => {
+    const { container } = render(<StepStyle project={project({ style: null })} save={vi.fn()} onNext={vi.fn()} />);
+    fireEvent.error(container.querySelector('img[src="/styles/anime.jpg"]'));
+    expect(container.querySelector('img[src="/styles/anime.jpg"]')).toBeNull();
+    const card = screen.getByRole('radio', { name: /Anime/ }).closest('label');
+    expect(card.querySelector('[data-tile]')).toHaveTextContent('Anime');
+    expect(container.querySelector('img[src="/styles/clay.jpg"]')).not.toBeNull();
   });
 
   it('asks for the custom style text', () => {
@@ -313,6 +348,95 @@ describe('brief steps', () => {
     fireEvent.click(screen.getByRole('radio', { name: '60 seconds' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Talking videos need Pro talking.');
     expect(screen.getByRole('radio', { name: '45 seconds' })).toBeChecked();
+  });
+});
+
+describe('waiting, failed and empty states', () => {
+  it('shows a generating shot as a skeleton with its status text and script line', () => {
+    const shots = [shot(1, { status: 'generating' }), shot(2, { status: 'still_pending', still_url: null }), shot(3, { status: 'queued' })];
+    const { container } = render(<StepGenerate project={project({ step: 'generate' })} shots={shots} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    const cards = [...container.querySelectorAll('[data-shot]')];
+    const first = cards[0].querySelector('[data-skeleton]');
+    expect(first).not.toBeNull();
+    expect(first).toHaveTextContent('Animating this shot');
+    expect(first).toHaveTextContent('Line 1');
+    expect(cards[1].querySelector('[data-skeleton]')).toHaveTextContent('Sketching this shot');
+    expect(cards[1].querySelector('[data-skeleton]')).toHaveTextContent('Line 2');
+    expect(cards[2].querySelector('[data-skeleton]')).toHaveTextContent('Animating this shot');
+  });
+
+  it('shows cast candidates being made as skeletons in the portrait ratio with a status line', () => {
+    render(<StepCast project={project()} cast={[{ id: 'c1', name: 'Maya', status: 'pending', candidates: [] }]} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    const sk = screen.getAllByTestId('candidate-pending');
+    expect(sk).toHaveLength(3);
+    expect(sk[0]).toHaveTextContent('Drawing your character');
+    expect(sk[0].style.aspectRatio).toBe('3 / 4');
+  });
+
+  it('puts the reason, an icon and a retry on a tinted tile for failed and blocked shots', () => {
+    const shots = [shot(1, { status: 'failed', error: 'The clip did not finish.' }), shot(2, { status: 'blocked', error: 'Not allowed.' })];
+    const { container } = render(<StepGenerate project={project({ step: 'generate' })} shots={shots} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    const tiles = container.querySelectorAll('[data-tile="error"]');
+    expect(tiles).toHaveLength(2);
+    expect(tiles[0]).toHaveTextContent('The clip did not finish.');
+    expect(tiles[0].querySelector('svg')).not.toBeNull();
+    expect(within(tiles[0]).getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+    expect(tiles[1]).toHaveTextContent('Not allowed.');
+  });
+
+  it('gives empty lists a designed empty state with one action', () => {
+    const { container } = render(<StepStoryboard project={project()} shots={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    const empty = container.querySelector('[data-empty]');
+    expect(empty).toHaveTextContent('Your shots will appear here once the cast is picked');
+    expect(empty.querySelector('[data-tile]')).not.toBeNull();
+    expect(within(empty).getAllByRole('button')).toHaveLength(1);
+  });
+
+  it('never renders a media card with neither an image, a skeleton nor a labelled tile', async () => {
+    const shots = [
+      shot(1), shot(2, { status: 'draft', still_url: null }), shot(3, { status: 'still_pending', still_url: null }), shot(4, { status: 'generating' }),
+      shot(5, { status: 'failed', error: 'x' }), shot(6, { status: 'blocked' }), shot(7, { status: 'ready', clip_url: '/c.mp4' }),
+    ];
+    const cands = [{ url: '/a.png', key: 'a' }, { url: '/b.png', key: 'b' }, { url: '/c.png', key: 'c' }];
+    const cast = ['draft', 'pending', 'ready', 'failed', 'blocked'].map((st, i) => ({ id: `c${i}`, name: `N${i}`, status: st, candidates: st === 'ready' ? cands : [], chosen_index: null }));
+    const common = { project: project(), refresh: vi.fn(), onNext: vi.fn(), save: vi.fn(), returnTo: '/', goTo: vi.fn() };
+    client.getScript.mockResolvedValue(null);
+    const views = [
+      <StepStyle key="1" {...common} />, <StepCast key="2" {...common} cast={cast} jobs={[]} />, <StepCast key="3" {...common} cast={[]} jobs={[]} />,
+      <StepStoryboard key="4" {...common} shots={shots} />, <StepStoryboard key="5" {...common} shots={[]} />,
+      <StepGenerate key="6" {...common} shots={shots} />, <StepGenerate key="7" {...common} shots={[]} />,
+      <StepReview key="8" {...common} shots={shots} status={{ shots, project: project() }} />, <StepReview key="9" {...common} shots={[]} status={{ shots: [], project: project() }} />,
+      <StepScript key="10" {...common} />, <StepStart key="11" onCreate={vi.fn()} />,
+      <div key="12"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.FinishSlot /></div>,
+    ];
+    let seen = 0;
+    for (const view of views) {
+      const { container, unmount } = render(view);
+      await flush();
+      for (const card of container.querySelectorAll('[data-media-card]')) {
+        seen += 1;
+        expect(card.querySelector('img, [data-skeleton], [data-tile]'), card.outerHTML.slice(0, 120)).not.toBeNull();
+      }
+      unmount();
+    }
+    expect(seen).toBeGreaterThan(25);
+  });
+});
+
+describe('project thumbnails', () => {
+  it('uses the first ready still, else the style sample, else a labelled tile', async () => {
+    const { default: ProjectCard, thumbnailFor } = await import('../../components/app/ProjectCard');
+    expect(thumbnailFor({ thumbnail_url: '/t.png', style: 'clay' })).toBe('/t.png');
+    expect(thumbnailFor({ style: 'clay' })).toBe('/styles/clay.jpg');
+    expect(thumbnailFor({ style: 'custom' })).toBeNull();
+    const { container } = render(<ProjectCard project={{ id: 'p', title: 'T', style: 'custom' }} />);
+    expect(container.querySelector('[data-tile="cover"]')).toHaveTextContent('Your own style');
+    cleanup();
+    const view = render(<ProjectCard project={{ id: 'p', title: 'T', style: 'clay' }} />);
+    const img = view.container.querySelector('img');
+    expect(img).toHaveAttribute('src', '/styles/clay.jpg');
+    fireEvent.error(img);
+    expect(view.container.querySelector('[data-tile="cover"]')).toHaveTextContent('Clay');
   });
 });
 
@@ -465,7 +589,7 @@ describe('storyboard step', () => {
     client.makeStills.mockResolvedValue({});
     client.updateShot.mockResolvedValue({});
     render(<StepStoryboard project={project()} shots={[shot(1)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    fireEvent.click(screen.getByRole('button', { name: /Re-roll picture/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Re-roll, 2 credits/ }));
     await waitFor(() => expect(client.makeStills).toHaveBeenCalledWith('p1', ['s1']));
     fireEvent.click(screen.getByRole('button', { name: 'Edit description' }));
     fireEvent.change(screen.getByLabelText('Description of shot 1'), { target: { value: 'A new idea' } });

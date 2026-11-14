@@ -1,7 +1,8 @@
-.step { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
-.stepHead h2 { font-size: clamp(22px, 3vw, 30px); line-height: 1.15; margin-bottom: 6px; }
-.stepHead p { margin: 0; color: var(--text-dim); max-width: 600px; }
-.form { display: flex; flex-direction: column; gap: 18px; min-width: 0; }
+.step { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.stepHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 14px; }
+.stepHead h2 { font-size: 22px; line-height: 1.2; margin: 0; }
+.stepHead p { margin: 0; color: var(--text-dim); font-size: 14px; max-width: 70ch; }
+.form { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .form p { margin: 0; }
 .muted, .hint { color: var(--text-dim); font-size: 14px; margin: 0; }
 .srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
@@ -19,6 +20,9 @@
   background: var(--surface);
   color: var(--text);
   resize: vertical;
+  field-sizing: content;
+  min-height: 2.6em;
+  max-height: 40dvh;
 }
 .field input:focus-visible, .field textarea:focus-visible, .line textarea:focus-visible, .sceneTitle:focus-visible {
   outline: none;
@@ -29,15 +33,15 @@
 .optionGrid legend.srOnly, .styleGrid legend.srOnly { position: absolute; margin: 0; }
 
 /* Radio cards: the real input stays in the page (keyboard and screen readers) and the card shows the focus. */
-.optionGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.optionGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 .option, .styleCard, .chip {
   position: relative;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 14px 16px;
+  padding: 10px 14px;
   border: 1px solid var(--border-strong);
-  border-radius: 16px;
+  border-radius: 14px;
   background: var(--surface);
   cursor: pointer;
   transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
@@ -51,9 +55,9 @@
 .chips { display: flex; flex-wrap: wrap; gap: 10px; }
 .chips legend { width: 100%; }
 .chip { padding: 10px 16px; border-radius: var(--radius-pill); flex-direction: row; align-items: baseline; gap: 8px; font-size: 14px; font-weight: 500; }
-.styleGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }
-.styleCard { padding: 10px; }
-.stylePreview { display: block; aspect-ratio: 4 / 3; border-radius: 10px; margin-bottom: 6px; }
+.styleGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; }
+.styleCard { padding: 8px; gap: 2px; }
+.styleCard > :first-of-type { margin-bottom: 6px; }
 .saveState { min-height: 20px; font-size: 13px; color: var(--text-dim); }
 
 .errorNotice {
@@ -81,8 +85,8 @@
 .errorAction:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
 
 /* Script */
-.sceneList { display: flex; flex-direction: column; gap: 14px; }
-.scene { display: flex; flex-direction: column; gap: 12px; padding: 18px; min-width: 0; }
+.sceneList { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 420px), 1fr)); gap: 10px; align-items: start; }
+.scene { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; min-width: 0; }
 .sceneHead { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .sceneNumber { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--accent-deep); }
 .sceneTitle { flex: 1 1 160px; width: auto; font-weight: 600; padding: 6px 10px; }
@@ -95,11 +99,12 @@
 .generalNotes { display: flex; flex-direction: column; gap: 8px; }
 
 /* Cast */
-.castList { display: flex; flex-direction: column; gap: 16px; }
-.castCard { display: flex; flex-direction: column; gap: 14px; padding: 20px; min-width: 0; }
-.castHead h3 { font-size: 18px; margin-bottom: 4px; }
+.castList { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 480px), 1fr)); gap: 12px; align-items: start; }
+.castCard { display: flex; flex-direction: column; gap: 10px; padding: 14px; min-width: 0; }
+.castHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 10px; }
+.castHead h3 { font-size: 17px; margin: 0; overflow-wrap: anywhere; }
 .castHead p { margin: 0; color: var(--text-dim); font-size: 14px; }
-.candidates { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.candidates { display: grid; grid-template-columns: repeat(3, minmax(0, 190px)); gap: 10px; }
 .candidate { position: relative; display: flex; flex-direction: column; gap: 8px; min-width: 0; aspect-ratio: auto; }
 .candidate img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 14px; background: var(--surface-2); }
 div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
@@ -121,10 +126,10 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 .pickButton:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .pickButton:disabled { opacity: 0.6; cursor: not-allowed; }
 .blocked, .failed { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--error-bg); color: var(--error); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
-.regen { display: flex; flex-direction: column; gap: 12px; }
+.regen { display: flex; flex-direction: column; gap: 8px; }
 
 /* Storyboard, generate, review */
-.shotGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
+.shotGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-items: start; }
 .filesNote { margin: 0; font-size: 13px; color: var(--text-dim); }
 .progress { height: 10px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
 .progress span { display: block; height: 100%; background: var(--accent); transition: width 0.4s var(--ease); }
@@ -144,10 +149,10 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 .chatSlot h3 { font-size: 16px; margin-bottom: 6px; }
 .slotButton {
   display: inline-flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
-  padding: 6px 12px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 6px;
+  padding: 4px 10px;
   border: 1px dashed var(--border-strong);
   border-radius: 14px;
   background: transparent;
@@ -158,8 +163,36 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 }
 .slotButton small { font-size: 11px; }
 
-@media (max-width: 520px) {
+
+.progressBox { display: flex; flex-direction: column; gap: 6px; padding: 12px 14px; }
+.progressBox p { margin: 0; }
+
+/* The step's primary action, pinned to the bottom of the viewport. */
+.footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+  margin: 4px -4px 0;
+  padding: 10px 4px calc(10px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(0deg, var(--bg) 78%, rgba(253, 251, 245, 0));
+}
+
+@media (max-width: 760px) {
+  .stepHead h2 { font-size: 20px; }
+  .stepHead p { display: none; }
   .candidates { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
   .optionGrid { grid-template-columns: minmax(0, 1fr); }
-  .shotGrid { grid-template-columns: minmax(0, 1fr); }
+  .styleGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .shotGrid { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .option, .chip, .styleCard { min-height: 44px; }
+  .pickButton, .errorAction { min-height: 44px; padding-left: 12px; padding-right: 12px; }
+  .actions button, .actions a, .footer button, .footer a, .toolbar button, .regen button { min-height: 44px; }
+  .field input, .field textarea, .line textarea, .sceneTitle { font-size: 16px; }
+  .sceneTitle { min-height: 44px; }
+  .errorNotice a { display: inline-flex; align-items: center; min-height: 44px; }
 }
+@media (max-width: 760px) { .clip { max-height: 200px; } }

@@ -1,8 +1,5 @@
 .bar {
-  position: sticky;
-  bottom: 12px;
-  z-index: 5;
-  padding: 14px 18px;
+  padding: 12px 16px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-card);
@@ -20,3 +17,21 @@
 .details summary:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 6px; }
 .details ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
 .details li { display: flex; justify-content: space-between; gap: 12px; }
+
+@media (max-width: 900px) {
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; padding: 4px 12px; border-radius: 16px; box-shadow: var(--shadow-sm); }
+  .row { flex: 1 1 auto; }
+  .short { order: 3; flex-basis: 100%; }
+  .details { order: 2; margin: 0; flex: 0 0 auto; }
+  .details[open] { flex-basis: 100%; order: 4; }
+  .details summary { font-size: 13px; padding: 0 6px; }
+  .row { flex-wrap: nowrap; align-items: center; gap: 8px; }
+  .cost { flex-direction: row; align-items: baseline; gap: 8px; }
+  .label, .meta { display: none; }
+  .total { font-size: 16px; }
+  .balance { flex-direction: row; align-items: baseline; gap: 6px; font-size: 14px; }
+  .balance .label { display: inline; }
+  .short a { display: inline-flex; align-items: center; min-height: 44px; }
+  .short { margin: 0 0 4px; padding: 2px 8px; font-size: 13px; }
+  .details summary { min-height: 44px; display: flex; align-items: center; }
+}
