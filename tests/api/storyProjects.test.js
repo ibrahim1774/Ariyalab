@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeReq, makeRes } from '../helpers/apiMock';
 import { createTestDb } from '../helpers/db.js';
+import { useRegexOnlyModeration } from '../helpers/storyEnv.js';
 
 let currentUser = null;
 vi.mock('../../lib/supabaseServer.js', () => ({
@@ -11,23 +12,36 @@ vi.mock('../../lib/supabaseServer.js', () => ({
   },
 }));
 
+// Only the classifier-unavailable test reaches the SDK (the others run without a key).
+vi.mock('@anthropic-ai/sdk', () => ({
+  default: class {
+    constructor() {
+      this.messages = {
+        create: async () => {
+          throw new Error('network down');
+        },
+      };
+    }
+  },
+}));
+
 const { setStoryDb } = await import('../../lib/story/db.js');
 const listHandler = (await import('../../pages/api/story/projects/index.js')).default;
 const itemHandler = (await import('../../pages/api/story/projects/[id]/index.js')).default;
+
+useRegexOnlyModeration();
 
 let raw;
 const ALICE = { id: randomUUID(), email: 'alice@example.test' };
 const BOB = { id: randomUUID(), email: 'bob@example.test' };
 
 beforeAll(async () => {
-  vi.stubEnv('ANTHROPIC_API_KEY', '');
   raw = await createTestDb();
   setStoryDb(raw);
 }, 60_000);
 
 afterAll(async () => {
   setStoryDb(null);
-  vi.unstubAllEnvs();
   await raw?.close();
 });
 
@@ -76,6 +90,21 @@ describe('/api/story/projects', () => {
     const res = await create({ title: 'nude' });
     expect(res.statusCode).toBe(400);
     expect(res.body.code).toBe('BLOCKED_NSFW');
+  });
+
+  it('returns 503 when the classifier is unavailable', async () => {
+    vi.stubEnv('STORY_MOCK', '');
+    vi.stubEnv('ANTHROPIC_API_KEY', 'test-key');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const res = await create({ title: 'Fresh fades for busy dads' });
+      expect(res.statusCode).toBe(503);
+      expect(res.body.code).toBe('MODERATION_UNAVAILABLE');
+    } finally {
+      warn.mockRestore();
+      vi.stubEnv('STORY_MOCK', '1');
+      vi.stubEnv('ANTHROPIC_API_KEY', '');
+    }
   });
 
   it('rejects other methods with 405', async () => {

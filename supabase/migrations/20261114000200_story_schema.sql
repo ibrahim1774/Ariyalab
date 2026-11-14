@@ -14,18 +14,19 @@
 --
 -- Ownership: story_projects, story_assets, story_brand, story_voices,
 -- story_jobs and story_usage carry user_id. Project children
--- (references, scripts, cast, shots, renders, chat) are owned through
--- project_id and are deleted with their project (on delete cascade).
--- story_projects.reference_id points at story_references without an FK
--- (the two would reference each other).
+-- (references, scripts, cast, shots, renders, chat, project_assets) are
+-- owned through project_id and are deleted with their project (on delete
+-- cascade). Assets belong to the user, not to a project: a project uses
+-- them through story_project_assets, so deleting a project removes only
+-- the join rows. story_projects.reference_id points at story_references
+-- without an FK (the two would reference each other).
 --
--- Access: the server uses the service role (bypasses RLS) and enforces
--- ownership in lib/story/*. Clients (authenticated) may select their own
--- rows in every table; they may insert and update only story_projects,
--- story_scripts and story_assets, and only the columns granted below
--- (billing and pipeline columns such as fee_charged, step, status are
--- server-only). Everything else is written by the server only. anon has no
--- access. Functions are executable by service_role only.
+-- Access: every write goes through service-role API routes, which bypass
+-- RLS and enforce ownership in lib/story/*. Clients (authenticated) may
+-- only select their own rows; they have no insert, update or delete
+-- privilege on any story_ table. On story_jobs they may read only the
+-- columns in story_jobs_public (not payload, provider ids, hold or cost).
+-- anon has no access. Functions are executable by service_role only.
 
 -- ---------------------------------------------------------------- tables
 
@@ -60,17 +61,20 @@ create table public.story_projects (
   reference_id uuid,
   thumbnail_url text,
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  -- Talking videos use the video model's own voices, which only pro_talking has.
+  constraint story_projects_mode_quality check ((mode = 'talking') = (quality = 'pro_talking'))
 );
 
 create index story_projects_owner_idx on public.story_projects (user_id, updated_at desc);
 
--- Brand kit files and customer uploads. project_id tags an upload made for
--- one project; brand-kit assets have none. Assets outlive their project.
+-- Customer uploads, owned by the user. in_brand_kit marks the ones shown in
+-- the brand kit (spec 7.4); projects attach assets through
+-- story_project_assets.
 create table public.story_assets (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null,
-  project_id uuid references public.story_projects (id) on delete set null,
+  in_brand_kit boolean not null default false,
   kind text not null check (kind in (
     'logo', 'product_photo', 'mascot', 'image', 'screen_recording', 'video_clip',
     'reference_video', 'voice_sample', 'voice_track', 'music', 'audio'
@@ -89,7 +93,7 @@ create table public.story_assets (
 );
 
 create index story_assets_owner_idx on public.story_assets (user_id, created_at desc);
-create index story_assets_project_idx on public.story_assets (project_id) where project_id is not null;
+create index story_assets_brand_kit_idx on public.story_assets (user_id) where in_brand_kit;
 
 -- A reference video and what was learned from it (spec 7.3 step 5).
 create table public.story_references (
@@ -107,6 +111,9 @@ create table public.story_references (
   transcript jsonb,                                -- { text, words:[{ w, start, end }] }
   beat_sheet jsonb not null default '[]'::jsonb,   -- Beat[]
   mood text,                                       -- suggested music mood
+  -- The customer's statement that they may use the reference (spec 7.3).
+  rights_confirmed_at timestamptz,
+  rights_statement text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -155,7 +162,11 @@ create table public.story_shots (
   quality text not null default 'standard' check (quality in ('economy', 'standard', 'pro_narrated', 'pro_talking')),
   source text not null default 'generated' check (source in ('generated', 'footage')),
   footage_asset_id uuid references public.story_assets (id) on delete set null,
+  footage jsonb,                                   -- { trimStart, fit } for source 'footage'
   inset_asset_id uuid references public.story_assets (id) on delete set null,
+  inset jsonb,                                     -- { x, y, w } framed overlay placement
+  cast_ids uuid[] not null default '{}',           -- story_cast rows in this shot
+  ref_asset_ids uuid[] not null default '{}',      -- product/mascot images used as references
   still_url text,
   clip_url text,
   status text not null default 'draft' check (status in (
@@ -242,11 +253,25 @@ create table public.story_renders (
   file_url text,
   duration_seconds real,
   settings jsonb not null default '{}'::jsonb,     -- captions, music level, cut list used
+  warnings jsonb not null default '[]'::jsonb,     -- [{ code, message }] shown with the result
   error text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint story_renders_version_unique unique (project_id, version)
 );
+
+-- Assets a project uses, by role. Deleting either side removes the row.
+create table public.story_project_assets (
+  project_id uuid not null references public.story_projects (id) on delete cascade,
+  asset_id uuid not null references public.story_assets (id) on delete cascade,
+  role text not null check (role in (
+    'product', 'logo', 'mascot', 'recording', 'clip', 'audio', 'voice_track', 'music', 'reference_video'
+  )),
+  created_at timestamptz not null default now(),
+  primary key (project_id, asset_id, role)
+);
+
+create index story_project_assets_asset_idx on public.story_project_assets (asset_id);
 
 -- Chat history per project. content is the message content as sent to the
 -- model (a string, or an array of content blocks).
@@ -313,6 +338,7 @@ alter table public.story_jobs enable row level security;
 alter table public.story_renders enable row level security;
 alter table public.story_chat enable row level security;
 alter table public.story_usage enable row level security;
+alter table public.story_project_assets enable row level security;
 
 -- Owner reads on every table.
 create policy story_projects_owner_select on public.story_projects
@@ -333,7 +359,8 @@ declare
   t text;
 begin
   foreach t in array array[
-    'story_references', 'story_scripts', 'story_cast', 'story_shots', 'story_renders', 'story_chat'
+    'story_references', 'story_scripts', 'story_cast', 'story_shots', 'story_renders', 'story_chat',
+    'story_project_assets'
   ] loop
     execute format(
       'create policy %I on public.%I for select to authenticated using (exists (
@@ -345,35 +372,11 @@ begin
 end
 $$;
 
--- Owner writes: story_projects, story_scripts, story_assets only.
-create policy story_projects_owner_insert on public.story_projects
-  for insert to authenticated with check (user_id = (select auth.uid()));
-create policy story_projects_owner_update on public.story_projects
-  for update to authenticated
-  using (user_id = (select auth.uid())) with check (user_id = (select auth.uid()));
-
-create policy story_scripts_owner_insert on public.story_scripts
-  for insert to authenticated with check (exists (
-    select 1 from public.story_projects p where p.id = project_id and p.user_id = (select auth.uid())));
-create policy story_scripts_owner_update on public.story_scripts
-  for update to authenticated
-  using (exists (
-    select 1 from public.story_projects p where p.id = project_id and p.user_id = (select auth.uid())))
-  with check (exists (
-    select 1 from public.story_projects p where p.id = project_id and p.user_id = (select auth.uid())));
-
-create policy story_assets_owner_insert on public.story_assets
-  for insert to authenticated with check (
-    user_id = (select auth.uid())
-    and (project_id is null or exists (
-      select 1 from public.story_projects p where p.id = project_id and p.user_id = (select auth.uid()))));
-create policy story_assets_owner_update on public.story_assets
-  for update to authenticated
-  using (user_id = (select auth.uid()))
-  with check (
-    user_id = (select auth.uid())
-    and (project_id is null or exists (
-      select 1 from public.story_projects p where p.id = project_id and p.user_id = (select auth.uid()))));
+-- Client-facing job view: status only, no payload, provider ids, hold or
+-- cost. security_invoker, so the owner policy on story_jobs applies.
+create view public.story_jobs_public with (security_invoker = true) as
+  select id, project_id, shot_id, kind, status, error, created_at, updated_at
+    from public.story_jobs;
 
 -- ---------------------------------------------------------------- functions
 
@@ -437,6 +440,31 @@ begin
 end
 $$;
 
+-- Deletes a project the user owns, unless a job of it is queued or running
+-- (those carry credit holds only the runner settles). Returns false when
+-- the project does not exist or belongs to someone else; raises
+-- 'project_busy' when it has work in flight. The project row is locked
+-- first, so a job enqueued concurrently either commits before the check or
+-- fails its foreign key after the delete.
+create function public.story_delete_project(p_user uuid, p_project uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  perform 1 from story_projects where id = p_project and user_id = p_user for update;
+  if not found then
+    return false;
+  end if;
+  if exists (select 1 from story_jobs where project_id = p_project and status in ('queued', 'running')) then
+    raise exception 'project_busy';
+  end if;
+  delete from story_projects where id = p_project;
+  return true;
+end
+$$;
+
 -- ---------------------------------------------------------------- privileges
 
 -- Same pattern as the credit ledger migration: functions are executable by
@@ -447,14 +475,19 @@ declare
   fn regprocedure;
   all_tables text := 'public.story_projects, public.story_assets, public.story_references, '
     'public.story_scripts, public.story_cast, public.story_shots, public.story_brand, '
-    'public.story_voices, public.story_jobs, public.story_renders, public.story_chat, public.story_usage';
+    'public.story_voices, public.story_jobs, public.story_renders, public.story_chat, public.story_usage, '
+    'public.story_project_assets, public.story_jobs_public';
+  readable text := 'public.story_projects, public.story_assets, public.story_references, '
+    'public.story_scripts, public.story_cast, public.story_shots, public.story_brand, '
+    'public.story_voices, public.story_renders, public.story_chat, public.story_usage, '
+    'public.story_project_assets, public.story_jobs_public';
 begin
   for fn in
     select p.oid::regprocedure
       from pg_proc p
       join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public'
-        and p.proname = any (array['story_touch_updated_at', 'story_claim_jobs', 'story_usage_take'])
+        and p.proname = any (array['story_touch_updated_at', 'story_claim_jobs', 'story_usage_take', 'story_delete_project'])
   loop
     execute format('revoke all on function %s from public', fn);
     if exists (select 1 from pg_roles where rolname = 'anon') then
@@ -474,18 +507,12 @@ begin
 
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
     execute 'revoke all on table ' || all_tables || ' from authenticated';
-    -- Reads, filtered to the owner's rows by the policies above.
-    execute 'grant select on table ' || all_tables || ' to authenticated';
-    -- Writes: only the customer-editable columns.
-    grant insert (user_id, title, purpose, offer, audience, style, style_custom, seconds, aspect, quality, mode)
-      on table public.story_projects to authenticated;
-    grant update (title, purpose, offer, audience, style, style_custom, seconds, aspect, quality, mode)
-      on table public.story_projects to authenticated;
-    grant insert (project_id, version, scenes, source, instruction) on table public.story_scripts to authenticated;
-    grant update (scenes) on table public.story_scripts to authenticated;
-    grant insert (user_id, project_id, kind, name, url, storage_key, mime, bytes, duration_seconds, width, height, metadata)
-      on table public.story_assets to authenticated;
-    grant update (project_id, name, metadata) on table public.story_assets to authenticated;
+    -- Read-only, filtered to the owner's rows by the policies above.
+    execute 'grant select on table ' || readable || ' to authenticated';
+    -- story_jobs: only the columns the view exposes (the view runs as the
+    -- caller, so it needs them).
+    grant select (id, project_id, shot_id, kind, status, error, created_at, updated_at)
+      on table public.story_jobs to authenticated;
   end if;
 
   if exists (select 1 from pg_roles where rolname = 'service_role') then

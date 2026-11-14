@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDb } from '../helpers/db.js';
+import { useRegexOnlyModeration } from '../helpers/storyEnv.js';
 import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/story/errors.js';
 import { ModerationError } from '../../lib/moderation.js';
@@ -13,19 +14,17 @@ import {
   updateProject,
 } from '../../lib/story/projects.js';
 
+useRegexOnlyModeration();
+
 let raw;
 
 beforeAll(async () => {
-  // mockEnv sets a fake ANTHROPIC_API_KEY, which would make screenText call
-  // the real classifier. Without a key, STORY_MOCK=1 skips that layer.
-  vi.stubEnv('ANTHROPIC_API_KEY', '');
   raw = await createTestDb();
   setStoryDb(raw);
 }, 60_000);
 
 afterAll(async () => {
   setStoryDb(null);
-  vi.unstubAllEnvs();
   await raw?.close();
 });
 
@@ -68,6 +67,17 @@ describe('createProject', () => {
     [{ fee_charged: true }],
   ])('rejects %j', async (input) => {
     await expect(createProject({ userId: userA(), input })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('keeps mode and quality consistent', async () => {
+    const userId = userA();
+    expect((await createProject({ userId, input: { quality: 'pro_talking', mode: 'talking' } })).mode).toBe('talking');
+    await expect(createProject({ userId, input: { mode: 'talking' } })).rejects.toMatchObject({
+      field: 'mode', message: expect.stringMatching(/pro_talking/),
+    });
+    await expect(createProject({ userId, input: { quality: 'pro_talking', mode: 'narrated' } })).rejects.toBeInstanceOf(
+      ValidationError
+    );
   });
 
   it('accepts the length bounds', async () => {
@@ -123,6 +133,20 @@ describe('updateProject', () => {
     }
   });
 
+  it('keeps mode and quality consistent on PATCH', async () => {
+    const userId = userA();
+    const p = await createProject({ userId, input: BRIEF });
+    const talking = await updateProject({ userId, id: p.id, patch: { quality: 'pro_talking' } });
+    expect(talking).toMatchObject({ quality: 'pro_talking', mode: 'talking' });
+    await expect(updateProject({ userId, id: p.id, patch: { quality: 'standard' } })).rejects.toMatchObject({
+      field: 'quality', message: expect.stringMatching(/mode to narrated/),
+    });
+    await expect(updateProject({ userId, id: p.id, patch: { mode: 'narrated' } })).rejects.toBeInstanceOf(ValidationError);
+    const back = await updateProject({ userId, id: p.id, patch: { quality: 'standard', mode: 'narrated' } });
+    expect(back).toMatchObject({ quality: 'standard', mode: 'narrated' });
+    await expect(updateProject({ userId, id: p.id, patch: { mode: 'talking' } })).rejects.toMatchObject({ field: 'mode' });
+  });
+
   it('screens changed text and refuses other owners', async () => {
     const userId = userA();
     const p = await createProject({ userId, input: BRIEF });
@@ -138,18 +162,28 @@ async function seedChildren(project) {
     { project_id: project.id, version: 1, scenes: [{ id: 's1', title: 'Old', visual: 'v', lines: [] }] },
     { project_id: project.id, version: 2, scenes: [{ id: 's1', title: 'New', visual: 'v', lines: [{ speaker: 'narrator', text: 'Hi' }] }] },
   ]);
-  await db.insert('story_cast', {
-    project_id: project.id,
-    name: 'Sam',
-    description: 'A barber',
-    image_url: 'https://example.test/sam.png',
-    sheet: { front: 'f.png', three_quarter: 't.png', face: 'c.png' },
-    candidates: [{ url: 'a.png' }, { url: 'b.png' }, { url: 'c.png' }],
+  const [sam, ana] = await db.insert('story_cast', [
+    {
+      project_id: project.id,
+      name: 'Sam',
+      description: 'A barber',
+      image_url: 'https://example.test/sam.png',
+      sheet: { front: 'f.png', three_quarter: 't.png', face: 'c.png' },
+      candidates: [{ url: 'a.png' }, { url: 'b.png' }, { url: 'c.png' }],
+      status: 'ready',
+      regens_used: 2,
+    },
+    { project_id: project.id, ord: 1, name: 'Ana', status: 'pending' },
+  ]);
+  const [logo] = await db.insert('story_assets', {
+    user_id: project.user_id, kind: 'logo', url: 'https://example.test/logo.png', in_brand_kit: true,
   });
+  await db.insert('story_project_assets', { project_id: project.id, asset_id: logo.id, role: 'logo' });
   await db.insert('story_shots', [
-    { project_id: project.id, ord: 0, scene_id: 's1', description: 'Opening', still_url: 's0.png', clip_url: 'c0.mp4', status: 'ready', attempts: 2 },
+    { project_id: project.id, ord: 0, scene_id: 's1', description: 'Opening', still_url: 's0.png', clip_url: 'c0.mp4', status: 'ready', attempts: 2, cast_ids: [sam.id, ana.id] },
     { project_id: project.id, ord: 1, scene_id: 's1', description: 'Close', status: 'draft' },
   ]);
+  return { logo, sam, ana };
 }
 
 describe('deleteProject', () => {
@@ -159,9 +193,10 @@ describe('deleteProject', () => {
     await seedChildren(p);
     await deleteProject({ userId, id: p.id });
     await expect(getProject({ userId, id: p.id })).rejects.toBeInstanceOf(NotFoundError);
-    for (const table of ['story_scripts', 'story_cast', 'story_shots']) {
+    for (const table of ['story_scripts', 'story_cast', 'story_shots', 'story_project_assets']) {
       expect(await storyDb().select(table, { project_id: p.id }), table).toEqual([]);
     }
+    expect(await storyDb().select('story_assets', { user_id: userId })).toHaveLength(1);
   });
 
   it('refuses another owner and in-flight jobs', async () => {
@@ -180,7 +215,7 @@ describe('duplicateProject', () => {
     const userId = userA();
     const src = await createProject({ userId, input: { ...BRIEF, title: 'Chair' } });
     await storyDb().update('story_projects', { id: src.id }, { step: 'review', status: 'finished', fee_charged: true, rerolls_used: 3 });
-    await seedChildren(src);
+    const { logo, sam } = await seedChildren(src);
 
     const copy = await duplicateProject({ userId, id: src.id });
     expect(copy.id).not.toBe(src.id);
@@ -193,15 +228,21 @@ describe('duplicateProject', () => {
     expect(scripts).toHaveLength(1);
     expect(scripts[0].scenes[0].title).toBe('New');
 
-    const cast = await storyDb().select('story_cast', { project_id: copy.id });
-    expect(cast).toHaveLength(1);
+    const cast = await storyDb().select('story_cast', { project_id: copy.id }, { order: 'ord' });
+    expect(cast).toHaveLength(2);
     expect(cast[0]).toMatchObject({
-      name: 'Sam', image_url: 'https://example.test/sam.png',
+      name: 'Sam', image_url: 'https://example.test/sam.png', status: 'ready', regens_used: 0,
       sheet: { front: 'f.png', three_quarter: 't.png', face: 'c.png' },
     });
     expect(cast[0].candidates).toHaveLength(3);
+    expect(cast[1]).toMatchObject({ name: 'Ana', status: 'draft' });
+    expect(cast[0].id).not.toBe(sam.id);
+
+    const links = await storyDb().select('story_project_assets', { project_id: copy.id });
+    expect(links.map((l) => [l.asset_id, l.role])).toEqual([[logo.id, 'logo']]);
 
     const shots = await storyDb().select('story_shots', { project_id: copy.id }, { order: 'ord' });
+    expect(shots[0].cast_ids).toEqual(cast.map((c) => c.id));
     expect(shots.map((s) => [s.description, s.clip_url, s.still_url, s.status, s.attempts])).toEqual([
       ['Opening', null, 's0.png', 'still_ready', 0],
       ['Close', null, null, 'draft', 0],
@@ -216,14 +257,14 @@ describe('duplicateProject', () => {
     const userId = userA();
     const src = await createProject({ userId, input: BRIEF });
     const [ref] = await storyDb().insert('story_references', {
-      project_id: src.id, source_type: 'link', source_url: 'https://example.test/v', beat_sheet: [{ ord: 0, start: 0, end: 2, visual: 'v', said: 's', why: 'w' }],
+      project_id: src.id, source_type: 'link', source_url: 'https://example.test/v', status: 'pending', beat_sheet: [{ ord: 0, start: 0, end: 2, visual: 'v', said: 's', why: 'w' }],
     });
     await storyDb().update('story_projects', { id: src.id }, { step: 'script', reference_id: ref.id });
     const copy = await duplicateProject({ userId, id: src.id });
     expect(copy.step).toBe('script');
     expect(copy.reference_id).not.toBe(ref.id);
     const [copiedRef] = await storyDb().select('story_references', { id: copy.reference_id });
-    expect(copiedRef).toMatchObject({ project_id: copy.id, source_url: 'https://example.test/v' });
+    expect(copiedRef).toMatchObject({ project_id: copy.id, source_url: 'https://example.test/v', status: 'failed' });
     expect(copiedRef.beat_sheet).toHaveLength(1);
   });
 
