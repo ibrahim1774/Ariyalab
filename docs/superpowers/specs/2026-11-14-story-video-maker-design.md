@@ -132,6 +132,8 @@ Taken from what worked on the barber reels:
 
 A remote MCP server at `/api/mcp` on the same deployment, installed in Claude by pasting its URL (custom connector). The customer signs in with their Ariya Lab account through OAuth. It spends the same credits.
 
+The OAuth layer is built inside this app (authorization code with PKCE and dynamic client registration; the consent page reuses the existing Supabase login session; tokens stored hashed in `story_oauth_*` tables). Supabase's own OAuth server is not switched on, because the Supabase project is shared with haelabs.live. **(call)**
+
 Tools mirror the web steps: create project, analyze reference, get or set script, generate cast, pick cast, generate storyboard, get cost quote, generate shots, get job status, render, get result. Long jobs return a job id that Claude polls. Any step that spends credits returns a quote first and needs a confirm call. **(call: tool list and confirm-before-spend)**
 
 ## 8. Quality levels and credits
@@ -149,11 +151,19 @@ Prices and the plan table will be tuned later (Ibrahim's instruction). The mecha
 - Starting rates: Standard 11 credits per second, Pro narrated 14, Pro talking 21, Economy 8. Project fee 90 credits (analysis, script, cast, voice, music, render). Still re-roll 2. Shot re-roll at the shot's rate after the free 20%.
 - Starting plans: $29 = 1,500 credits, $49 = 2,600, $99 = 5,400. Top-ups $15 = 700, $40 = 1,900, $100 = 5,000. At these values a credit costs about $0.0092 to deliver and margins are 46 to 53% after an assumed Stripe fee of 2.9% + $0.30.
 - Plan credits roll over for one month, then expire. Top-up credits do not expire. **(call)**
+- Yearly plans exist at 20% off the monthly price. Their credits are granted monthly by a scheduled job (Stripe sends no monthly invoice for a yearly plan), with the same one-month rollover. **(call)**
 - A free account can go as far as the script (and the breakdown). Cast, stills and video need a paid plan. **(call)**
+
+**Limits on the cheap steps (all calls, all in `pricing_config`):**
+
+- Free accounts: 1 reference analysis and 3 projects per day, 30 chat messages per project, verified email required. Reference files capped at 100 MB and 3 minutes.
+- The 90-credit project fee is taken when the first cast is generated, which is the first step that costs real money. It is not refunded if the project is abandoned.
+- Included per project: 2 cast regenerations per character, 3 narration generations, 3 music generations, 150 chat messages. Past that: cast regeneration 5 credits, narration 5, music 5, and chat stops with a message asking the customer to continue by editing directly.
+- Voice clone creation: 20 credits each.
 
 ## 9. Look and feel
 
-Reference: the Uvera landing page recording Ibrahim supplied. Match the style and section order with Ariya Lab's own name, logo and words.
+Reference: the Uvera landing page recording Ibrahim supplied (`~/Downloads/d7290c88d4753c25943378b507dc0d47.mp4`, 30 seconds). Frames from it, in order, are saved in `docs/superpowers/specs/assets/uvera-reference/sheet_0.jpg` to `sheet_4.jpg`. Match the style and section order with Ariya Lab's own name, logo and words.
 
 - **Theme:** light. Warm cream background (about `#FDFBF5`), one orange accent (about `#F08A4B`), near-black text, soft white cards with light shadows. Replaces the dark "Obsidian & Platinum" theme across the app.
 - **Type:** a clean geometric sans for everything; one word per headline in the accent colour and italic.
@@ -287,7 +297,9 @@ Items 3 and 4 are solved by the ledger. The rest are direct fixes.
 
 - **Old tools** (Image to Video, Face Swap, UGC Creator, Glow Up, Interior Design, Video Editor): kept working, restyled to the new theme, moved under "More tools" in the dashboard. They get the security fixes and charge through the new ledger. No new features. **(call)**
 - **Old funnels** (`/ugc-2`, `/ugc-3`, `/local-business`, `/real-estate` and their pricing pages): left live and untouched until Ibrahim turns their ads off, then removed. **(call)**
-- **Existing subscribers:** keep their current plan and price. Their balance is converted into the new ledger at a rate that preserves what it could buy on the old price table. New plans apply to new sign-ups. **(call; needs Ibrahim's decision, see section 15)**
+- **One video-credit currency.** The ledger holds new credits only. Old video credits are converted once at a fixed rate that preserves what they could buy: an old credit bought 1/100 of a second of Kling 1080p with audio, a new credit buys 1/21, so 100 old credits become 21 new credits. **(call)**
+- **Old plans and packs:** stop being sold when the new plans go live. Until that moment the old billing code runs unchanged and the ledger is not live. At go-live the old funnels' checkout buttons point at the new plans. Existing subscribers keep their old price; each renewal grants the converted amount of new credits. **(call; needs Ibrahim's decision, see section 15)**
+- **Image credits** (Glow Up and Interior Design, sold as $5/$15/$30 packs): kept as a second currency in the same ledger table (`currency` column: `video` or `image`), not merged. Image packs stay on sale for those two tools only. **(call)**
 - **haelabs.live:** untouched.
 
 ## 13. Build order
@@ -300,10 +312,14 @@ Stages, each ending in something that can be checked. Time is build time with AI
 4. **Finish** (1 to 2 hours): narration, music, captions, render, automatic checks.
 5. **References** (1 to 2 hours): upload and link ingestion, analysis, breakdown, adapted script.
 6. **Brand kit, own footage, audio upload, voice cloning** (1 to 2 hours).
-7. **MCP connector** (1 hour).
+7. **MCP connector** (2 to 3 hours, including the OAuth layer).
 8. **New plans live, quality test, failover** (1 to 2 hours plus test spend).
 
 A quality test of about $50 (Standard against Pro, and Economy) runs at the end of stage 3, before plan prices are finalised.
+
+## 13a. Quality bar
+
+The yardsticks are two of Ibrahim's finished videos in `~/Desktop/Ecom/Other/Prime Barber IOS App/`: `13-got-serious-fast-cut-story` for Pro narrated and `12-watch-animated-story` (v3, with subtitles) for Pro talking. At the end of stage 4 the builder makes one video of each kind through the product, with no hand fixes, and Ibrahim judges them side by side with the originals. He is the only judge. If captions or cuts fall short, the fallback is to move the final render to Remotion (the barber reels' renderer; project at `~/Duplicate UGC/remotion-voiceagent`) before stage 5 starts. **(call)**
 
 ## 14. Left to the builder
 
@@ -320,8 +336,8 @@ A quality test of about $50 (Standard against Pro, and Economy) runs at the end 
 1. Accounts and API keys: ScrapeCreators, Groq, Fish Audio, Google AI Studio (Lyria), Cloudflare R2. Later: Higgsfield API.
 2. kie.ai balance for testing (about $50).
 3. Product name and logo: keep "Ariya Lab" or rename.
-4. What existing subscribers get (section 12).
-5. Confirm the old funnels can stay untouched for now.
+4. Confirm the plan for old plans, old funnels and existing subscribers (section 12).
+5. Judge the two test videos at the end of stage 4 (section 13a).
 6. Read and accept the Fish Audio and Lyria terms for use inside a paid product, or pick alternatives.
 
 ## 16. Risks
