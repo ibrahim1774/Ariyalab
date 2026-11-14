@@ -134,6 +134,17 @@ describe('clawback', () => {
 });
 
 describe('ref conflicts and validation', () => {
+  it('requires a projectId for holds', async () => {
+    await expect(holdCredits({ userId: newUser(), currency: 'video', amount: 5 })).rejects.toThrow(/projectId/);
+  });
+  it('clawback passes firstBucket through', async () => {
+    const userId = newUser();
+    await g(userId, 50, 'plan');
+    await g(userId, 50, 'topup');
+    await clawback({ userId, currency: 'video', amount: 30, reason: 'refund', ref: 'fb', firstBucket: 'topup' });
+    expect(await getBalance(userId)).toMatchObject({ plan: 50, topup: 20 });
+    await expect(clawback({ userId, currency: 'video', amount: 1, reason: 'refund', ref: 'fb2', firstBucket: 'x' })).rejects.toThrow(/firstBucket/);
+  });
   it('maps ref_conflict', async () => {
     const userId = newUser();
     await grantCredits({ userId, currency: 'video', amount: 10, bucket: 'plan', reason: 'dup', ref: 'same' });
@@ -148,7 +159,10 @@ describe('ref conflicts and validation', () => {
     await expect(spendCredits({ userId, currency: 'gold', amount: 1, reason: 'x', ref: 'x' })).rejects.toThrow(/currency/);
   });
   it('rethrows unknown errors', async () => {
-    await expect(getBalance('not-a-uuid')).rejects.not.toBeInstanceOf(InsufficientCreditsError);
+    const err = await getBalance('not-a-uuid').catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/invalid input syntax for type uuid/);
+    expect(err).not.toBeInstanceOf(InsufficientCreditsError);
   });
 });
 
@@ -164,6 +178,8 @@ describe('listStaleHolds', () => {
     expect(ids).toContain(oldId);
     expect(ids).not.toContain(freshId);
     expect(stale.find((h) => h.id === oldId)).toMatchObject({ user_id: userId, currency: 'video', remaining: 10 });
+    expect(typeof stale.find((h) => h.id === oldId).created_at).toBe('string');
+    expect(stale.find((h) => h.id === oldId).created_at).toMatch(/^\d{4}-\d\d-\d\dT.*Z$/);
     await releaseHold({ holdId: oldId });
     expect((await listStaleHolds({ olderThanMinutes: 60 })).map((h) => h.id)).not.toContain(oldId);
   });

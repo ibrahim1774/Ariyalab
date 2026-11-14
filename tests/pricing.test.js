@@ -3,6 +3,7 @@ import {
   getPricing, quoteShot, quoteProject, setPricingDb, _resetPricingCache,
   PLANS_V2, TOPUPS_V2, YEARLY_DISCOUNT, LEGACY_TO_V2,
 } from '../lib/pricing.js';
+import { QUALITY_LABELS } from '../lib/pricingConstants.js';
 import { isBillingV2 } from '../lib/billingFlags.js';
 
 function fakeDb(rows, { fail = false } = {}) {
@@ -39,6 +40,7 @@ describe('quoting', () => {
     expect(q.total).toBe(720);
     expect(q.lines.reduce((n, l) => n + l.credits, 0)).toBe(720);
     expect(q.lines.some((l) => /fee/i.test(l.label) && l.credits === 90)).toBe(true);
+    expect(q.lines.map((l) => l.label)).toContain('15 Pro narrated shots');
   });
   it('omits the fee when already charged', async () => {
     const q = await quoteProject({ shots: [{ quality: 'economy', seconds: 5 }], feeAlreadyCharged: true });
@@ -85,9 +87,40 @@ describe('getPricing', () => {
     expect(db.query).toHaveBeenCalledTimes(3);
   });
   it('falls back to defaults when the read fails', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     setPricingDb(fakeDb([], { fail: true }));
     const p = await getPricing();
     expect(p.projectFee).toBe(90);
+    expect(err).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+  it('keeps the last good rows when a later read fails', async () => {
+    vi.useFakeTimers();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const state = { fail: false };
+    setPricingDb({ query: async () => { if (state.fail) throw new Error('down'); return { rows: [{ key: 'billing_v2', value: true }, { key: 'projectFee', value: 100 }] }; } });
+    expect(await isBillingV2()).toBe(true);
+    state.fail = true;
+    vi.advanceTimersByTime(61_000);
+    expect(await isBillingV2()).toBe(true);
+    expect((await getPricing()).projectFee).toBe(100);
+    expect(err).toHaveBeenCalledTimes(1);
+    err.mockRestore();
+  });
+  it('first-ever failed read returns defaults and retries after 5 seconds', async () => {
+    vi.useFakeTimers();
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const state = { fail: true, calls: 0 };
+    setPricingDb({ query: async () => { state.calls++; if (state.fail) throw new Error('down'); return { rows: [{ key: 'billing_v2', value: true }] }; } });
+    expect(await isBillingV2()).toBe(false);
+    state.fail = false;
+    vi.advanceTimersByTime(4_000);
+    expect(await isBillingV2()).toBe(false);
+    expect(state.calls).toBe(1);
+    vi.advanceTimersByTime(2_000);
+    expect(await isBillingV2()).toBe(true);
+    expect(state.calls).toBe(2);
+    err.mockRestore();
   });
   it('does not let callers mutate the defaults', async () => {
     setPricingDb(fakeDb([]));
@@ -117,8 +150,11 @@ describe('isBillingV2', () => {
     expect(await isBillingV2()).toBe(true);
   });
   it('is false when the read fails', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     setPricingDb(fakeDb([], { fail: true }));
     expect(await isBillingV2()).toBe(false);
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
   });
   it('shares the 60 second cache with getPricing', async () => {
     const db = fakeDb([{ key: 'billing_v2', value: true }]);
@@ -126,5 +162,11 @@ describe('isBillingV2', () => {
     await getPricing();
     await isBillingV2();
     expect(db.query).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('labels', () => {
+  it('has display names', () => {
+    expect(QUALITY_LABELS).toEqual({ economy: 'Economy', standard: 'Standard', pro_narrated: 'Pro narrated', pro_talking: 'Pro talking' });
   });
 });
