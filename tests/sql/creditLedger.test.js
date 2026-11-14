@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestDb } from '../helpers/db.js';
+import { createTestDb, migrationFiles } from '../helpers/db.js';
 
 let db;
 
@@ -23,20 +23,23 @@ const grant = async (user, amount, bucket = 'plan', ref = randomUUID(), reason =
 const spend = async (user, amount, ref = randomUUID(), reason = 'test_spend', currency = 'video') =>
   (await one('select credit_spend($1, $2, $3, $4, $5) as b', [user, currency, amount, reason, ref])).b;
 
-const hold = async (user, amount, projectId = randomUUID(), currency = 'video', q = db) =>
-  (await q.query('select credit_hold($1, $2, $3, $4) as id', [user, currency, amount, projectId])).rows[0].id;
+const hold = async (user, amount, projectId = randomUUID(), currency = 'video', q = db, holdId = null) =>
+  (await q.query('select credit_hold($1, $2, $3, $4, $5) as id', [user, currency, amount, projectId, holdId])).rows[0].id;
 
 const settle = async (holdId, amount, ref, reason = 'shot') =>
   (await one('select credit_settle($1, $2, $3, $4) as b', [holdId, amount, reason, ref])).b;
 
-const release = async (holdId, amount = null) =>
-  (await one('select credit_release($1, $2) as b', [holdId, amount])).b;
+const release = async (holdId, amount = null, ref = amount === null ? null : randomUUID()) =>
+  (await one('select credit_release($1, $2, $3) as b', [holdId, amount, ref])).b;
 
 const renew = async (user, allotment, ref = randomUUID()) =>
   (await one('select credit_renew_plan($1, $2, $3) as b', [user, allotment, ref])).b;
 
 const clawback = async (user, amount, ref = randomUUID(), reason = 'refund', currency = 'video', firstBucket = null) =>
   (await one('select credit_clawback($1, $2, $3, $4, $5, $6) as b', [user, currency, amount, reason, ref, firstBucket])).b;
+
+const owed = async (user, currency = 'video') =>
+  (await one('select clawback_owed from credit_accounts where user_id = $1 and currency = $2', [user, currency])).clawback_owed;
 
 const holdRow = async (holdId) => one('select amount, remaining, status from credit_holds where id = $1', [holdId]);
 
@@ -223,7 +226,11 @@ describe('credit ledger', () => {
     // Releasing "the rest" of a closed hold is a harmless no-op.
     expect(await release(holdId)).toEqual(bal(70, 0, 0));
     expect((await errorOf(release(holdId, 5))).message).toBe('hold_closed');
-    expect((await ledgerRows(user)).map((r) => r.reason)).toEqual(['test_grant', 'shot']);
+    expect((await ledgerRows(user)).map((r) => [r.reason, r.delta])).toEqual([
+      ['test_grant', 100],
+      ['shot', -30],
+      ['hold_release', 0],
+    ]);
   });
 
   it('renew caps rollover at one allotment', async () => {
@@ -239,8 +246,8 @@ describe('credit ledger', () => {
     expect(await renew(high, 1500, 'in_2')).toEqual(renewed);
     expect((await ledgerRows(high)).map((r) => [r.reason, r.ref, r.delta])).toEqual([
       ['test_grant', expect.any(String), 2000],
-      ['plan_expiry', 'in_2', -500],
       ['plan_renewal', 'in_2', 1500],
+      ['plan_expiry', 'in_2', -500],
     ]);
   });
 
@@ -248,9 +255,26 @@ describe('credit ledger', () => {
     const user = randomUUID();
     await grant(user, 5000, 'plan');
     await hold(user, 4500);
-    // Plain rollover would keep 1500, under the 4500 held; expiry stops at the
-    // held amount, then the allotment is added on top.
-    expect(await renew(user, 1500)).toEqual(bal(6000, 0, 4500));
+    // Target is 1500 + 1500 = 3000, but expiry stops at the 4500 held.
+    expect(await renew(user, 1500)).toEqual(bal(4500, 0, 4500));
+  });
+
+  it('renew with credits on hold still lands on the contract value', async () => {
+    const user = randomUUID();
+    await grant(user, 2000, 'plan');
+    await hold(user, 1800);
+    expect(await renew(user, 1500)).toEqual(bal(3000, 0, 1800));
+  });
+
+  it('holding everything across renewals does not grow the plan', async () => {
+    const user = randomUUID();
+    await grant(user, 3000, 'plan');
+    for (let i = 0; i < 3; i += 1) {
+      const holdId = await hold(user, 3000);
+      await renew(user, 1500);
+      await release(holdId);
+      expect(await balance(user)).toEqual(bal(3000, 0));
+    }
   });
 
   it('clawback floors at 0', async () => {
@@ -258,13 +282,13 @@ describe('credit ledger', () => {
     await grant(user, 100, 'plan');
     await grant(user, 50, 'topup');
     const first = await clawback(user, 300, 'ch_1');
-    expect(first).toEqual(bal(0, 0));
+    expect(first).toEqual({ ...bal(0, 0), taken: 150, owed: 0 });
     expect(await clawback(user, 300, 'ch_1')).toEqual(first);
     const row = (await ledgerRows(user)).at(-1);
     expect(row).toMatchObject({ reason: 'refund', delta: -150, plan_delta: -100, topup_delta: -50, balance_after: 0 });
 
     // Nothing left: still recorded once, no negative balances.
-    expect(await clawback(user, 10, 'ch_2')).toEqual(bal(0, 0));
+    expect(await clawback(user, 10, 'ch_2')).toEqual({ ...bal(0, 0), taken: 0, owed: 0 });
     expect((await ledgerRows(user)).at(-1)).toMatchObject({ ref: 'ch_2', delta: 0 });
   });
 
@@ -272,14 +296,87 @@ describe('credit ledger', () => {
     const user = randomUUID();
     await grant(user, 100, 'plan');
     await grant(user, 700, 'topup');
-    expect(await clawback(user, 750, undefined, 'topup_refund', 'video', 'topup')).toEqual(bal(50, 0));
+    expect(await clawback(user, 750, undefined, 'topup_refund', 'video', 'topup')).toEqual({ ...bal(50, 0), taken: 750, owed: 0 });
   });
 
-  it('clawback leaves credits on hold alone', async () => {
+  it('clawback takes what is available and owes the part on hold', async () => {
     const user = randomUUID();
     await grant(user, 100);
     await hold(user, 60);
-    expect(await clawback(user, 100)).toEqual(bal(60, 0, 60));
+    expect(await clawback(user, 100)).toEqual({ ...bal(60, 0, 60), taken: 40, owed: 60 });
+    expect(await owed(user)).toBe(60);
+  });
+
+  it('refund while everything is on hold is collected on release', async () => {
+    const user = randomUUID();
+    await grant(user, 5000, 'topup');
+    const holdId = await hold(user, 5000);
+
+    const first = await clawback(user, 5000, 'ch_held');
+    expect(first).toEqual({ ...bal(0, 5000, 5000), taken: 0, owed: 5000 });
+    // A retry changes nothing and reports the same split.
+    expect(await clawback(user, 5000, 'ch_held')).toEqual(first);
+    expect(await owed(user)).toBe(5000);
+
+    expect(await release(holdId)).toEqual(bal(0, 0, 0));
+    expect(await owed(user)).toBe(0);
+    expect((await ledgerRows(user)).at(-1)).toMatchObject({ reason: 'clawback_deferred', delta: -5000, hold_id: holdId });
+  });
+
+  it('settled credits write the owed clawback down; the rest is collected on release', async () => {
+    const user = randomUUID();
+    await grant(user, 5000, 'topup');
+    const holdId = await hold(user, 5000);
+    await clawback(user, 5000);
+    expect(await settle(holdId, 3000, 'shot-a')).toEqual(bal(0, 2000, 2000));
+    expect(await owed(user)).toBe(2000);
+    expect(await release(holdId)).toEqual(bal(0, 0, 0));
+    expect(await owed(user)).toBe(0);
+  });
+
+  it('a reused ref under another operation or hold raises ref_conflict', async () => {
+    const user = randomUUID();
+    await grant(user, 500, 'plan', 'cs_9', 'checkout');
+    const conflict = await errorOf(spend(user, 100, 'cs_9', 'checkout'));
+    expect(conflict.message).toBe('ref_conflict');
+    expect((await errorOf(grant(user, 999, 'plan', 'cs_9', 'checkout'))).message).toBe('ref_conflict');
+    expect((await errorOf(grant(user, 500, 'topup', 'cs_9', 'checkout'))).message).toBe('ref_conflict');
+
+    const h1 = await hold(user, 100);
+    const h2 = await hold(user, 100);
+    await settle(h1, 40, 'shot-1');
+    expect((await errorOf(settle(h2, 40, 'shot-1'))).message).toBe('ref_conflict');
+    expect((await errorOf(settle(h1, 41, 'shot-1'))).message).toBe('ref_conflict');
+    expect(await holdRow(h2)).toEqual({ amount: 100, remaining: 100, status: 'active' });
+    expect(await balance(user)).toEqual(bal(460, 0, 160));
+  });
+
+  it('hold is retry-safe with a caller-chosen id', async () => {
+    const user = randomUUID();
+    const projectId = randomUUID();
+    await grant(user, 100);
+    const holdId = randomUUID();
+    expect(await hold(user, 60, projectId, 'video', db, holdId)).toBe(holdId);
+    expect(await hold(user, 60, projectId, 'video', db, holdId)).toBe(holdId);
+    expect(await balance(user)).toEqual(bal(100, 0, 60));
+    expect((await errorOf(hold(user, 30, projectId, 'video', db, holdId))).message).toBe('ref_conflict');
+
+    const other = randomUUID();
+    await grant(other, 100);
+    expect((await errorOf(hold(other, 60, projectId, 'video', db, holdId))).message).toBe('ref_conflict');
+    expect(await balance(other)).toEqual(bal(100, 0));
+  });
+
+  it('partial release is idempotent on (hold, ref) and requires a ref', async () => {
+    const user = randomUUID();
+    await grant(user, 100);
+    const holdId = await hold(user, 100);
+    await release(holdId, 40, 'rel-1');
+    expect(await release(holdId, 40, 'rel-1')).toEqual(bal(100, 0, 60));
+    expect(await holdRow(holdId)).toEqual({ amount: 100, remaining: 60, status: 'active' });
+    expect((await errorOf(release(holdId, 30, 'rel-1'))).message).toBe('ref_conflict');
+    expect((await errorOf(one('select credit_release($1, $2) as b', [holdId, 10]))).message).toBe('invalid_ref');
+    expect(await settle(holdId, 60, 'shot-1')).toEqual(bal(40, 0, 0));
   });
 
   it('pending grant is claimed once', async () => {
@@ -326,7 +423,50 @@ describe('credit ledger', () => {
     expect(b.held).toBe(0);
   });
 
+  it('applies the credit migration by filename and pins search_path on every function', async () => {
+    expect(migrationFiles()).toContain('20261114000100_credit_ledger.sql');
+    expect(migrationFiles()).toEqual([...migrationFiles()].sort());
+    const { rows } = await db.query(
+      `select proname, proconfig from pg_proc
+        where pronamespace = 'public'::regnamespace and proname like 'credit\\_%'`,
+    );
+    expect(rows.length).toBeGreaterThanOrEqual(16);
+    for (const row of rows) expect(row.proconfig).toEqual(['search_path=public, pg_temp']);
+  });
+
   describe('client access (authenticated role)', () => {
+    const asRole = async (role, sql, params) => {
+      await db.exec(`set role ${role};`);
+      try {
+        return await db.query(sql, params);
+      } finally {
+        await db.exec('reset role;');
+      }
+    };
+
+    it('service_role can read but not write balances, ledger or holds directly', async () => {
+      const me = randomUUID();
+      await grant(me, 100);
+      const { rows } = await asRole('service_role', 'select plan_balance from credit_accounts where user_id = $1', [me]);
+      expect(rows).toEqual([{ plan_balance: 100 }]);
+      for (const sql of [
+        'update credit_accounts set plan_balance = 99999 where user_id = $1',
+        'delete from credit_ledger where user_id = $1',
+        'update credit_holds set remaining = 0 where user_id = $1',
+      ]) {
+        expect((await errorOf(asRole('service_role', sql, [me]))).message).toMatch(/permission denied/);
+      }
+      // ...and it can still change them through the functions.
+      const { rows: [r] } = await asRole('service_role', "select credit_spend($1, 'video', 10, 'x', 'y') as b", [me]);
+      expect(r.b).toEqual(bal(90, 0));
+    });
+
+    it('anon cannot read the credit tables', async () => {
+      for (const table of ['credit_accounts', 'credit_ledger', 'credit_holds', 'credit_pending_grants', 'stripe_events', 'pricing_config']) {
+        expect((await errorOf(asRole('anon', `select * from ${table}`))).message).toMatch(/permission denied/);
+      }
+    });
+
     const asUser = async (user, sql, params) => {
       await db.exec(`set role authenticated; select set_config('request.jwt.claim.sub', '${user}', false);`);
       try {
