@@ -1736,6 +1736,13 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
         expect(mdOf(old)[KEY.credits]).toBe('0');
         expect(mdOf(fresh)[KEY.credits]).toBe('100');
         expect(mdOf(fresh)[KEY.relinkedFrom]).toBe(old);
+
+        // The plan paid for on the new customer shows up on the next read:
+        // this period's allotment plus the credits that moved.
+        S.state.subs.get(session.subscription.id).customer = fresh;
+        const ent = await getEntitlement({ supabase: getSupabaseAdmin(), userId: user.id, email: user.email });
+        expect(ent.tier).toBe('monthly');
+        expect(ent.creditsRemaining).toBe(PLANS.monthly.cap + 100);
       });
     }
 
