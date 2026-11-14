@@ -55,12 +55,11 @@ export default function SignUpPage() {
   // Optional ?returnTo=/some/path — where to send the user after a
   // successful signup (or after closing the modal). Validated to a
   // same-origin path so this can never be used as an open redirect.
-  // When absent, defaults to '/' which preserves the original behavior
-  // of /sign-up and /sign-up?session_id=... unchanged.
+  // When absent, success goes to /app and closing the modal goes home.
   const rawReturnTo =
     typeof router.query.returnTo === 'string' ? router.query.returnTo : '';
   const safeReturnTo =
-    rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '/';
+    rawReturnTo.startsWith('/') && !rawReturnTo.startsWith('//') ? rawReturnTo : '';
 
   return (
     <>
@@ -98,9 +97,9 @@ export default function SignUpPage() {
         {(!isClaimFlow || (lockedEmail && claimable)) && (
           <AuthModal
             open={open}
-            onClose={() => (window.location.href = safeReturnTo)}
+            onClose={() => (window.location.href = safeReturnTo || '/')}
             initialMode="signup"
-            redirectTo={safeReturnTo}
+            redirectTo={safeReturnTo || '/app'}
             lockedEmail={lockedEmail}
             claimSessionId={sessionId}
           />
@@ -135,7 +134,7 @@ const loadingSpinnerStyle = {
   width: 14,
   height: 14,
   borderRadius: '50%',
-  border: '2px solid rgba(255,255,255,0.15)',
+  border: '2px solid rgba(22, 19, 15, 0.135)',
   borderTopColor: 'rgba(255,255,255,0.7)',
   animation: 'spin 0.9s linear infinite',
   flexShrink: 0,

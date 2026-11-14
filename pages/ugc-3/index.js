@@ -572,7 +572,7 @@ export default function Ugc3Page() {
               onClick={() => setStep('result')}
               style={{
                 flex: 1, minWidth: 160,
-                background: 'rgba(255,255,255,0.04)',
+                background: 'rgba(22, 19, 15, 0.02)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-dim)',
                 padding: '10px 16px',
@@ -590,7 +590,7 @@ export default function Ugc3Page() {
               onClick={resetStory}
               style={{
                 flex: 1, minWidth: 160,
-                background: 'rgba(255,255,255,0.04)',
+                background: 'rgba(22, 19, 15, 0.02)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-dim)',
                 padding: '10px 16px',
@@ -648,7 +648,7 @@ export default function Ugc3Page() {
                   style={{
                     flex: '0 0 auto',
                     width: 120,
-                    border: `1px solid ${s.id === featured.id ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.09)'}`,
+                    border: `1px solid ${s.id === featured.id ? 'var(--accent)' : 'rgba(22, 19, 15, 0.1)'}`,
                     borderRadius: 'var(--radius-sm)',
                     overflow: 'hidden',
                     background: 'var(--surface-1)',
@@ -675,7 +675,7 @@ export default function Ugc3Page() {
             style={{
               marginTop: 10,
               padding: '10px 16px',
-              background: 'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.05), transparent 56%), rgba(10,10,12,0.45)',
+              background: 'var(--surface)',
               border: '1px solid var(--glass-border)',
               borderRadius: 'var(--radius-sm)',
               backdropFilter: 'blur(10px)',
@@ -704,7 +704,7 @@ export default function Ugc3Page() {
               onClick={handleNewScene}
               disabled={atSceneCap}
               style={{
-                background: 'rgba(255,255,255,0.04)',
+                background: 'rgba(22, 19, 15, 0.02)',
                 border: '1px solid var(--border-strong)',
                 color: 'var(--text)',
                 padding: '12px 16px',
@@ -734,7 +734,7 @@ export default function Ugc3Page() {
                 onClick={handleCombine}
                 style={{
                   flex: 1, minWidth: 180,
-                  background: 'rgba(255,255,255,0.04)',
+                  background: 'rgba(22, 19, 15, 0.02)',
                   border: '1px solid var(--border)',
                   color: 'var(--text-dim)',
                   padding: '10px 14px',
@@ -753,7 +753,7 @@ export default function Ugc3Page() {
               onClick={() => triggerDownload(featured.videoUrl, `scene-${storyScenes.length}.mp4`)}
               style={{
                 flex: 1, minWidth: 140,
-                background: 'rgba(255,255,255,0.04)',
+                background: 'rgba(22, 19, 15, 0.02)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-dim)',
                 padding: '10px 14px',
@@ -772,7 +772,7 @@ export default function Ugc3Page() {
                 onClick={handleUndo}
                 style={{
                   flex: 1, minWidth: 120,
-                  background: 'rgba(255,255,255,0.03)',
+                  background: 'rgba(22, 19, 15, 0.015)',
                   border: '1px solid var(--border)',
                   color: 'var(--text-faint)',
                   padding: '10px 14px',
@@ -791,7 +791,7 @@ export default function Ugc3Page() {
               onClick={resetStory}
               style={{
                 flex: 1, minWidth: 120,
-                background: 'rgba(255,255,255,0.03)',
+                background: 'rgba(22, 19, 15, 0.015)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-faint)',
                 padding: '10px 14px',
@@ -830,7 +830,7 @@ export default function Ugc3Page() {
             type="button"
             onClick={() => setStep(storyScenes.length > 0 ? 'result' : (imageUrl ? 'animate' : 'choose'))}
             style={{
-              background: 'rgba(255,255,255,0.04)',
+              background: 'rgba(22, 19, 15, 0.02)',
               border: '1px solid var(--border)',
               color: 'var(--text-dim)',
               padding: '8px 20px',
@@ -854,7 +854,7 @@ export default function Ugc3Page() {
     padding: '12px 18px',
     border: '1px solid var(--glass-border)',
     borderRadius: 'var(--radius-md)',
-    background: 'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), rgba(10,10,12,0.5)',
+    background: 'var(--surface)',
     backdropFilter: 'blur(12px) saturate(130%)',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
     color: 'var(--text-dim)',
@@ -920,7 +920,7 @@ export default function Ugc3Page() {
                   fontFamily: 'inherit',
                   fontSize: 14,
                   resize: 'vertical',
-                  boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.3)',
+                  boxShadow: 'inset 0 2px 6px rgba(22, 19, 15, 0.09)',
                   outline: 'none',
                   transition: 'border-color 0.2s var(--ease)',
                 }}
@@ -980,7 +980,7 @@ export default function Ugc3Page() {
               }}
               style={{
                 marginTop: 12,
-                background: 'rgba(255,255,255,0.03)',
+                background: 'rgba(22, 19, 15, 0.015)',
                 border: '1px solid var(--border)',
                 color: 'var(--text-dim)',
                 padding: '8px 16px',
@@ -1135,10 +1135,10 @@ export default function Ugc3Page() {
                         padding: '14px 12px',
                         borderRadius: 12,
                         border: selected
-                          ? '1px solid rgba(255,255,255,0.55)'
+                          ? '1px solid var(--accent)'
                           : '1px solid rgba(255,255,255,0.12)',
-                        background: selected ? '#ededed' : '#0f0f11',
-                        color: selected ? '#0b0b0c' : '#ededed',
+                        background: selected ? 'var(--accent)' : 'var(--surface)',
+                        color: selected ? '#fff' : 'var(--text)',
                         fontFamily: 'inherit',
                         fontSize: 15,
                         fontWeight: selected ? 600 : 500,
@@ -1299,10 +1299,10 @@ export default function Ugc3Page() {
             width: clamp(160px, 60vw, 200px);
             border-radius: 16px;
             overflow: hidden;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), rgba(10,10,12,0.7);
+            border: 1px solid rgba(22, 19, 15, 0.108);
+            background: var(--surface);
             backdrop-filter: blur(16px) saturate(130%);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 8px 32px rgba(0,0,0,0.55), 0 2px 6px rgba(0,0,0,0.35);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 8px 32px rgba(22, 19, 15, 0.165), 0 2px 6px rgba(22, 19, 15, 0.105);
             scroll-snap-align: center;
             min-width: 0;
           }

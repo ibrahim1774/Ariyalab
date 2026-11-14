@@ -45,7 +45,7 @@ export default function ResolutionPicker({
           <span
             style={{
               ...switchTrackStyle,
-              background: audio ? 'rgba(255, 255, 255, 0.7)' : 'rgba(255,255,255,0.18)',
+              background: audio ? 'var(--accent)' : 'rgba(22, 19, 15, 0.18)',
             }}
           >
             <span
@@ -95,11 +95,11 @@ const labelStyle = {
   fontSize: 11,
   letterSpacing: '0.14em',
   textTransform: 'uppercase',
-  color: '#b8b6b1',
+  color: 'var(--text-dim)',
 };
 const rateStyle = {
   fontSize: 11,
-  color: '#b8b6b1',
+  color: 'var(--text-dim)',
   marginRight: 'auto',
 };
 const switchRowStyle = {
@@ -107,10 +107,10 @@ const switchRowStyle = {
   alignItems: 'center',
   gap: 8,
   padding: '4px 8px 4px 10px',
-  border: '1px solid rgba(255,255,255,0.14)',
+  border: '1px solid rgba(22, 19, 15, 0.126)',
   borderRadius: 999,
-  background: 'rgba(255,255,255,0.04)',
-  color: '#ededed',
+  background: 'rgba(22, 19, 15, 0.02)',
+  color: 'var(--text)',
   fontFamily: 'inherit',
 };
 const switchLabelStyle = {
@@ -134,7 +134,7 @@ const switchKnobStyle = {
   height: 14,
   borderRadius: '50%',
   background: '#ffffff',
-  boxShadow: '0 1px 2px rgba(0,0,0,0.3)',
+  boxShadow: '0 1px 2px rgba(22, 19, 15, 0.09)',
   transition: 'transform 120ms ease',
 };
 const resRowStyle = {
@@ -144,17 +144,17 @@ const resRowStyle = {
 };
 const pillStyle = {
   padding: '8px 10px',
-  border: '1px solid rgba(255,255,255,0.18)',
+  border: '1px solid rgba(22, 19, 15, 0.162)',
   borderRadius: 10,
-  background: 'rgba(255,255,255,0.04)',
-  color: '#ededed',
+  background: 'rgba(22, 19, 15, 0.02)',
+  color: 'var(--text)',
   fontFamily: 'inherit',
   fontSize: 14,
   fontWeight: 500,
   textAlign: 'center',
 };
 const pillActiveStyle = {
-  borderColor: 'rgba(255, 255, 255, 0.6)',
-  background: 'rgba(255, 255, 255, 0.12)',
+  borderColor: 'rgba(22, 19, 15, 0.2)',
+  background: 'rgba(22, 19, 15, 0.06)',
   fontWeight: 600,
 };

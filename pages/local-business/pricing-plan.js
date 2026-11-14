@@ -156,9 +156,9 @@ export default function LocalBusinessPricingPlanPage() {
             border-radius: 14px;
             overflow: hidden;
             position: relative;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), rgba(10,10,12,0.5);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 16px 48px -16px rgba(0,0,0,0.8), 0 4px 18px rgba(0,0,0,0.45);
+            border: 1px solid rgba(22, 19, 15, 0.1);
+            background: var(--surface);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.09), 0 16px 48px -16px rgba(22, 19, 15, 0.24), 0 4px 18px rgba(22, 19, 15, 0.135);
             backdrop-filter: blur(12px) saturate(130%);
             -webkit-backdrop-filter: blur(12px) saturate(130%);
             scroll-snap-align: center;
@@ -167,7 +167,7 @@ export default function LocalBusinessPricingPlanPage() {
           }
           .lb-pricing-carousel-card:hover {
             transform: translateY(-2px);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.13), 0 24px 60px -20px rgba(0,0,0,0.9), 0 8px 24px rgba(0,0,0,0.5);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.13), 0 24px 60px -20px rgba(22, 19, 15, 0.25), 0 8px 24px rgba(22, 19, 15, 0.15);
           }
           .lb-pricing-carousel-card wistia-player { display: block; width: 100%; max-width: 100%; }
           @media (min-width: 720px) {

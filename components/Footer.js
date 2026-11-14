@@ -12,8 +12,8 @@ export default function Footer() {
         marginTop: 'auto',
         padding: '34px 16px 38px',
         textAlign: 'center',
-        borderTop: '1px solid rgba(255,255,255,0.06)',
-        background: 'linear-gradient(180deg, transparent, rgba(0,0,0,0.35))',
+        borderTop: '1px solid rgba(22, 19, 15, 0.1)',
+        background: 'var(--surface)',
       }}
     >
       {/* Hairline platinum glow on the top edge */}
@@ -25,8 +25,7 @@ export default function Footer() {
           left: 0,
           right: 0,
           height: 1,
-          background:
-            'linear-gradient(90deg, transparent, rgba(255,255,255,0.16) 50%, transparent)',
+          background: 'linear-gradient(90deg, transparent, rgba(22, 19, 15, 0.06) 50%, transparent)',
         }}
       />
       <div
@@ -35,7 +34,7 @@ export default function Footer() {
           fontSize: 19,
           fontWeight: 600,
           letterSpacing: '0.01em',
-          color: '#f6f6f7',
+          color: 'var(--text)',
           marginBottom: 12,
         }}
       >
@@ -47,7 +46,7 @@ export default function Footer() {
           fontSize: 10,
           letterSpacing: '0.2em',
           textTransform: 'uppercase',
-          color: 'rgba(255,255,255,0.42)',
+          color: 'var(--text-dim)',
           marginBottom: 6,
         }}
       >
@@ -56,11 +55,11 @@ export default function Footer() {
       <a
         href="mailto:support@davoxa.com"
         style={{
-          color: '#ededed',
+          color: 'var(--text)',
           fontSize: 13,
           fontWeight: 500,
           textDecoration: 'none',
-          borderBottom: '1px solid rgba(255,255,255,0.28)',
+          borderBottom: '1px solid rgba(22, 19, 15, 0.2)',
           paddingBottom: 1,
         }}
       >

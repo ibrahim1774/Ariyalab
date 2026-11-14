@@ -15,7 +15,7 @@
   font-size: 11px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: #ededed;
+  color: var(--text);
   margin-bottom: 8px;
 }
 
@@ -24,12 +24,12 @@
   font-size: 26px;
   font-weight: 600;
   letter-spacing: -0.01em;
-  color: #f0f0f0;
+  color: var(--text);
 }
 
 .subtitle {
   margin: 0;
-  color: #b8b8b8;
+  color: var(--text);
   font-size: 14px;
   line-height: 1.6;
 }
@@ -49,8 +49,8 @@
 
 .bigFrame {
   margin: 0;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  background: rgba(22, 19, 15, 0.01);
+  border: 1px solid rgba(22, 19, 15, 0.2);
   border-radius: 12px;
   padding: 8px;
   display: flex;
@@ -73,7 +73,7 @@
   font-size: 11px;
   letter-spacing: 0.12em;
   text-transform: uppercase;
-  color: #888;
+  color: var(--text-dim);
 }
 
 .placeholder {
@@ -82,8 +82,8 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #666;
-  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-dim);
+  background: rgba(22, 19, 15, 0.015);
   border-radius: 8px;
 }
 
@@ -101,8 +101,8 @@
 
 .thumb {
   margin: 0;
-  background: rgba(255, 255, 255, 0.02);
-  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(22, 19, 15, 0.01);
+  border: 1px solid rgba(22, 19, 15, 0.1);
   border-radius: 10px;
   padding: 6px;
   display: flex;
@@ -149,25 +149,25 @@
 
 .btnGhost {
   background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #ccc;
+  border: 1px solid rgba(22, 19, 15, 0.18);
+  color: var(--text);
 }
 
 .btnSecondary {
-  background: rgba(255, 255, 255, 0.12);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  color: #ededed;
+  background: rgba(22, 19, 15, 0.06);
+  border: 1px solid rgba(22, 19, 15, 0.2);
+  color: var(--text);
 }
 
 .btnPrimary {
-  background: linear-gradient(180deg, #ededed 0%, #a8a8a8 100%);
-  color: #1c170f;
+  background: var(--accent);
+  color: #fff;
 }
 
 .note {
   text-align: center;
   font-size: 11px;
-  color: #777;
+  color: var(--text-dim);
   letter-spacing: 0.06em;
   margin: 0;
 }

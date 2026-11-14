@@ -191,9 +191,8 @@ const groupTitleStyle = {
 
 const topupBtnStyle = {
   position: 'relative',
-  background:
-    'linear-gradient(180deg, rgba(255,255,255,0.045) 0%, rgba(255,255,255,0.018) 100%)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.022) 0%, rgba(22, 19, 15, 0.009) 100%)',
+  border: '1px solid rgba(22, 19, 15, 0.1)',
   borderRadius: 'var(--radius-lg, 18px)',
   padding: '18px 14px 14px',
   display: 'flex',
@@ -208,12 +207,10 @@ const topupBtnStyle = {
 
 const bestValueBtnStyle = {
   ...topupBtnStyle,
-  background:
-    'radial-gradient(130% 100% at 50% -10%, rgba(255,255,255,0.1), transparent 60%), ' +
+  background: 'radial-gradient(130% 100% at 50% -10%, rgba(22, 19, 15, 0.05), transparent 60%),' +
     'linear-gradient(180deg, rgba(255,255,255,0.07) 0%, rgba(255,255,255,0.03) 100%)',
-  border: '1px solid rgba(255,255,255,0.22)',
-  boxShadow:
-    'inset 0 1px 0 rgba(255,255,255,0.16), 0 8px 28px -10px rgba(255,255,255,0.18)',
+  border: '1px solid rgba(22, 19, 15, 0.198)',
+  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.16), 0 8px 28px -10px rgba(255,255,255,0.18)',
   transform: 'translateY(-2px)',
 };
 
@@ -222,8 +219,8 @@ const bestValueBadgeStyle = {
   top: -10,
   left: '50%',
   transform: 'translateX(-50%)',
-  background: 'linear-gradient(180deg, #ffffff 0%, #d6d6db 100%)',
-  color: '#0a0a0b',
+  background: 'var(--accent)',
+  color: '#fff',
   fontSize: 9,
   fontWeight: 700,
   letterSpacing: '0.14em',
@@ -231,7 +228,7 @@ const bestValueBadgeStyle = {
   padding: '3px 10px',
   borderRadius: 999,
   whiteSpace: 'nowrap',
-  boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.85)',
+  boxShadow: '0 10px 24px -10px rgba(219, 111, 46, 0.5)',
 };
 
 const priceStyle = {
@@ -254,13 +251,12 @@ const buyLabelStyle = {
   marginTop: 8,
   padding: '6px 18px',
   borderRadius: 'var(--radius-sm, 8px)',
-  background: 'linear-gradient(180deg, #ffffff 0%, #d6d6db 100%)',
-  color: '#0a0a0b',
+  background: 'var(--accent)',
+  color: '#fff',
   fontSize: 11,
   fontWeight: 700,
   letterSpacing: '0.08em',
   textTransform: 'uppercase',
-  boxShadow:
-    'inset 0 1px 0 rgba(255,255,255,0.85), inset 0 -1px 0 rgba(0,0,0,0.12), ' +
+  boxShadow: '0 10px 24px -10px rgba(219, 111, 46, 0.5)' +
     '0 4px 14px -6px rgba(255,255,255,0.28)',
 };

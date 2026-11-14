@@ -33,9 +33,8 @@ export default function SupportPage() {
             margin: '0 auto',
             padding: '28px 28px 24px',
             borderRadius: 'var(--radius-2xl, 32px)',
-            border: '1px solid rgba(255,255,255,0.1)',
-            background:
-              'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), ' +
+            border: '1px solid rgba(22, 19, 15, 0.1)',
+            background: 'radial-gradient(130% 70% at 50% -10%, rgba(22, 19, 15, 0.03), transparent 56%),' +
               'linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012)), ' +
               'rgba(10,10,12,0.5)',
             backdropFilter: 'blur(16px) saturate(130%)',
@@ -52,7 +51,7 @@ export default function SupportPage() {
               inset: '0 0 auto 0',
               height: '44%',
               borderRadius: 'var(--radius-2xl, 32px) var(--radius-2xl, 32px) 0 0',
-              background: 'linear-gradient(180deg, rgba(255,255,255,0.05), transparent)',
+              background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.025), transparent)',
               pointerEvents: 'none',
             }}
           />
@@ -78,7 +77,7 @@ export default function SupportPage() {
               fontWeight: 500,
               textDecoration: 'none',
               letterSpacing: '-0.01em',
-              borderBottom: '1px solid rgba(255,255,255,0.25)',
+              borderBottom: '1px solid rgba(22, 19, 15, 0.2)',
               padding: '2px 6px',
               transition: 'color 0.2s ease, border-color 0.2s ease',
             }}

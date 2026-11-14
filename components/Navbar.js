@@ -150,9 +150,9 @@ export default function Navbar() {
                 fontSize: 12,
                 fontWeight: 600,
                 fontFamily: 'inherit',
-                color: '#f6f6f7',
-                background: 'linear-gradient(180deg, rgba(255,255,255,0.09), rgba(255,255,255,0.03))',
-                border: '1px solid rgba(255,255,255,0.16)',
+                color: 'var(--text)',
+                background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.045), rgba(22, 19, 15, 0.015))',
+                border: '1px solid rgba(22, 19, 15, 0.144)',
                 boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
                 padding: '6px 13px',
                 borderRadius: 999,
@@ -173,9 +173,9 @@ export default function Navbar() {
                 type="button"
                 onClick={() => setMenuOpen((v) => !v)}
                 style={{
-                  background: 'rgba(255,255,255,0.03)',
-                  border: '1px solid rgba(255,255,255,0.12)',
-                  color: '#cfcfd4',
+                  background: 'rgba(22, 19, 15, 0.015)',
+                  border: '1px solid rgba(22, 19, 15, 0.108)',
+                  color: 'var(--text)',
                   padding: '7px 14px',
                   borderRadius: 999,
                   cursor: 'pointer',
@@ -193,14 +193,14 @@ export default function Navbar() {
                     position: 'absolute',
                     top: '128%',
                     right: 0,
-                    background: 'rgba(14,14,17,0.92)',
+                    background: 'var(--surface)',
                     backdropFilter: 'blur(20px) saturate(140%)',
                     WebkitBackdropFilter: 'blur(20px) saturate(140%)',
-                    border: '1px solid rgba(255,255,255,0.1)',
+                    border: '1px solid rgba(22, 19, 15, 0.1)',
                     borderRadius: 14,
                     padding: 6,
                     minWidth: 190,
-                    boxShadow: '0 30px 70px -32px rgba(0,0,0,0.85), inset 0 1px 0 rgba(255,255,255,0.06)',
+                    boxShadow: '0 30px 70px -32px rgba(22, 19, 15, 0.25), inset 0 1px 0 rgba(255,255,255,0.06)',
                     zIndex: 9000,
                     animation: 'scaleIn 0.18s cubic-bezier(0.22,1,0.36,1) both',
                     transformOrigin: 'top right',
@@ -212,7 +212,7 @@ export default function Navbar() {
                     style={{
                       display: 'block',
                       padding: '8px 10px',
-                      color: '#ddd',
+                      color: 'var(--text)',
                       textDecoration: 'none',
                       fontSize: 13,
                       borderRadius: 4,
@@ -229,7 +229,7 @@ export default function Navbar() {
                       width: '100%',
                       textAlign: 'left',
                       padding: '8px 10px',
-                      color: '#ddd',
+                      color: 'var(--text)',
                       background: 'transparent',
                       border: 'none',
                       fontSize: 13,
@@ -247,13 +247,13 @@ export default function Navbar() {
             <Link
               href="/sign-in"
               style={{
-                color: '#0a0a0b',
+                color: '#fff',
                 fontSize: 12,
                 fontWeight: 600,
                 textDecoration: 'none',
                 letterSpacing: '0.02em',
-                background: 'linear-gradient(180deg, #ffffff 0%, #d6d6db 100%)',
-                boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.85), 0 8px 22px -10px rgba(255,255,255,0.4)',
+                background: 'var(--accent)',
+                boxShadow: '0 10px 24px -10px rgba(219, 111, 46, 0.5)',
                 padding: '8px 16px',
                 borderRadius: 999,
               }}
@@ -271,8 +271,8 @@ export default function Navbar() {
               style={{
                 padding: '8px 14px',
                 fontSize: 13,
-                color: '#ededed',
-                borderBottom: '1px solid rgba(255,255,255,0.08)',
+                color: 'var(--text)',
+                borderBottom: '1px solid rgba(22, 19, 15, 0.1)',
                 marginBottom: 4,
               }}
             >

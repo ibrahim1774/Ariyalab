@@ -5,8 +5,8 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--surface-1, rgba(255, 255, 255, 0.03));
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: var(--surface-1, rgba(22, 19, 15, 0.015));
+  border: 1px solid rgba(22, 19, 15, 0.2);
   border-radius: 999px;
   color: var(--text, #ededed);
   white-space: nowrap;

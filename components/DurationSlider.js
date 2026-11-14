@@ -42,17 +42,17 @@ export default function DurationSlider({
         style={{
           fontFamily: 'inherit',
           fontSize: 13,
-          color: '#bbb',
+          color: 'var(--text)',
           margin: '12px 0 6px',
           letterSpacing: '0.02em',
         }}
       >
         {label}:{' '}
-        <span style={{ color: '#ededed' }}>{value} seconds</span>
+        <span style={{ color: 'var(--text)' }}>{value} seconds</span>
         {showCost && (
           <>
             {' · '}
-            <span style={{ color: '#ededed' }}>
+            <span style={{ color: 'var(--text)' }}>
               {cost} credit{cost === 1 ? '' : 's'}
             </span>
           </>
@@ -79,10 +79,10 @@ export default function DurationSlider({
                   padding: '10px 12px',
                   borderRadius: 10,
                   border: selected
-                    ? '1px solid rgba(255,255,255,0.55)'
+                    ? '1px solid var(--accent)'
                     : '1px solid rgba(255,255,255,0.12)',
-                  background: selected ? '#ededed' : '#0f0f11',
-                  color: selected ? '#0b0b0c' : '#ededed',
+                  background: selected ? 'var(--accent)' : 'var(--surface)',
+                  color: selected ? '#fff' : 'var(--text)',
                   fontFamily: 'inherit',
                   fontSize: 14,
                   fontWeight: selected ? 600 : 500,
@@ -104,7 +104,7 @@ export default function DurationSlider({
             step={1}
             value={value}
             onChange={(e) => onChange(Number(e.target.value))}
-            style={{ width: '100%', accentColor: '#ededed' }}
+            style={{ width: '100%', accentColor: 'var(--accent)' }}
             aria-label={ariaLabel}
           />
           <div
@@ -112,7 +112,7 @@ export default function DurationSlider({
               display: 'flex',
               justifyContent: 'space-between',
               fontSize: 11,
-              color: '#888',
+              color: 'var(--text-dim)',
               marginTop: 4,
               fontFamily: 'inherit',
             }}

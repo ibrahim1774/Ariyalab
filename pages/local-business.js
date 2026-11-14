@@ -605,8 +605,8 @@ export default function LocalBusinessPage() {
               style={{
                 flex: 1, minWidth: 160,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 16px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -622,8 +622,8 @@ export default function LocalBusinessPage() {
               style={{
                 flex: 1, minWidth: 160,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 16px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -678,10 +678,10 @@ export default function LocalBusinessPage() {
                   style={{
                     flex: '0 0 auto',
                     width: 120,
-                    border: `1px solid ${s.id === featured.id ? 'rgba(255, 255, 255,0.6)' : 'rgba(255,255,255,0.12)'}`,
+                    border: `1px solid ${s.id === featured.id ? 'var(--accent)' : 'rgba(22, 19, 15, 0.12)'}`,
                     borderRadius: 8,
                     overflow: 'hidden',
-                    background: '#0f0f11',
+                    background: 'var(--surface)',
                   }}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -690,7 +690,7 @@ export default function LocalBusinessPage() {
                     alt={`Scene ${i + 1}`}
                     style={{ width: '100%', height: 80, objectFit: 'cover', display: 'block' }}
                   />
-                  <div style={{ padding: '6px 8px', fontSize: 11, color: '#bbb' }}>
+                  <div style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text)' }}>
                     Scene {i + 1} · {s.duration}s {s.type === 'extend' ? '↪' : s.type === 'new' ? '+' : ''}
                   </div>
                 </div>
@@ -704,7 +704,7 @@ export default function LocalBusinessPage() {
             style={{
               marginTop: 10,
               padding: '10px 16px',
-              background: 'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.04), transparent 56%), linear-gradient(180deg, rgba(255,255,255,0.028), rgba(255,255,255,0.01)), rgba(10,10,12,0.5)',
+              background: 'var(--surface)',
               backdropFilter: 'blur(14px) saturate(130%)',
               WebkitBackdropFilter: 'blur(14px) saturate(130%)',
               border: '1px solid var(--glass-border)',
@@ -735,8 +735,8 @@ export default function LocalBusinessPage() {
               disabled={atSceneCap}
               style={{
                 background: 'transparent',
-                border: '1px solid rgba(255, 255, 255, 0.4)',
-                color: '#ededed',
+                border: '1px solid rgba(22, 19, 15, 0.2)',
+                color: 'var(--text)',
                 padding: '12px 16px',
                 borderRadius: 6,
                 cursor: atSceneCap ? 'not-allowed' : 'pointer',
@@ -751,7 +751,7 @@ export default function LocalBusinessPage() {
           </div>
 
           {atSceneCap && (
-            <div style={{ marginTop: 8, fontSize: 11, color: '#888', textAlign: 'center' }}>
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)', textAlign: 'center' }}>
               5-scene cap reached. Combine or start a new story.
             </div>
           )}
@@ -764,8 +764,8 @@ export default function LocalBusinessPage() {
                 style={{
                   flex: 1, minWidth: 180,
                   background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  color: '#ddd',
+                  border: '1px solid rgba(22, 19, 15, 0.162)',
+                  color: 'var(--text)',
                   padding: '10px 14px',
                   borderRadius: 6,
                   cursor: 'pointer',
@@ -782,8 +782,8 @@ export default function LocalBusinessPage() {
               style={{
                 flex: 1, minWidth: 140,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 14px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -800,8 +800,8 @@ export default function LocalBusinessPage() {
                 style={{
                   flex: 1, minWidth: 120,
                   background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  color: '#bbb',
+                  border: '1px solid rgba(22, 19, 15, 0.135)',
+                  color: 'var(--text)',
                   padding: '10px 14px',
                   borderRadius: 6,
                   cursor: 'pointer',
@@ -818,8 +818,8 @@ export default function LocalBusinessPage() {
               style={{
                 flex: 1, minWidth: 120,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#bbb',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 14px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -857,8 +857,8 @@ export default function LocalBusinessPage() {
             onClick={() => setStep(storyScenes.length > 0 ? 'result' : (imageUrl ? 'animate' : 'choose'))}
             style={{
               background: 'transparent',
-              border: '1px solid rgba(255,255,255,0.15)',
-              color: '#ddd',
+              border: '1px solid rgba(22, 19, 15, 0.135)',
+              color: 'var(--text)',
               padding: '8px 16px',
               borderRadius: 6,
               cursor: 'pointer',
@@ -879,7 +879,7 @@ export default function LocalBusinessPage() {
     padding: '12px 18px',
     border: '1px solid var(--glass-border)',
     borderRadius: 'var(--radius-md)',
-    background: 'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.05), transparent 56%), linear-gradient(180deg, rgba(255,255,255,0.032), rgba(255,255,255,0.01)), rgba(10,10,12,0.5)',
+    background: 'var(--surface)',
     backdropFilter: 'blur(16px) saturate(130%)',
     WebkitBackdropFilter: 'blur(16px) saturate(130%)',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), var(--shadow-xl)',
@@ -922,7 +922,7 @@ export default function LocalBusinessPage() {
               <img
                 src={effectiveStartImage}
                 alt="Starting frame"
-                style={{ maxWidth: 320, maxHeight: 320, borderRadius: 12, border: '1px solid rgba(255,255,255,0.12)' }}
+                style={{ maxWidth: 320, maxHeight: 320, borderRadius: 12, border: '1px solid rgba(22, 19, 15, 0.108)' }}
               />
             </div>
 
@@ -937,15 +937,15 @@ export default function LocalBusinessPage() {
                   width: '100%',
                   padding: 12,
                   borderRadius: 8,
-                  background: '#0f0f11',
-                  color: '#eee',
-                  border: '1px solid rgba(255,255,255,0.12)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  border: '1px solid rgba(22, 19, 15, 0.108)',
                   fontFamily: 'inherit',
                   fontSize: 14,
                   resize: 'vertical',
                 }}
               />
-              <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-dim)' }}>
                 Tip: put dialogue in &ldquo;quotes&rdquo; so the model lip-syncs it.
               </div>
             </label>
@@ -1001,8 +1001,8 @@ export default function LocalBusinessPage() {
               style={{
                 marginTop: 12,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '8px 16px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -1084,7 +1084,7 @@ export default function LocalBusinessPage() {
               padding: 4,
               borderRadius: 999,
               border: '1px solid var(--glass-border)',
-              background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015))',
+              background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.02), rgba(22, 19, 15, 0.007))',
               backdropFilter: 'blur(12px) saturate(130%)',
               WebkitBackdropFilter: 'blur(12px) saturate(130%)',
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08)',
@@ -1116,8 +1116,8 @@ export default function LocalBusinessPage() {
                     padding: '8px 16px',
                     borderRadius: 999,
                     border: 'none',
-                    background: active ? '#ededed' : 'transparent',
-                    color: active ? '#0b0b0c' : '#cfcfcf',
+                    background: active ? 'var(--accent)' : 'transparent',
+                    color: active ? '#fff' : 'var(--text-dim)',
                     fontFamily: 'inherit',
                     fontSize: 13,
                     fontWeight: active ? 600 : 500,
@@ -1136,7 +1136,7 @@ export default function LocalBusinessPage() {
               maxWidth: 480,
               fontSize: 12,
               lineHeight: 1.45,
-              color: '#9a9a9a',
+              color: 'var(--text-dim)',
               textAlign: 'center',
             }}
           >
@@ -1250,10 +1250,10 @@ export default function LocalBusinessPage() {
                         padding: '14px 12px',
                         borderRadius: 12,
                         border: selected
-                          ? '1px solid rgba(255,255,255,0.55)'
+                          ? '1px solid var(--accent)'
                           : '1px solid rgba(255,255,255,0.12)',
-                        background: selected ? '#ededed' : '#0f0f11',
-                        color: selected ? '#0b0b0c' : '#ededed',
+                        background: selected ? 'var(--accent)' : 'var(--surface)',
+                        color: selected ? '#fff' : 'var(--text)',
                         fontFamily: 'inherit',
                         fontSize: 15,
                         fontWeight: selected ? 600 : 500,
@@ -1421,9 +1421,9 @@ export default function LocalBusinessPage() {
             border-radius: 16px;
             overflow: hidden;
             position: relative;
-            border: 1px solid rgba(255, 255, 255, 0.12);
-            background: radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), rgba(10,10,12,0.5);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 20px 60px -20px rgba(0,0,0,0.8), 0 6px 24px rgba(0,0,0,0.5);
+            border: 1px solid rgba(22, 19, 15, 0.108);
+            background: var(--surface);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.1), 0 20px 60px -20px rgba(22, 19, 15, 0.24), 0 6px 24px rgba(22, 19, 15, 0.15);
             backdrop-filter: blur(12px) saturate(130%);
             -webkit-backdrop-filter: blur(12px) saturate(130%);
             scroll-snap-align: center;
@@ -1432,7 +1432,7 @@ export default function LocalBusinessPage() {
           }
           .ugc-creator-carousel-card:hover {
             transform: translateY(-3px);
-            box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 28px 72px -24px rgba(0,0,0,0.9), 0 10px 32px rgba(0,0,0,0.55);
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.14), 0 28px 72px -24px rgba(22, 19, 15, 0.25), 0 10px 32px rgba(22, 19, 15, 0.165);
           }
           .ugc-creator-carousel-card wistia-player {
             display: block;

@@ -34,7 +34,7 @@
   background: var(--accent-grad);
   -webkit-background-clip: text;
   background-clip: text;
-  color: transparent;
+  color: var(--accent-deep);
 }
 
 .subtitle {
@@ -47,13 +47,10 @@
 
 .card {
   position: relative;
-  background:
-    radial-gradient(130% 70% at 50% -10%, rgba(255, 255, 255, 0.06), transparent 56%),
-    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.012)),
-    rgba(10, 10, 12, 0.5);
+  background: var(--surface);
   backdrop-filter: blur(16px) saturate(130%);
   -webkit-backdrop-filter: blur(16px) saturate(130%);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(22, 19, 15, 0.1);
   border-radius: var(--radius-2xl);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1), var(--shadow-xl);
   padding: 28px 24px;
@@ -70,7 +67,7 @@
   inset: 0 0 auto 0;
   height: 44%;
   border-radius: inherit;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.055), transparent);
+  background: linear-gradient(180deg, rgba(22, 19, 15, 0.028), transparent);
   pointer-events: none;
 }
 
@@ -114,18 +111,18 @@
   cursor: pointer;
   transition: border-color 0.2s var(--ease), background 0.2s var(--ease),
     transform 0.2s var(--ease);
-  background: rgba(0, 0, 0, 0.28);
-  box-shadow: inset 0 2px 8px rgba(0, 0, 0, 0.3);
+  background: var(--surface);
+  box-shadow: inset 0 2px 8px rgba(22, 19, 15, 0.09);
 }
 
 .dropZone:hover {
-  border-color: rgba(255, 255, 255, 0.4);
-  background: rgba(255, 255, 255, 0.03);
+  border-color: rgba(22, 19, 15, 0.2);
+  background: rgba(22, 19, 15, 0.015);
 }
 
 .dropZoneOver {
   border-color: var(--accent);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(22, 19, 15, 0.02);
   transform: translateY(-1px);
 }
 
@@ -198,9 +195,9 @@
   width: 24px;
   height: 24px;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.7);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: var(--surface);
+  border: 1px solid rgba(22, 19, 15, 0.18);
+  color: var(--text);
   font-size: 14px;
   line-height: 1;
   display: grid;
@@ -229,7 +226,7 @@
 .styleCard {
   position: relative;
   text-align: left;
-  background: rgba(0, 0, 0, 0.22);
+  background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   padding: 12px 14px 13px;
@@ -247,13 +244,13 @@
 
 .styleCard:hover {
   border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(22, 19, 15, 0.02);
   transform: translateY(-1px);
 }
 
 .styleCardActive {
   border-color: var(--accent-line);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.12), rgba(255, 255, 255, 0.05));
+  background: linear-gradient(180deg, rgba(22, 19, 15, 0.06), rgba(22, 19, 15, 0.025));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.14), 0 8px 24px rgba(255, 255, 255, 0.1);
 }
 
@@ -278,13 +275,13 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--accent-grad);
-  color: #0a0a0b;
+  background: var(--accent);
+  color: #fff;
   font-size: 10px;
   font-weight: 700;
   display: grid;
   place-items: center;
-  box-shadow: 0 2px 8px rgba(255, 255, 255, 0.2);
+  box-shadow: 0 10px 24px -10px rgba(219, 111, 46, 0.5);
 }
 
 /* CTA */
@@ -299,20 +296,16 @@
   letter-spacing: 0.01em;
   border: none;
   cursor: pointer;
-  background: linear-gradient(180deg, #ffffff 0%, #d4d4da 100%);
-  color: #0a0a0b;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
-    0 14px 38px -12px rgba(255, 255, 255, 0.36);
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 10px 24px -10px rgba(219, 111, 46, 0.5);
   transition: transform 0.18s var(--ease-out-quint), box-shadow 0.25s var(--ease), opacity 0.15s var(--ease);
 }
 
 .cta:hover:not(:disabled) {
   transform: translateY(-2px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(22, 19, 15, 0.036),
     0 18px 46px -12px rgba(255, 255, 255, 0.44);
 }
 
@@ -342,15 +335,15 @@
   width: 100%;
   min-height: 60px;
   padding: 11px 13px;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--surface);
   color: var(--text);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(22, 19, 15, 0.1);
   border-radius: var(--radius-sm);
   font-family: inherit;
   font-size: 13px;
   line-height: 1.5;
   resize: vertical;
-  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+  box-shadow: inset 0 2px 6px rgba(22, 19, 15, 0.105);
   transition: border-color 0.15s var(--ease), box-shadow 0.15s var(--ease);
 }
 
@@ -360,8 +353,8 @@
 
 .textarea:focus {
   outline: none;
-  border-color: rgba(255, 255, 255, 0.4);
-  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35), 0 0 0 3px rgba(255, 255, 255, 0.07);
+  border-color: rgba(22, 19, 15, 0.2);
+  box-shadow: inset 0 2px 6px rgba(22, 19, 15, 0.105), 0 0 0 3px rgba(255, 255, 255, 0.07);
 }
 
 .textareaHint {
@@ -381,11 +374,9 @@
   flex-direction: column;
   gap: 12px;
   padding: 20px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(22, 19, 15, 0.1);
   border-radius: var(--radius-lg);
-  background:
-    linear-gradient(180deg, rgba(255, 255, 255, 0.04), rgba(255, 255, 255, 0.01)),
-    rgba(10, 10, 12, 0.5);
+  background: var(--surface);
   backdrop-filter: blur(12px) saturate(120%);
   -webkit-backdrop-filter: blur(12px) saturate(120%);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), var(--shadow-md);
@@ -413,7 +404,7 @@
   border-radius: 8px;
   background: rgba(220, 38, 38, 0.1);
   border: 1px solid rgba(220, 38, 38, 0.35);
-  color: #ff8a8a;
+  color: var(--text-dim);
   font-size: 13px;
   text-align: center;
 }
@@ -441,7 +432,7 @@
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  border: 2px solid rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(22, 19, 15, 0.1);
   border-top-color: var(--accent);
   box-shadow: 0 0 12px rgba(255, 255, 255, 0.08);
   animation: spin 0.9s linear infinite;
@@ -470,8 +461,8 @@
   max-width: 100%;
   max-height: 70vh;
   border-radius: var(--radius-lg);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  background: #000;
+  border: 1px solid rgba(22, 19, 15, 0.1);
+  background: var(--surface);
   box-shadow: var(--shadow-xl);
 }
 
@@ -483,7 +474,7 @@
 }
 
 .resultBtn {
-  background: rgba(255, 255, 255, 0.02);
+  background: rgba(22, 19, 15, 0.01);
   border: 1px solid var(--border-strong);
   color: var(--text-dim);
   padding: 11px 18px;
@@ -498,27 +489,23 @@
 
 .resultBtn:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.05);
-  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(22, 19, 15, 0.025);
+  border-color: rgba(22, 19, 15, 0.2);
   transform: translateY(-1px);
 }
 
 .resultBtnPrimary {
-  background: linear-gradient(180deg, #ffffff 0%, #d4d4da 100%);
+  background: var(--accent);
   border-color: transparent;
-  color: #0a0a0b;
+  color: #fff;
   font-weight: 600;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
-    0 12px 32px -10px rgba(255, 255, 255, 0.3);
+  box-shadow: 0 10px 24px -10px rgba(219, 111, 46, 0.5);
 }
 
 .resultBtnPrimary:hover {
   transform: translateY(-2px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    inset 0 -1px 0 rgba(22, 19, 15, 0.036),
     0 16px 40px -10px rgba(255, 255, 255, 0.4);
   color: #0a0a0b;
 }

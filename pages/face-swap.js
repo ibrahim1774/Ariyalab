@@ -570,11 +570,10 @@ export default function Home() {
         style={{
           padding: '28px 24px 24px',
           borderRadius: 'var(--radius-2xl)',
-          background:
-            'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012)), rgba(10,10,12,0.5)',
+          background: 'var(--surface)',
           backdropFilter: 'blur(16px) saturate(130%)',
           WebkitBackdropFilter: 'blur(16px) saturate(130%)',
-          border: '1px solid rgba(255,255,255,0.1)',
+          border: '1px solid rgba(22, 19, 15, 0.1)',
           boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), var(--shadow-xl)',
         }}
       >
@@ -705,11 +704,10 @@ export default function Home() {
           style={
             canSubmit && !submitting
               ? {
-                  background: 'linear-gradient(180deg,#ffffff 0%,#d4d4da 100%)',
-                  color: '#0a0a0b',
+                  background: 'var(--accent)',
+                  color: '#fff',
                   borderColor: 'transparent',
-                  boxShadow:
-                    'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.12), 0 14px 38px -12px rgba(255,255,255,0.36)',
+                  boxShadow: '0 10px 24px -10px rgba(219, 111, 46, 0.5)',
                 }
               : undefined
           }
@@ -809,13 +807,10 @@ export default function Home() {
           width: clamp(160px, 60vw, 200px);
           border-radius: var(--radius-lg, 18px);
           overflow: hidden;
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          background:
-            linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.01) 100%),
-            rgba(10, 10, 12, 0.6);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.07),
-            0 8px 24px rgba(0, 0, 0, 0.5);
+          border: 1px solid rgba(22, 19, 15, 0.1);
+          background: var(--surface);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07),
+            0 8px 24px rgba(22, 19, 15, 0.15);
           scroll-snap-align: center;
           min-width: 0;
           transition: transform 0.25s var(--ease-out-quint, cubic-bezier(0.22,1,0.36,1)),
@@ -823,9 +818,8 @@ export default function Home() {
         }
         .home-creator-carousel-card:hover {
           transform: translateY(-3px);
-          box-shadow:
-            inset 0 1px 0 rgba(255, 255, 255, 0.1),
-            0 14px 36px rgba(0, 0, 0, 0.6);
+          box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1),
+            0 14px 36px rgba(22, 19, 15, 0.18);
         }
         .home-creator-carousel-card wistia-player {
           display: block;

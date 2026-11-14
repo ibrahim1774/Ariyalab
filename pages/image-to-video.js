@@ -264,7 +264,7 @@ export default function ImageToVideoPage() {
             ].join(', '),
             backdropFilter: 'blur(16px) saturate(130%)',
             WebkitBackdropFilter: 'blur(16px) saturate(130%)',
-            border: '1px solid rgba(255,255,255,0.10)',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             borderRadius: 'var(--radius-2xl)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.10), var(--shadow-xl)',
             padding: '36px 36px 32px',
@@ -279,7 +279,7 @@ export default function ImageToVideoPage() {
               position: 'absolute',
               inset: 0,
               borderRadius: 'inherit',
-              background: 'linear-gradient(180deg, rgba(255,255,255,0.055) 0%, transparent 40%)',
+              background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.028) 0%, transparent 40%)',
               zIndex: 0,
             }}
           />
@@ -324,7 +324,7 @@ export default function ImageToVideoPage() {
                   width: '100%',
                   padding: '12px 14px',
                   borderRadius: 'var(--radius-md)',
-                  background: 'rgba(4,4,6,0.7)',
+                  background: 'var(--surface)',
                   color: 'var(--text)',
                   border: '1px solid var(--border)',
                   fontFamily: 'var(--font-body)',
@@ -332,7 +332,7 @@ export default function ImageToVideoPage() {
                   lineHeight: 1.55,
                   resize: 'vertical',
                   outline: 'none',
-                  boxShadow: 'inset 0 2px 8px rgba(0,0,0,0.45)',
+                  boxShadow: 'inset 0 2px 8px rgba(22, 19, 15, 0.135)',
                   transition: 'border-color 0.2s var(--ease), box-shadow 0.2s var(--ease)',
                 }}
                 onFocus={(e) => {
@@ -385,8 +385,8 @@ export default function ImageToVideoPage() {
                 fontSize: 15,
                 fontWeight: 600,
                 letterSpacing: '0.03em',
-                background: 'linear-gradient(180deg, #ffffff 0%, #d4d4da 100%)',
-                color: '#0a0a0b',
+                background: 'var(--accent)',
+                color: '#fff',
                 border: 'none',
                 cursor: 'pointer',
                 display: 'inline-flex',

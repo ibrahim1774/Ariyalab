@@ -76,8 +76,11 @@ export async function middleware(req) {
     '/api/video',
     '/api/history',
     '/api/admin',
+    '/api/story',
   ];
-  if (privateApiPrefixes.some((p) => pathname.startsWith(p))) {
+  // /api/story/pricing is public: the marketing pricing section reads it.
+  const isPublicStoryApi = pathname === '/api/story/pricing';
+  if (!isPublicStoryApi && privateApiPrefixes.some((p) => pathname.startsWith(p))) {
     if (!user) {
       return new NextResponse(
         JSON.stringify({ error: 'Authentication required.' }),
@@ -91,14 +94,17 @@ export async function middleware(req) {
   // anonymous visitors and the creator for authed users, gated inline
   // in pages/ugc.js (mirrors how / works for face-swap).
   const protectedPages = ['/dashboard', '/image-to-video', '/video/editing', '/history', '/admin', '/topup'];
-  if (protectedPages.some((p) => pathname.startsWith(p)) && !user) {
+  const isAppPage = pathname === '/app' || pathname.startsWith('/app/');
+  if ((isAppPage || protectedPages.some((p) => pathname.startsWith(p))) && !user) {
     const redirect = req.nextUrl.clone();
     redirect.pathname = '/sign-in';
+    // Send them back to where they were going once signed in.
+    redirect.search = `?returnTo=${encodeURIComponent(pathname + req.nextUrl.search)}`;
     return NextResponse.redirect(redirect);
   }
 
   // Feature-tabs gate: when the flag is off, non-admins can't reach the
-  // gated tab routes (they get redirected home). Admins always pass.
+  // gated tab routes (they land on /app/tools). Admins always pass.
   // Exact-or-subpath match so '/ugc' does NOT catch '/ugc-2' or '/ugc-3'.
   const isGated = GATED_PAGE_PREFIXES.some(
     (p) => pathname === p || pathname.startsWith(p + '/')
@@ -120,7 +126,7 @@ export async function middleware(req) {
       }
       if (!enabled) {
         const redirect = req.nextUrl.clone();
-        redirect.pathname = '/';
+        redirect.pathname = '/app/tools';
         redirect.search = '';
         return NextResponse.redirect(redirect);
       }
@@ -155,5 +161,8 @@ export const config = {
     '/api/admin/:path*',
     '/admin/:path*',
     '/topup',
+    '/app',
+    '/app/:path*',
+    '/api/story/:path*',
   ],
 };

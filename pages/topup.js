@@ -224,13 +224,12 @@ const subtitleStyle = {
 
 const cardOverride = {
   position: 'relative',
-  background:
-    'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), ' +
+  background: 'radial-gradient(130% 70% at 50% -10%, rgba(22, 19, 15, 0.03), transparent 56%),' +
     'linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012)), ' +
     'rgba(10,10,12,0.5)',
   backdropFilter: 'blur(16px) saturate(130%)',
   WebkitBackdropFilter: 'blur(16px) saturate(130%)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  border: '1px solid rgba(22, 19, 15, 0.1)',
   boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), var(--shadow-xl)',
   color: 'var(--text, #f6f6f7)',
   borderRadius: 'var(--radius-2xl, 32px)',
@@ -245,9 +244,8 @@ const balancesStyle = {
 
 const balanceItemStyle = {
   position: 'relative',
-  background:
-    'linear-gradient(180deg, rgba(255,255,255,0.045) 0%, rgba(255,255,255,0.018) 100%)',
-  border: '1px solid rgba(255,255,255,0.1)',
+  background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.022) 0%, rgba(22, 19, 15, 0.009) 100%)',
+  border: '1px solid rgba(22, 19, 15, 0.1)',
   borderRadius: 'var(--radius-lg, 18px)',
   padding: '14px 16px',
   display: 'flex',
@@ -281,8 +279,8 @@ const subscribeNoticeStyle = {
   padding: '12px 14px',
   marginBottom: 16,
   borderRadius: 'var(--radius-md, 12px)',
-  border: '1px solid rgba(255,255,255,0.12)',
-  background: 'rgba(255,255,255,0.04)',
+  border: '1px solid rgba(22, 19, 15, 0.108)',
+  background: 'rgba(22, 19, 15, 0.02)',
   color: 'var(--text-dim, #a6a6ad)',
   fontSize: 13,
   lineHeight: 1.5,
@@ -298,7 +296,7 @@ const smallLinkStyle = {
   fontSize: 13,
   color: 'var(--text-dim, #a6a6ad)',
   textDecoration: 'none',
-  borderBottom: '1px solid rgba(255,255,255,0.18)',
+  borderBottom: '1px solid rgba(22, 19, 15, 0.162)',
   transition: 'color 0.2s ease, border-color 0.2s ease',
 };
 
@@ -306,15 +304,14 @@ const linkBtnStyle = {
   display: 'inline-block',
   marginTop: 14,
   padding: '11px 22px',
-  background: 'linear-gradient(180deg, #ffffff 0%, #d6d6db 100%)',
-  color: '#0a0a0b',
+  background: 'var(--accent)',
+  color: '#fff',
   borderRadius: 'var(--radius-md, 12px)',
   fontFamily: 'var(--font-body, sans-serif)',
   fontWeight: 600,
   fontSize: 14,
   textDecoration: 'none',
-  boxShadow:
-    'inset 0 1px 0 rgba(255,255,255,0.85), inset 0 -1px 0 rgba(0,0,0,0.12), ' +
+  boxShadow: '0 10px 24px -10px rgba(219, 111, 46, 0.5)' +
     '0 10px 28px -10px rgba(255,255,255,0.32)',
   transition: 'transform 0.18s ease, box-shadow 0.25s ease',
 };

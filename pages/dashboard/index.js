@@ -61,6 +61,13 @@ export default function DashboardPage() {
           ? returnToRaw
           : null;
 
+      // The dashboard now lives at /app. This page only stays to finalize a
+      // Stripe checkout (success_url points here); everything else moves on.
+      if (!(paid === '1' && sessionId)) {
+        router.replace(returnTo || '/app');
+        return;
+      }
+
       if (paid === '1' && sessionId) {
         setConfirming(true);
         try {
@@ -121,9 +128,7 @@ export default function DashboardPage() {
             // If the checkout was initiated from another page (e.g.
             // /ugc), bounce the user back there now that credits are
             // granted. Brief delay so the Pixel has time to flush.
-            if (returnTo) {
-              setTimeout(() => router.replace(returnTo), 600);
-            }
+            setTimeout(() => router.replace(returnTo || '/app'), 600);
           } else {
             setError(data.error || 'Could not finalize your subscription.');
           }
@@ -215,11 +220,11 @@ export default function DashboardPage() {
                     margin: '40px auto 0',
                     padding: '28px 32px',
                     borderRadius: 18,
-                    border: '1px solid rgba(255,255,255,0.1)',
-                    background: 'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.06), transparent 56%), linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.012)), rgba(10,10,12,0.5)',
+                    border: '1px solid rgba(22, 19, 15, 0.1)',
+                    background: 'var(--surface)',
                     backdropFilter: 'blur(16px) saturate(130%)',
                     WebkitBackdropFilter: 'blur(16px) saturate(130%)',
-                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 30px 70px -32px rgba(0,0,0,0.75)',
+                    boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.1), 0 30px 70px -32px rgba(22, 19, 15, 0.225)',
                     textAlign: 'center',
                   }}
                 >

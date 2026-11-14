@@ -562,7 +562,7 @@ export default function UgcPage() {
             position: 'relative',
             borderRadius: 'var(--radius-2xl)',
             overflow: 'hidden',
-            border: '1px solid rgba(255,255,255,0.1)',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09), var(--shadow-xl)',
             background: '#000',
           }}>
@@ -622,7 +622,7 @@ export default function UgcPage() {
             position: 'relative',
             borderRadius: 'var(--radius-2xl)',
             overflow: 'hidden',
-            border: '1px solid rgba(255,255,255,0.1)',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09), var(--shadow-xl)',
             background: '#000',
           }}>
@@ -653,7 +653,7 @@ export default function UgcPage() {
                     flex: '0 0 auto',
                     width: 116,
                     position: 'relative',
-                    border: `1px solid ${s.id === featured.id ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.09)'}`,
+                    border: `1px solid ${s.id === featured.id ? 'var(--accent)' : 'rgba(22, 19, 15, 0.1)'}`,
                     borderRadius: 'var(--radius-md)',
                     overflow: 'hidden',
                     background: 'var(--surface-1)',
@@ -689,8 +689,8 @@ export default function UgcPage() {
           <div style={{
             marginTop: 12,
             padding: '10px 14px',
-            background: 'linear-gradient(180deg, rgba(255,255,255,0.04), rgba(255,255,255,0.015))',
-            border: '1px solid rgba(255,255,255,0.09)',
+            background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.02), rgba(22, 19, 15, 0.007))',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             borderRadius: 'var(--radius-md)',
             fontSize: 11,
             color: 'var(--text-faint)',
@@ -816,9 +816,9 @@ export default function UgcPage() {
     width: 'calc(100% - 32px)',
     margin: '12px auto 20px',
     padding: '12px 18px',
-    border: '1px solid rgba(255,255,255,0.09)',
+    border: '1px solid rgba(22, 19, 15, 0.1)',
     borderRadius: 'var(--radius-lg)',
-    background: 'linear-gradient(180deg, rgba(255,255,255,0.045), rgba(255,255,255,0.015))',
+    background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.022), rgba(22, 19, 15, 0.007))',
     boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.07)',
     color: 'var(--text-dim)',
     fontSize: 12,
@@ -861,7 +861,7 @@ export default function UgcPage() {
                 position: 'relative',
                 borderRadius: 'var(--radius-xl)',
                 overflow: 'hidden',
-                border: '1px solid rgba(255,255,255,0.1)',
+                border: '1px solid rgba(22, 19, 15, 0.1)',
                 boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.09), var(--shadow-lg)',
               }}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -1088,15 +1088,15 @@ export default function UgcPage() {
                         padding: '13px 10px',
                         borderRadius: 'var(--radius-md)',
                         border: selected
-                          ? '1px solid rgba(255,255,255,0.5)'
-                          : '1px solid rgba(255,255,255,0.08)',
+                          ? '1px solid var(--accent)'
+                          : '1px solid rgba(22, 19, 15, 0.1)',
                         background: selected
-                          ? 'linear-gradient(180deg, #ffffff 0%, #d4d4da 100%)'
-                          : 'rgba(255,255,255,0.03)',
+                          ? 'var(--accent)'
+                          : 'rgba(22, 19, 15, 0.03)',
                         boxShadow: selected
                           ? 'inset 0 1px 0 rgba(255,255,255,0.9), inset 0 -1px 0 rgba(0,0,0,0.1), 0 6px 18px -8px rgba(255,255,255,0.28)'
                           : 'none',
-                        color: selected ? '#0a0a0b' : 'var(--text-dim)',
+                        color: selected ? '#fff' : 'var(--text-dim)',
                         fontFamily: 'inherit',
                         fontSize: 14,
                         fontWeight: selected ? 600 : 400,
@@ -1265,12 +1265,11 @@ export default function UgcPage() {
             width: clamp(160px, 60vw, 200px);
             border-radius: 18px;
             overflow: hidden;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: #09090b;
-            box-shadow:
-              inset 0 1px 0 rgba(255, 255, 255, 0.08),
-              0 12px 36px -12px rgba(0, 0, 0, 0.65),
-              0 4px 12px rgba(0, 0, 0, 0.35);
+            border: 1px solid rgba(22, 19, 15, 0.1);
+            background: var(--surface);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08),
+              0 12px 36px -12px rgba(22, 19, 15, 0.195),
+              0 4px 12px rgba(22, 19, 15, 0.105);
             scroll-snap-align: center;
             min-width: 0;
             transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.25s ease;
@@ -1281,16 +1280,15 @@ export default function UgcPage() {
             inset: 0 0 auto 0;
             height: 36%;
             border-radius: 18px 18px 0 0;
-            background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), transparent);
+            background: linear-gradient(180deg, rgba(22, 19, 15, 0.035), transparent);
             pointer-events: none;
             z-index: 1;
           }
           .ugc-creator-carousel-card:hover {
             transform: translateY(-3px) scale(1.012);
-            box-shadow:
-              inset 0 1px 0 rgba(255, 255, 255, 0.1),
-              0 20px 52px -14px rgba(0, 0, 0, 0.75),
-              0 6px 16px rgba(0, 0, 0, 0.4);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1),
+              0 20px 52px -14px rgba(22, 19, 15, 0.225),
+              0 6px 16px rgba(22, 19, 15, 0.12);
           }
           .ugc-creator-carousel-card wistia-player {
             display: block;
@@ -1321,8 +1319,8 @@ export default function UgcPage() {
             height: 460px;
             background: radial-gradient(
               50% 50% at 50% 40%,
-              rgba(255, 255, 255, 0.07) 0%,
-              rgba(255, 255, 255, 0.025) 45%,
+              rgba(22, 19, 15, 0.035) 0%,
+              rgba(22, 19, 15, 0.013) 45%,
               transparent 75%
             );
             pointer-events: none;
@@ -1345,9 +1343,8 @@ export default function UgcPage() {
             transition: box-shadow 0.35s ease, border-color 0.35s ease;
           }
           .ugc-lux-card:focus-within {
-            border-color: rgba(255, 255, 255, 0.22);
-            box-shadow:
-              inset 0 1px 0 rgba(255, 255, 255, 0.09),
+            border-color: rgba(22, 19, 15, 0.198);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.09),
               0 0 0 1px rgba(255, 255, 255, 0.08),
               0 24px 70px -30px rgba(255, 255, 255, 0.12),
               var(--shadow-lg);

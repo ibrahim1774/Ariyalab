@@ -572,8 +572,8 @@ export default function HomePage() {
               style={{
                 flex: 1, minWidth: 160,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 16px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -589,8 +589,8 @@ export default function HomePage() {
               style={{
                 flex: 1, minWidth: 160,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 16px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -645,10 +645,10 @@ export default function HomePage() {
                   style={{
                     flex: '0 0 auto',
                     width: 120,
-                    border: `1px solid ${s.id === featured.id ? 'rgba(255, 255, 255,0.6)' : 'rgba(255,255,255,0.12)'}`,
+                    border: `1px solid ${s.id === featured.id ? 'var(--accent)' : 'rgba(22, 19, 15, 0.12)'}`,
                     borderRadius: 8,
                     overflow: 'hidden',
-                    background: '#0f0f11',
+                    background: 'var(--surface)',
                   }}
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -657,7 +657,7 @@ export default function HomePage() {
                     alt={`Scene ${i + 1}`}
                     style={{ width: '100%', height: 80, objectFit: 'cover', display: 'block' }}
                   />
-                  <div style={{ padding: '6px 8px', fontSize: 11, color: '#bbb' }}>
+                  <div style={{ padding: '6px 8px', fontSize: 11, color: 'var(--text)' }}>
                     Scene {i + 1} · {s.duration}s {s.type === 'extend' ? '↪' : s.type === 'new' ? '+' : ''}
                   </div>
                 </div>
@@ -671,11 +671,11 @@ export default function HomePage() {
             style={{
               marginTop: 10,
               padding: '10px 14px',
-              background: 'rgba(255, 255, 255, 0.06)',
-              border: '1px solid rgba(255, 255, 255, 0.25)',
+              background: 'rgba(22, 19, 15, 0.03)',
+              border: '1px solid rgba(22, 19, 15, 0.2)',
               borderRadius: 8,
               fontSize: 12,
-              color: '#e6e6e6',
+              color: 'var(--text)',
               lineHeight: 1.5,
             }}
           >
@@ -699,8 +699,8 @@ export default function HomePage() {
               disabled={atSceneCap}
               style={{
                 background: 'transparent',
-                border: '1px solid rgba(255, 255, 255, 0.4)',
-                color: '#ededed',
+                border: '1px solid rgba(22, 19, 15, 0.2)',
+                color: 'var(--text)',
                 padding: '12px 16px',
                 borderRadius: 6,
                 cursor: atSceneCap ? 'not-allowed' : 'pointer',
@@ -715,7 +715,7 @@ export default function HomePage() {
           </div>
 
           {atSceneCap && (
-            <div style={{ marginTop: 8, fontSize: 11, color: '#888', textAlign: 'center' }}>
+            <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-dim)', textAlign: 'center' }}>
               5-scene cap reached. Combine or start a new story.
             </div>
           )}
@@ -728,8 +728,8 @@ export default function HomePage() {
                 style={{
                   flex: 1, minWidth: 180,
                   background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.18)',
-                  color: '#ddd',
+                  border: '1px solid rgba(22, 19, 15, 0.162)',
+                  color: 'var(--text)',
                   padding: '10px 14px',
                   borderRadius: 6,
                   cursor: 'pointer',
@@ -746,8 +746,8 @@ export default function HomePage() {
               style={{
                 flex: 1, minWidth: 140,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 14px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -764,8 +764,8 @@ export default function HomePage() {
                 style={{
                   flex: 1, minWidth: 120,
                   background: 'transparent',
-                  border: '1px solid rgba(255,255,255,0.15)',
-                  color: '#bbb',
+                  border: '1px solid rgba(22, 19, 15, 0.135)',
+                  color: 'var(--text)',
                   padding: '10px 14px',
                   borderRadius: 6,
                   cursor: 'pointer',
@@ -782,8 +782,8 @@ export default function HomePage() {
               style={{
                 flex: 1, minWidth: 120,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#bbb',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '10px 14px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -820,8 +820,8 @@ export default function HomePage() {
             onClick={() => setStep(storyScenes.length > 0 ? 'result' : (imageUrl ? 'animate' : 'choose'))}
             style={{
               background: 'transparent',
-              border: '1px solid rgba(255,255,255,0.15)',
-              color: '#ddd',
+              border: '1px solid rgba(22, 19, 15, 0.135)',
+              color: 'var(--text)',
               padding: '8px 16px',
               borderRadius: 6,
               cursor: 'pointer',
@@ -840,10 +840,10 @@ export default function HomePage() {
     maxWidth: 720,
     margin: '12px auto 20px',
     padding: '12px 16px',
-    border: '1px solid rgba(255, 255, 255, 0.35)',
+    border: '1px solid rgba(22, 19, 15, 0.2)',
     borderRadius: 10,
-    background: 'rgba(255, 255, 255, 0.06)',
-    color: '#e6e6e6',
+    background: 'rgba(22, 19, 15, 0.03)',
+    color: 'var(--text)',
     fontSize: 13,
     lineHeight: 1.5,
     textAlign: 'center',
@@ -880,7 +880,7 @@ export default function HomePage() {
               <img
                 src={effectiveStartImage}
                 alt="Starting frame"
-                style={{ maxWidth: 320, maxHeight: 320, borderRadius: 12, border: '1px solid rgba(255,255,255,0.12)' }}
+                style={{ maxWidth: 320, maxHeight: 320, borderRadius: 12, border: '1px solid rgba(22, 19, 15, 0.108)' }}
               />
             </div>
 
@@ -895,15 +895,15 @@ export default function HomePage() {
                   width: '100%',
                   padding: 12,
                   borderRadius: 8,
-                  background: '#0f0f11',
-                  color: '#eee',
-                  border: '1px solid rgba(255,255,255,0.12)',
+                  background: 'var(--surface)',
+                  color: 'var(--text)',
+                  border: '1px solid rgba(22, 19, 15, 0.108)',
                   fontFamily: 'inherit',
                   fontSize: 14,
                   resize: 'vertical',
                 }}
               />
-              <div style={{ marginTop: 6, fontSize: 11, color: '#888' }}>
+              <div style={{ marginTop: 6, fontSize: 11, color: 'var(--text-dim)' }}>
                 Tip: put dialogue in &ldquo;quotes&rdquo; so the model lip-syncs it.
               </div>
             </label>
@@ -959,8 +959,8 @@ export default function HomePage() {
               style={{
                 marginTop: 12,
                 background: 'transparent',
-                border: '1px solid rgba(255,255,255,0.15)',
-                color: '#ddd',
+                border: '1px solid rgba(22, 19, 15, 0.135)',
+                color: 'var(--text)',
                 padding: '8px 16px',
                 borderRadius: 6,
                 cursor: 'pointer',
@@ -1111,10 +1111,10 @@ export default function HomePage() {
                         padding: '14px 12px',
                         borderRadius: 12,
                         border: selected
-                          ? '1px solid rgba(255,255,255,0.55)'
+                          ? '1px solid var(--accent)'
                           : '1px solid rgba(255,255,255,0.12)',
-                        background: selected ? '#ededed' : '#0f0f11',
-                        color: selected ? '#0b0b0c' : '#ededed',
+                        background: selected ? 'var(--accent)' : 'var(--surface)',
+                        color: selected ? '#fff' : 'var(--text)',
                         fontFamily: 'inherit',
                         fontSize: 15,
                         fontWeight: selected ? 600 : 500,
@@ -1275,9 +1275,9 @@ export default function HomePage() {
             width: clamp(160px, 60vw, 200px);
             border-radius: 14px;
             overflow: hidden;
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            background: #0c0c0e;
-            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 40px -18px rgba(0, 0, 0, 0.7);
+            border: 1px solid rgba(22, 19, 15, 0.1);
+            background: var(--surface);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06), 0 16px 40px -18px rgba(22, 19, 15, 0.21);
             scroll-snap-align: center;
             min-width: 0;
           }

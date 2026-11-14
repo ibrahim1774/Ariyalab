@@ -578,7 +578,7 @@ export default function RealEstatePage() {
           <div style={{
             position: 'relative',
             borderRadius: 'var(--radius-lg)',
-            border: '1px solid rgba(255,255,255,0.1)',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), var(--shadow-xl)',
             overflow: 'hidden',
             background: 'var(--surface-0)',
@@ -638,7 +638,7 @@ export default function RealEstatePage() {
           <div style={{
             position: 'relative',
             borderRadius: 'var(--radius-lg)',
-            border: '1px solid rgba(255,255,255,0.1)',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), var(--shadow-xl)',
             overflow: 'hidden',
             background: 'var(--surface-0)',
@@ -668,7 +668,7 @@ export default function RealEstatePage() {
                   style={{
                     flex: '0 0 auto',
                     width: 120,
-                    border: `1px solid ${s.id === featured.id ? 'rgba(255,255,255,0.35)' : 'rgba(255,255,255,0.08)'}`,
+                    border: `1px solid ${s.id === featured.id ? 'var(--accent)' : 'rgba(22, 19, 15, 0.1)'}`,
                     borderRadius: 'var(--radius-sm)',
                     overflow: 'hidden',
                     background: 'var(--surface-1)',
@@ -702,8 +702,8 @@ export default function RealEstatePage() {
             style={{
               marginTop: 12,
               padding: '10px 16px',
-              background: 'linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))',
-              border: '1px solid rgba(255,255,255,0.08)',
+              background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.015), rgba(22, 19, 15, 0.005))',
+              border: '1px solid rgba(22, 19, 15, 0.1)',
               borderRadius: 'var(--radius-md)',
               fontSize: 11,
               color: 'var(--text-faint)',
@@ -847,10 +847,10 @@ export default function RealEstatePage() {
 
           <div style={{
             ...calloutStyle,
-            background: 'radial-gradient(130% 70% at 50% -10%, rgba(255,255,255,0.05), transparent 56%), linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01))',
+            background: 'radial-gradient(130% 70% at 50% -10%, rgba(22, 19, 15, 0.025), transparent 56%), linear-gradient(180deg, rgba(22, 19, 15, 0.015), rgba(22, 19, 15, 0.005))',
             backdropFilter: 'blur(12px) saturate(130%)',
             WebkitBackdropFilter: 'blur(12px) saturate(130%)',
-            border: '1px solid rgba(255,255,255,0.09)',
+            border: '1px solid rgba(22, 19, 15, 0.1)',
             boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), var(--shadow-sm)',
             borderRadius: 'var(--radius-lg)',
             fontFamily: 'var(--font-mono)',
@@ -873,7 +873,7 @@ export default function RealEstatePage() {
                   maxWidth: 320,
                   maxHeight: 320,
                   borderRadius: 'var(--radius-lg)',
-                  border: '1px solid rgba(255,255,255,0.1)',
+                  border: '1px solid rgba(22, 19, 15, 0.1)',
                   boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.08), var(--shadow-xl)',
                 }}
               />
@@ -902,10 +902,10 @@ export default function RealEstatePage() {
                   width: '100%',
                   padding: '14px 16px',
                   borderRadius: 'var(--radius-md)',
-                  background: 'rgba(0,0,0,0.35)',
+                  background: 'var(--surface)',
                   color: 'var(--text)',
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  boxShadow: 'inset 0 2px 6px rgba(0,0,0,0.4)',
+                  border: '1px solid rgba(22, 19, 15, 0.1)',
+                  boxShadow: 'inset 0 2px 6px rgba(22, 19, 15, 0.12)',
                   fontFamily: 'var(--font-body)',
                   fontSize: 14,
                   lineHeight: 1.6,
@@ -1041,8 +1041,8 @@ export default function RealEstatePage() {
               margin: '0 auto',
               padding: 4,
               borderRadius: 999,
-              border: '1px solid rgba(255,255,255,0.12)',
-              background: 'linear-gradient(180deg, rgba(255,255,255,0.05), rgba(255,255,255,0.02))',
+              border: '1px solid rgba(22, 19, 15, 0.108)',
+              background: 'linear-gradient(180deg, rgba(22, 19, 15, 0.025), rgba(22, 19, 15, 0.01))',
               boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06), var(--shadow-sm)',
             }}
           >
@@ -1071,9 +1071,9 @@ export default function RealEstatePage() {
                   style={{
                     padding: '9px 20px',
                     borderRadius: 999,
-                    border: active ? '1px solid rgba(255,255,255,0.2)' : '1px solid transparent',
-                    background: active ? 'linear-gradient(180deg,#ffffff,#d4d4da)' : 'transparent',
-                    color: active ? '#0a0a0b' : 'var(--text-dim)',
+                    border: active ? '1px solid transparent' : '1px solid transparent',
+                    background: active ? 'var(--accent)' : 'transparent',
+                    color: active ? '#fff' : 'var(--text-dim)',
                     fontFamily: 'var(--font-body)',
                     fontSize: 13,
                     fontWeight: active ? 600 : 500,
@@ -1210,10 +1210,10 @@ export default function RealEstatePage() {
                         padding: '14px 12px',
                         borderRadius: 12,
                         border: selected
-                          ? '1px solid rgba(255,255,255,0.55)'
+                          ? '1px solid var(--accent)'
                           : '1px solid rgba(255,255,255,0.12)',
-                        background: selected ? '#ededed' : '#0f0f11',
-                        color: selected ? '#0b0b0c' : '#ededed',
+                        background: selected ? 'var(--accent)' : 'var(--surface)',
+                        color: selected ? '#fff' : 'var(--text)',
                         fontFamily: 'inherit',
                         fontSize: 15,
                         fontWeight: selected ? 600 : 500,

@@ -82,15 +82,15 @@ const labelStyle = {
   fontSize: 11,
   letterSpacing: '0.14em',
   textTransform: 'uppercase',
-  color: '#b8b6b1',
+  color: 'var(--text-dim)',
 };
 const infoBtnStyle = {
   width: 18,
   height: 18,
   borderRadius: '50%',
-  border: '1px solid rgba(255,255,255,0.35)',
-  background: 'rgba(255,255,255,0.06)',
-  color: '#ededed',
+  border: '1px solid rgba(22, 19, 15, 0.2)',
+  background: 'rgba(22, 19, 15, 0.03)',
+  color: 'var(--text)',
   fontSize: 11,
   cursor: 'pointer',
   padding: 0,
@@ -100,9 +100,9 @@ const tipStyle = {
   margin: '4px 0 8px',
   padding: '10px 12px',
   borderRadius: 10,
-  background: 'rgba(14,14,17,0.92)',
-  border: '1px solid rgba(255,255,255,0.1)',
-  color: '#cfcfd4',
+  background: 'var(--surface)',
+  border: '1px solid rgba(22, 19, 15, 0.1)',
+  color: 'var(--text)',
   fontSize: 12,
   lineHeight: 1.5,
 };
@@ -113,16 +113,16 @@ const rowStyle = {
 };
 const pillStyle = {
   padding: '8px 10px',
-  border: '1px solid rgba(255,255,255,0.18)',
+  border: '1px solid rgba(22, 19, 15, 0.162)',
   borderRadius: 10,
-  background: 'rgba(255,255,255,0.04)',
-  color: '#ededed',
+  background: 'rgba(22, 19, 15, 0.02)',
+  color: 'var(--text)',
   fontFamily: 'inherit',
   textAlign: 'center',
 };
 const pillActiveStyle = {
-  borderColor: 'rgba(255, 255, 255, 0.6)',
-  background: 'rgba(255, 255, 255, 0.12)',
+  borderColor: 'rgba(22, 19, 15, 0.2)',
+  background: 'rgba(22, 19, 15, 0.06)',
 };
 const pillTitleStyle = {
   fontSize: 14,

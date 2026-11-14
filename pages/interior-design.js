@@ -641,7 +641,7 @@ export default function InteriorDesignPage() {
                 style={{
                   marginTop: 10,
                   fontSize: 11,
-                  color: 'rgba(255,255,255,0.5)',
+                  color: 'var(--text-dim)',
                   textAlign: 'center',
                   lineHeight: 1.5,
                 }}
