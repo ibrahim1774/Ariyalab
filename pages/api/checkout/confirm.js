@@ -1,9 +1,18 @@
 import { stripe, planFromPrice, topupFromPrice, PLANS, CAPS } from '../../../lib/stripe';
-import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../../lib/entitlement';
+import {
+  assertCanLink,
+  linkStripeCustomerToProfile,
+  CustomerLinkedElsewhereError,
+} from '../../../lib/entitlement';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
 import { sendCapiEvent } from '../../../lib/meta';
 import { nsEventId } from '../../../lib/metaKeys';
-import { checkSessionOwner, grantForCheckoutSession, CLAIM_NONCE_COOKIE } from '../../../lib/grants';
+import {
+  checkSessionOwner,
+  grantForCheckoutSession,
+  GrantInProgressError,
+  CLAIM_NONCE_COOKIE,
+} from '../../../lib/grants';
 
 /*
  * Called by the dashboard when Stripe redirects back after checkout.
@@ -11,10 +20,13 @@ import { checkSessionOwner, grantForCheckoutSession, CLAIM_NONCE_COOKIE } from '
  * Order: payment-status guard -> the caller must own the session
  * (lib/grants.js checkSessionOwner: client_reference_id, the buyer id
  * /api/checkout stored, the verified email, or this browser's claim
- * ticket; anything else is 403) -> link the Stripe customer to the caller
- * (409 if it already belongs to someone else) -> grant through
+ * ticket; anything else is 403) -> the purchase must be this app's price
+ * (400; haelabs shares the Stripe account) -> the link must be allowed (409
+ * when the customer belongs to someone else) -> grant through
  * grantForCheckoutSession, which grants a session exactly once even when
- * the webhook runs at the same moment or the session id is replayed.
+ * the webhook runs at the same moment or the session id is replayed ->
+ * link the customer to the caller. Granting before linking keeps the
+ * entitlement reader from seeing a linked but unseeded customer.
  */
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -69,7 +81,30 @@ export default async function handler(req, res) {
 
     const price = checkoutSession.line_items?.data?.[0]?.price;
     const plan = planFromPrice(price);
-    const topup = topupFromPrice(price);
+    const topup = plan ? null : topupFromPrice(price);
+    if (!plan && !topup) {
+      return res.status(400).json({ error: 'This checkout is not for an Ariya Lab plan or pack.' });
+    }
+
+    try {
+      await assertCanLink(session.user.id, customerId);
+    } catch (linkErr) {
+      if (linkErr instanceof CustomerLinkedElsewhereError) {
+        return res.status(409).json({ error: linkErr.message });
+      }
+      throw linkErr;
+    }
+
+    let grant;
+    try {
+      grant = await grantForCheckoutSession(checkoutSession, { userId: session.user.id });
+    } catch (grantErr) {
+      // The webhook (or another tab) is granting this session right now and
+      // will finish it; Stripe retries the webhook if it fails.
+      if (!(grantErr instanceof GrantInProgressError)) throw grantErr;
+      grant = { granted: false, inProgress: true };
+    }
+    const creditsAdded = grant.granted && grant.kind === 'topup' ? grant.amount : 0;
 
     // Bind Stripe customer <-> Supabase profile (authoritative link).
     try {
@@ -80,9 +115,6 @@ export default async function handler(req, res) {
       }
       throw linkErr;
     }
-
-    const grant = await grantForCheckoutSession(checkoutSession, { userId: session.user.id });
-    const creditsAdded = grant.granted && grant.kind === 'topup' ? grant.amount : 0;
 
     let eventKind = 'unknown';
     let value;
@@ -132,6 +164,8 @@ export default async function handler(req, res) {
       tier: plan || 'unknown',
       videoCap: plan ? CAPS[plan] : 0,
       creditsAdded,
+      ...(grant.inProgress ? { inProgress: true } : {}),
+      ...(grant.skipped ? { skipped: grant.skipped } : {}),
       meta: { eventId, eventName, value: reportedValue, currency: 'USD' },
     });
   } catch (err) {

@@ -10,8 +10,32 @@ import {
 import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
-import { linkStripeCustomerToProfile } from '../../lib/entitlement';
-import { CLAIM_NONCE_COOKIE, hashClaimTicket } from '../../lib/grants';
+import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../lib/entitlement';
+import { CLAIM_NONCE_COOKIE, hashClaimTicket, usersForCustomer } from '../../lib/grants';
+
+// Session metadata keys only the server sets; never taken from the
+// attribution cookie (ownership and claims read them).
+const RESERVED_METADATA = new Set(['supabase_user_id', 'pending_supabase_link', 'claim_ticket']);
+const NONCE_PATTERN = /^[A-Za-z0-9_-]{32}$/;
+
+// The origin to send the buyer back to. Stays on the host the buyer is on
+// when it is APP_URL's host or its www/apex twin, so host-only cookies (the
+// claim ticket, the auth session) are there when Stripe redirects back.
+function buyerOrigin(req) {
+  const app = process.env.APP_URL && process.env.APP_URL.replace(/\/$/, '');
+  const reqHost = String(req.headers?.host || '').toLowerCase();
+  if (app) {
+    try {
+      const u = new URL(app);
+      const bare = (h) => h.replace(/^www\./, '');
+      if (reqHost && bare(reqHost) === bare(u.host.toLowerCase())) return `${u.protocol}//${reqHost}`;
+    } catch {
+      /* fall through to APP_URL */
+    }
+    return app;
+  }
+  return (req.headers.origin && req.headers.origin.replace(/\/$/, '')) || `https://${req.headers.host}`;
+}
 
 // Adds a Set-Cookie header without dropping one already set on `res`.
 function appendCookie(res, cookie) {
@@ -28,11 +52,16 @@ function appendCookie(res, cookie) {
  *   1. profiles.stripe_customer_id (authoritative link). If the
  *      stored ID exists in Stripe and isn't deleted, reuse it.
  *   2. Stripe Customer Search by metadata.supabase_user_id.
- *   3. Stripe customers.list by email — adopt the best-fit match
- *      (prefer one whose metadata already names this user).
+ *   3. Stripe customers.list by email.
  *
- * Customer creation is deferred entirely to Stripe Checkout's
- * payment-completion flow. We never call customers.create on click.
+ * A customer found by search or email is only adopted when no other
+ * user owns it: no other profile is linked to it and its
+ * metadata.supabase_user_id is empty or this user. An email match alone
+ * proves nothing (anyone can pay with someone else's email), so there is
+ * no "first customer with this email" fallback, and a customer whose link
+ * is refused is not reused. With nothing adoptable we return null and
+ * Stripe Checkout creates a fresh customer at payment completion. We never
+ * call customers.create on click.
  *
  * If a match is found, we idempotently stamp supabase_user_id on
  * its metadata and upsert profile.stripe_customer_id so subsequent
@@ -42,51 +71,62 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
   let customerId = null;
 
   // 1) Profile lookup + Stripe existence check
+  let linkedId = null;
   try {
     const { data } = await admin
       .from('profiles')
       .select('stripe_customer_id')
       .eq('id', userId)
       .maybeSingle();
-    if (data?.stripe_customer_id) {
-      try {
-        const c = await stripe().customers.retrieve(data.stripe_customer_id);
-        if (c && !c.deleted) customerId = c.id;
-      } catch (retrieveErr) {
-        console.warn(
-          '[customer-find] linked customer not in Stripe, will re-resolve',
-          retrieveErr.message
-        );
-      }
-    }
+    linkedId = data?.stripe_customer_id || null;
   } catch (lookupErr) {
     console.warn('[customer-find] profile lookup failed', lookupErr.message);
   }
-
-  // 2) Stripe Customer Search by metadata.supabase_user_id
-  if (!customerId) {
+  if (linkedId) {
     try {
-      const search = await stripe().customers.search({
-        query: `metadata['supabase_user_id']:'${userId}'`,
-        limit: 1,
-      });
-      if (search.data.length > 0) customerId = search.data[0].id;
-    } catch (searchErr) {
-      console.warn('[customer-find] metadata search failed', searchErr.message);
+      const c = await stripe().customers.retrieve(linkedId);
+      if (c && !c.deleted) customerId = c.id;
+    } catch (retrieveErr) {
+      // Only a customer that is really gone is re-resolved; a transient
+      // Stripe error must not start a second customer for this user.
+      if (retrieveErr?.code !== 'resource_missing') throw retrieveErr;
+      console.warn('[customer-find] linked customer not in Stripe, will re-resolve');
     }
   }
+  if (customerId) return customerId;
 
-  // 3) Email match — adopt the best-fit existing customer
+  const adoptable = async (c) => {
+    if (!c || c.deleted) return false;
+    const owner = c.metadata?.supabase_user_id;
+    if (owner && owner !== userId) return false;
+    const linked = await usersForCustomer(c.id);
+    return linked.every((id) => id === userId);
+  };
+
+  // 2) Stripe Customer Search by metadata.supabase_user_id
+  try {
+    const search = await stripe().customers.search({
+      query: `metadata['supabase_user_id']:'${userId}'`,
+      limit: 1,
+    });
+    if (search.data.length > 0 && (await adoptable(search.data[0]))) customerId = search.data[0].id;
+  } catch (searchErr) {
+    console.warn('[customer-find] metadata search failed', searchErr.message);
+  }
+
+  // 3) Email match: only a customer this user already owns, or one nobody owns.
   if (!customerId && email) {
     try {
       const list = await stripe().customers.list({ email, limit: 100 });
-      if (list.data.length > 0) {
-        const exactMatch = list.data.find(
-          (c) => c.metadata?.supabase_user_id === userId
-        );
-        const unowned = list.data.find((c) => !c.metadata?.supabase_user_id);
-        const chosen = exactMatch || unowned || list.data[0];
-        customerId = chosen.id;
+      const ordered = [
+        ...list.data.filter((c) => c.metadata?.supabase_user_id === userId),
+        ...list.data.filter((c) => !c.metadata?.supabase_user_id),
+      ];
+      for (const c of ordered) {
+        if (await adoptable(c)) {
+          customerId = c.id;
+          break;
+        }
       }
     } catch (listErr) {
       console.warn('[customer-find] email list failed', listErr.message);
@@ -94,6 +134,21 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
   }
 
   if (!customerId) return null;
+
+  // Authoritative link in our profiles table. A refused link means this
+  // customer belongs elsewhere: do not use it.
+  try {
+    await linkStripeCustomerToProfile(admin, userId, customerId);
+  } catch (linkErr) {
+    if (linkErr instanceof CustomerLinkedElsewhereError) {
+      console.warn('[customer-find] not adopting customer', customerId, linkErr.message);
+      return null;
+    }
+    console.warn(
+      '[customer-find] profile link failed — search/email fallback will still find this customer next time',
+      linkErr.message
+    );
+  }
 
   // Idempotently stamp supabase_user_id on the customer's metadata.
   try {
@@ -106,16 +161,6 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
     }
   } catch (mdErr) {
     console.warn('[customer-find] metadata sync failed', mdErr.message);
-  }
-
-  // Authoritative link in our profiles table.
-  try {
-    await linkStripeCustomerToProfile(admin, userId, customerId);
-  } catch (linkErr) {
-    console.warn(
-      '[customer-find] profile link failed — search/email fallback will still find this customer next time',
-      linkErr.message
-    );
   }
 
   return customerId;
@@ -141,6 +186,7 @@ function adAttrFromRequest(req) {
       for (const [k, v] of Object.entries(parsed)) {
         if (added >= 15) break;
         if (!/^[a-z0-9_]{1,40}$/.test(k)) continue;
+        if (RESERVED_METADATA.has(k) || RESERVED_METADATA.has(prefix + k)) continue;
         if (typeof v !== 'string' || !v) continue;
         out[prefix + k] = v.slice(0, 480);
         added += 1;
@@ -173,10 +219,7 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Sign in required to buy a top-up.' });
   }
 
-  const origin =
-    process.env.APP_URL ||
-    (req.headers.origin && req.headers.origin.replace(/\/$/, '')) ||
-    `https://${req.headers.host}`;
+  const origin = buyerOrigin(req);
 
   // Optional: where to send the user after dashboard finishes
   // confirming the Stripe session. Validated to be a same-origin
@@ -219,7 +262,7 @@ export default async function handler(req, res) {
         billing_address_collection: 'auto',
         // Ties the session to the buyer: /confirm only binds it to this user.
         client_reference_id: session.user.id,
-        metadata: { supabase_user_id: session.user.id, ...adAttr },
+        metadata: { ...adAttr, supabase_user_id: session.user.id },
       });
       const value = TOPUPS[pack].amountCents / 100;
       const eventId = nsEventId(`ic-${checkout.id}`);
@@ -298,7 +341,10 @@ export default async function handler(req, res) {
     // enough on its own. SameSite=Lax so it survives Stripe's redirect.
     let claimTicket = null;
     if (isTicketFlow) {
-      const nonce = randomBytes(24).toString('base64url');
+      // Reuse this browser's nonce: a second click, another tab or a retry
+      // must not orphan an earlier session that gets paid.
+      const existing = parseCookies(req.headers?.cookie || '')[CLAIM_NONCE_COOKIE];
+      const nonce = NONCE_PATTERN.test(existing || '') ? existing : randomBytes(24).toString('base64url');
       claimTicket = hashClaimTicket(nonce);
       appendCookie(
         res,
@@ -355,7 +401,7 @@ export default async function handler(req, res) {
       subscription_data: {
         metadata: subMetadata,
       },
-      metadata: { ...subMetadata, ...adAttr, ...(claimTicket ? { claim_ticket: claimTicket } : {}) },
+      metadata: { ...adAttr, ...subMetadata, ...(claimTicket ? { claim_ticket: claimTicket } : {}) },
     });
 
     // Pixel value: actual cents charged today.

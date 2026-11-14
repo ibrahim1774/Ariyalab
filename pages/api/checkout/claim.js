@@ -1,9 +1,18 @@
 import { stripe, planFromPrice, PLANS, CAPS } from '../../../lib/stripe';
-import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../../lib/entitlement';
+import {
+  assertCanLink,
+  linkStripeCustomerToProfile,
+  CustomerLinkedElsewhereError,
+} from '../../../lib/entitlement';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
 import { sendCapiEvent } from '../../../lib/meta';
 import { nsEventId } from '../../../lib/metaKeys';
-import { checkSessionOwner, grantForCheckoutSession, CLAIM_NONCE_COOKIE } from '../../../lib/grants';
+import {
+  checkSessionOwner,
+  grantForCheckoutSession,
+  GrantInProgressError,
+  CLAIM_NONCE_COOKIE,
+} from '../../../lib/grants';
 
 /*
  * Claim a Stripe Checkout Session that was created anonymously
@@ -79,6 +88,33 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Session is not a subscription.' });
     }
 
+    // Grant before linking (the entitlement reader must never see a linked
+    // but unseeded customer), but only once the link is known to be allowed.
+    try {
+      await assertCanLink(session.user.id, customerId);
+    } catch (linkErr) {
+      if (linkErr instanceof CustomerLinkedElsewhereError) {
+        return res.status(409).json({ error: linkErr.message });
+      }
+      throw linkErr;
+    }
+
+    // Seeds plan + credits (legacy) or leaves the grant to the invoice
+    // (billing_v2).
+    let grant;
+    try {
+      grant = await grantForCheckoutSession(checkoutSession, {
+        userId: session.user.id,
+        clearPendingLink: true,
+      });
+    } catch (grantErr) {
+      if (!(grantErr instanceof GrantInProgressError)) throw grantErr;
+      return res.status(409).json({
+        error: 'Your payment is still being processed. Try again in a minute.',
+        retryable: true,
+      });
+    }
+
     // Authoritative link in our profiles table.
     try {
       await linkStripeCustomerToProfile(session.supabase, session.user.id, customerId);
@@ -89,17 +125,13 @@ export default async function handler(req, res) {
       throw linkErr;
     }
 
-    // Seeds plan + credits (legacy) or leaves the grant to the invoice
-    // (billing_v2). Already claimed via /confirm or a prior /claim:
-    // return success without re-seeding.
-    const grant = await grantForCheckoutSession(checkoutSession, {
-      userId: session.user.id,
-      clearPendingLink: true,
-    });
     if (!grant.granted && grant.skipped !== 'granted_per_invoice') {
+      // Nothing seeded by this call: already claimed (refresh / double tab /
+      // /confirm), or skipped for the reason given.
       return res.status(200).json({
         ok: true,
-        alreadyProcessed: true,
+        alreadyProcessed: Boolean(grant.already),
+        ...(grant.skipped ? { skipped: grant.skipped } : {}),
         tier: plan,
         videoCap: CAPS[plan],
       });

@@ -1,15 +1,14 @@
-import { stripe, planFromPrice, PLANS } from '../../lib/stripe';
+import { stripe, planFromPrice, topupFromPrice, PLANS } from '../../lib/stripe';
 import { sendCapiEvent } from '../../lib/meta';
 import { KEY, nsEventId } from '../../lib/metaKeys';
 import { getSupabaseAdmin } from '../../lib/supabaseServer';
 import { linkStripeCustomerToProfile } from '../../lib/entitlement';
-import { isBillingV2 } from '../../lib/billingFlags';
+import { isBillingV2Strict } from '../../lib/billingFlags';
 import {
   grantForCheckoutSession,
   grantForInvoice,
   clawbackForPayment,
   recordStripeEvent,
-  forgetStripeEvent,
   isStripeEventRecorded,
 } from '../../lib/grants';
 
@@ -30,13 +29,15 @@ import {
  * the lazy fallback in lib/entitlement.js doesn't re-fire the same
  * Purchase the next time the user opens the dashboard.
  *
- * Credits are granted only through lib/grants.js (idempotent on the
- * Stripe object id). Events are deduped on event.id in stripe_events:
- *   - billing_v2 off: the event id is recorded first; if handling throws
- *     the row is deleted again and we answer 500 so Stripe retries.
- *   - billing_v2 on: the ledger is idempotent on its own, so the event id
- *     is recorded only after handling succeeded.
- * Unknown event types are acknowledged with 200. Handler errors are 500.
+ * Credits are granted only through lib/grants.js, which grants each Stripe
+ * object once (lock + done rows on the legacy path, ledger idempotency
+ * under billing_v2). Events are also deduped on event.id in stripe_events,
+ * recorded only after handling succeeded, so a crash mid-handler is
+ * retried rather than lost. Unknown event types are acknowledged with 200.
+ * Handler errors are 500 so Stripe retries.
+ *
+ * Nothing here writes for an object that is not this app's price or plan:
+ * haelabs.live shares the Stripe account, the webhook stream and profiles.
  *
  * charge.refunded / charge.dispute.created claw back what the purchase
  * granted (billing_v2 only; acknowledged and logged otherwise).
@@ -91,31 +92,14 @@ export default async function handler(req, res) {
   const handle = HANDLERS[event.type];
   if (!handle) return res.status(200).json({ received: true, ignored: true });
 
-  let v2;
-  let recordedFirst = false;
   try {
-    v2 = await isBillingV2();
-    if (v2) {
-      if (await isStripeEventRecorded(event.id)) {
-        return res.status(200).json({ received: true, duplicate: true });
-      }
-    } else {
-      if (!(await recordStripeEvent(event.id))) {
-        return res.status(200).json({ received: true, duplicate: true });
-      }
-      recordedFirst = true;
+    if (await isStripeEventRecorded(event.id)) {
+      return res.status(200).json({ received: true, duplicate: true });
     }
-
     await handle(event.data.object, req);
-
-    if (v2) await recordStripeEvent(event.id);
+    await recordStripeEvent(event.id);
   } catch (err) {
     console.error('[stripe-webhook] handler threw', event.type, event.id, err.message);
-    if (recordedFirst) {
-      await forgetStripeEvent(event.id).catch((e) =>
-        console.error('[stripe-webhook] could not release event', event.id, e.message)
-      );
-    }
     // 500 so Stripe retries; the grant paths are idempotent.
     return res.status(500).json({ error: 'handler_failed' });
   }
@@ -140,9 +124,13 @@ async function handleRefundOrDispute(payment) {
   }
 }
 
-async function handleInvoicePaymentSucceeded(invoice, req) {
-  if (!invoice.subscription) return;
-  if (!invoice.amount_paid || invoice.amount_paid <= 0) return;
+async function handleInvoicePaymentSucceeded(eventInvoice, req) {
+  // Re-read through the SDK: payload fields follow the webhook endpoint's
+  // API version (newer versions drop invoice.subscription), the SDK's are
+  // pinned.
+  const invoice = await stripe().invoices.retrieve(eventInvoice.id);
+  if (!invoice?.subscription) return;
+  if (invoice.status !== 'paid') return;
 
   const subId =
     typeof invoice.subscription === 'string'
@@ -168,8 +156,9 @@ async function handleInvoicePaymentSucceeded(invoice, req) {
   await grantForInvoice(invoice, { subscription: sub });
 
   // First-invoice charge is reported by /api/checkout/confirm; skip
-  // here to avoid double-firing Purchase.
+  // here to avoid double-firing Purchase. Purchase only when money moved.
   if (invoice.billing_reason === 'subscription_create') return;
+  if (!invoice.amount_paid || invoice.amount_paid <= 0) return;
 
   const value = PLANS[plan].amountCents / 100;
 
@@ -234,12 +223,12 @@ async function handleInvoicePaymentSucceeded(invoice, req) {
  * the redirect the credits would never land. Both paths go through
  * grantForCheckoutSession, which grants a session exactly once.
  * Subscriptions are seeded by /confirm or the claim routes (legacy) or
- * per invoice (billing_v2), never here.
+ * per invoice (billing_v2); here a billing_v2 subscription is only linked.
  */
 async function handleCheckoutSessionCompleted(checkoutSession, req) {
-  if (checkoutSession.mode !== 'payment') return;
-  if (checkoutSession.payment_status !== 'paid') return;
-
+  if (checkoutSession.payment_status !== 'paid' && checkoutSession.payment_status !== 'no_payment_required') {
+    return;
+  }
   const customerId =
     typeof checkoutSession.customer === 'string'
       ? checkoutSession.customer
@@ -250,22 +239,33 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
   const fullSession = await stripe().checkout.sessions.retrieve(checkoutSession.id, {
     expand: ['line_items.data.price'],
   });
+  const price = fullSession.line_items?.data?.[0]?.price;
+  const plan = planFromPrice(price);
+  const topup = plan ? null : topupFromPrice(price);
+  // Not this app's price (haelabs): write nothing.
+  if (!plan && !topup) return;
 
-  // Ensure profile.stripe_customer_id points at this customer so the
-  // dashboard (and, under billing_v2, the grant) finds it. The buyer id
-  // is written server-side by /api/checkout. Best-effort: a refused or
-  // failed link never blocks the grant (it is parked or lands on the
-  // customer instead).
-  const buyerId = fullSession.client_reference_id || fullSession.metadata?.supabase_user_id;
-  if (buyerId) {
-    try {
-      await linkStripeCustomerToProfile(getSupabaseAdmin(), buyerId, customerId);
-    } catch (linkErr) {
-      console.warn('[webhook/topup] profile link failed', linkErr.message);
+  if (fullSession.mode === 'subscription') {
+    // Legacy subscriptions are seeded by /confirm or a claim route (they
+    // need the signed-in user). Under billing_v2 the invoice grants; link a
+    // signed-in buyer here so a closed tab does not leave the grant parked.
+    // client_reference_id is set by /api/checkout for signed-in buyers only.
+    if (plan && fullSession.client_reference_id && (await isBillingV2Strict())) {
+      await linkBuyer(fullSession.client_reference_id, customerId);
     }
+    return;
   }
+  if (!topup) return;
 
-  const result = await grantForCheckoutSession(fullSession);
+  // The buyer id is written server-side by /api/checkout (top-ups require
+  // sign-in). Under billing_v2 an unlinked customer is granted to them.
+  const buyerId = fullSession.client_reference_id || fullSession.metadata?.supabase_user_id || undefined;
+  const result = await grantForCheckoutSession(fullSession, { userId: buyerId });
+
+  // Then make sure profile.stripe_customer_id points at this customer so the
+  // dashboard finds it.
+  if (buyerId) await linkBuyer(buyerId, customerId);
+
   if (!result.granted || result.kind !== 'topup') return;
 
   // Fire CAPI Purchase for the top-up. Browser pixel may not have
@@ -290,4 +290,14 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
       via: 'webhook',
     },
   }).catch(() => {});
+}
+
+// Best-effort: a refused or failed link never fails the webhook (the grant
+// already landed on the customer, or is parked for the next link).
+async function linkBuyer(userId, customerId) {
+  try {
+    await linkStripeCustomerToProfile(getSupabaseAdmin(), userId, customerId);
+  } catch (linkErr) {
+    console.warn('[stripe-webhook] profile link failed', customerId, linkErr.message);
+  }
 }

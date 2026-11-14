@@ -12,6 +12,7 @@ const S = vi.hoisted(() => {
     charges: new Map(),
     failCustomerUpdates: 0,
     failSessionRetrieves: 0,
+    created: [], // checkout.sessions.create params
     creditWrites: new Map(), // customer id -> number of customers.update calls
   };
   const tick = () => new Promise((r) => setTimeout(r, 1));
@@ -21,9 +22,14 @@ const S = vi.hoisted(() => {
       retrieve: async (id) => {
         await tick();
         const c = state.customers.get(id);
-        if (!c) throw new Error(`No such customer: ${id}`);
+        if (!c) throw Object.assign(new Error(`No such customer: ${id}`), { code: 'resource_missing' });
         return clone(c);
       },
+      search: async ({ query }) => {
+        const m = /metadata\['supabase_user_id'\]:'([^']+)'/.exec(query);
+        return { data: [...state.customers.values()].filter((c) => m && c.metadata?.supabase_user_id === m[1]).map(clone) };
+      },
+      list: async ({ email }) => ({ data: [...state.customers.values()].filter((c) => c.email === email).map(clone) }),
       update: async (id, { metadata }) => {
         await tick();
         if (state.failCustomerUpdates > 0) {
@@ -31,6 +37,7 @@ const S = vi.hoisted(() => {
           throw new Error('stripe unavailable');
         }
         const c = state.customers.get(id);
+        if (!c || c.deleted) throw Object.assign(new Error(`No such customer: ${id}`), { code: 'resource_missing' });
         // In these flows only a grant writes customer metadata.
         state.creditWrites.set(id, (state.creditWrites.get(id) || 0) + 1);
         c.metadata = { ...metadata };
@@ -52,9 +59,21 @@ const S = vi.hoisted(() => {
         list: async ({ payment_intent }) => ({
           data: [...state.sessions.values()].filter((s) => s.payment_intent === payment_intent).map(clone),
         }),
+        create: async (params) => {
+          state.created.push(params);
+          const id = `cs_test_new_${state.created.length}_${Math.random().toString(36).slice(2, 10)}`;
+          const s = { id, object: 'checkout.session', ...structuredClone(params), payment_status: 'unpaid', created: Math.floor(Date.now() / 1000), url: `https://checkout.stripe.test/${id}` };
+          state.sessions.set(id, s);
+          return clone(s);
+        },
       },
     },
-    subscriptions: { retrieve: async (id) => clone(state.subs.get(id)) },
+    subscriptions: {
+      retrieve: async (id) => clone(state.subs.get(id)),
+      list: async ({ customer, status }) => ({
+        data: [...state.subs.values()].filter((x) => x.customer === customer && x.status === status).map(clone),
+      }),
+    },
     invoices: { retrieve: async (id) => clone(state.invoices.get(id)) },
     charges: { retrieve: async (id) => clone(state.charges.get(id)) },
     webhooks: { constructEvent: (raw) => JSON.parse(raw.toString('utf8')) },
@@ -64,12 +83,28 @@ const S = vi.hoisted(() => {
 
 const auth = vi.hoisted(() => ({ user: null, db: null }));
 
-vi.mock('../../lib/stripe', async (importOriginal) => ({ ...(await importOriginal()), stripe: () => S.api }));
+vi.mock('../../lib/stripe', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    stripe: () => S.api,
+    getOrCreatePrice: async (plan) => ({ id: `price_${plan}`, lookup_key: actual.PLANS[plan].lookupKey }),
+    getOrCreateTopupPrice: async (pack) => ({ id: `price_topup_${pack}`, lookup_key: actual.TOPUPS[pack].lookupKey }),
+  };
+});
 vi.mock('../../lib/meta', () => ({ sendCapiEvent: vi.fn(async () => {}) }));
 vi.mock('../../lib/supabaseServer', () => {
   // Writes profile links into the PGlite profiles table.
   const profileClient = {
     from: () => ({
+      select: () => ({
+        eq: (_col, id) => ({
+          maybeSingle: async () => {
+            const { rows } = await auth.db.query('select stripe_customer_id from public.profiles where id = $1', [id]);
+            return { data: rows[0] || null, error: null };
+          },
+        }),
+      }),
       upsert: async (row) => {
         await auth.db.query(
           `insert into public.profiles (id, stripe_customer_id) values ($1, $2)
@@ -95,6 +130,10 @@ import webhook from '../../pages/api/stripe-webhook.js';
 import confirm from '../../pages/api/checkout/confirm.js';
 import claimTicket from '../../pages/api/checkout/claim-ticket.js';
 import claim from '../../pages/api/checkout/claim.js';
+import checkout from '../../pages/api/checkout.js';
+import { getEntitlement } from '../../lib/entitlement';
+import { getSupabaseAdmin } from '../../lib/supabaseServer';
+import { renewPlanCredits } from '../../lib/credits.js';
 
 let db;
 beforeAll(async () => {
@@ -181,7 +220,7 @@ function subSession({ customer, metadata = {}, email = null, created = nowS(), e
 }
 function paidInvoice({ customer, subId, reason = 'subscription_create' }) {
   const id = `in_${randomUUID().slice(0, 12)}`;
-  const inv = { id, customer, subscription: subId, amount_paid: PLANS.monthly.amountCents, billing_reason: reason, currency: 'usd' };
+  const inv = { id, customer, subscription: subId, status: 'paid', amount_paid: PLANS.monthly.amountCents, billing_reason: reason, currency: 'usd' };
   S.state.invoices.set(id, inv);
   return inv;
 }
@@ -210,6 +249,9 @@ function makeRes() {
     },
     setHeader(name, value) {
       res.headers[name] = value;
+    },
+    getHeader(name) {
+      return res.headers[name];
     },
   };
   return res;
@@ -273,7 +315,11 @@ describe('billing_v2 off (legacy metadata grants)', () => {
     // A second, different event for the same session (Stripe resend) is also a no-op.
     const other = await deliver(completedEvent(session));
 
-    for (const r of [...results, again, other]) expect(r.statusCode).toBe(200);
+    // A delivery racing the one that holds the grant lock gets 500 (in
+    // progress) so Stripe retries it; it never grants.
+    for (const r of results) expect([200, 500]).toContain(r.statusCode);
+    expect(results.map((r) => r.statusCode)).toContain(200);
+    for (const r of [again, other]) expect(r.statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
     // Two racing grants can lose an update and still end at 2,280: count the writes.
     expect(creditWrites(customer)).toBe(1);
@@ -286,10 +332,14 @@ describe('billing_v2 off (legacy metadata grants)', () => {
     const customer = newCustomer();
     const session = topupSession({ customer, buyer });
 
-    const [hook, conf] = await Promise.all([deliver(completedEvent(session)), confirmAs(buyer, session.id)]);
+    const event = completedEvent(session);
+    const [hook, conf] = await Promise.all([deliver(event), confirmAs(buyer, session.id)]);
 
-    expect(hook.statusCode).toBe(200);
+    // Whichever path loses the lock: /confirm answers 200 (in progress), the
+    // webhook 500 so Stripe redelivers. The redelivery is a no-op.
+    expect([200, 500]).toContain(hook.statusCode);
     expect(conf.statusCode).toBe(200);
+    expect((await deliver(event)).statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
     expect(creditWrites(customer)).toBe(1);
   });
@@ -619,6 +669,7 @@ describe('billing_v2 on (ledger grants)', () => {
     await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
     expect((await getBalance(subscriber.id)).plan).toBe(V2_MONTHLY);
     const subCharge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 500, amount_refunded: 500, invoice: invoice.id, payment_intent: 'pi_sub' };
+    S.state.charges.set(subCharge.id, subCharge);
     await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: subCharge } });
     expect((await getBalance(subscriber.id)).plan).toBe(0);
   });
@@ -628,9 +679,319 @@ describe('billing_v2 on (ledger grants)', () => {
     const invoice = paidInvoice({ customer, subId: newSub(customer) });
     await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
     const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 500, amount_refunded: 250, invoice: invoice.id };
+    S.state.charges.set(charge.id, charge);
     await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
     await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } });
     const rows = await db.query('select amount from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
     expect(rows.rows).toEqual([{ amount: V2_MONTHLY - Math.ceil(V2_MONTHLY / 2) }]);
+  });
+});
+
+// =====================================================================
+// Review fix round 1
+// =====================================================================
+const cookieValue = (res, name) => {
+  const raw = res.headers['Set-Cookie'];
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  const hit = list.find((c) => c.startsWith(`${name}=`));
+  return hit ? hit.split(';')[0].slice(name.length + 1) : undefined;
+};
+async function callCheckout({ user = null, body, host = 'ariyalab.test', cookie = '' }) {
+  auth.user = user;
+  const res = makeRes();
+  await checkout({ method: 'POST', body, headers: { host, cookie }, query: {}, cookies: {} }, res);
+  return res;
+}
+const lastCreated = () => S.state.created[S.state.created.length - 1];
+const lockRow = (id, age = '0 seconds') =>
+  db.query(`insert into public.stripe_events (id, received_at) values ($1, now() - $2::interval)`, [id, age]);
+
+describe('review fixes, billing_v2 off', () => {
+  beforeAll(() => setBillingV2(false));
+
+  it('C1: checkout never adopts a customer that another user owns', async () => {
+    const victim = newUser('victim@example.test');
+    const attacker = newUser();
+    const linkedToAttacker = newCustomer({}, 'victim@example.test');
+    await link(attacker.id, linkedToAttacker);
+    newCustomer({ supabase_user_id: attacker.id }, 'victim@example.test');
+
+    const res = await callCheckout({ user: victim, body: { mode: 'topup', pack: 's' } });
+    expect(res.statusCode).toBe(200);
+    const params = lastCreated();
+    expect(params.customer).toBeUndefined();
+    expect(params.customer_creation).toBe('always');
+    expect((await db.query('select 1 from public.profiles where id = $1', [victim.id])).rows).toHaveLength(0);
+  });
+
+  it('I1: a stale grant lock left by a dead path is taken over and grants once', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    const session = topupSession({ customer, buyer });
+    await lockRow(`checkout:${session.id}`, '3 minutes');
+
+    expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+    expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
+    expect(await recorded(`checkout:${session.id}:done`)).toBe(true);
+    expect((await confirmAs(buyer, session.id)).body.creditsAdded).toBe(0);
+    expect(creditWrites(customer)).toBe(1);
+  });
+
+  it('I1: a live grant lock makes the webhook retry and /confirm answer in progress', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    const session = topupSession({ customer, buyer });
+    await lockRow(`checkout:${session.id}`);
+    const event = completedEvent(session);
+
+    const hook = await deliver(event);
+    expect(hook.statusCode).toBe(500);
+    expect(await recorded(event.id)).toBe(false);
+    const conf = await confirmAs(buyer, session.id);
+    expect(conf.statusCode).toBe(200);
+    expect(conf.body.inProgress).toBe(true);
+    expect(legacyCredits(customer)).toBe(0);
+  });
+
+  it('I3: pay, then /confirm 8 days later, never hands out two allotments', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    const session = subSession({ customer, metadata: { supabase_user_id: buyer.id }, created: nowS() - 8 * 24 * 3600 });
+    S.state.subs.get(session.subscription.id).customer = customer;
+
+    const res = await confirmAs(buyer, session.id);
+    expect(res.statusCode).toBe(200);
+    const ent = await getEntitlement({ supabase: getSupabaseAdmin(), userId: buyer.id, email: buyer.email });
+    expect(ent.tier).toBe('monthly');
+    expect(ent.creditsRemaining).toBe(PLANS.monthly.cap);
+  });
+
+  it('I4: the attribution cookie cannot set server-owned session metadata', async () => {
+    const attr = encodeURIComponent(
+      JSON.stringify({ supabase_user_id: 'evil', claim_ticket: 'evil', pending_supabase_link: 'false', utm_source: 'fb' })
+    );
+    const res = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' }, cookie: `al_attr=${attr}` });
+    expect(res.statusCode).toBe(200);
+    const md = lastCreated().metadata;
+    expect(md.supabase_user_id).toBeUndefined();
+    expect(md.pending_supabase_link).toBe('true');
+    expect(md.claim_ticket).toBe(hashClaimTicket(cookieValue(res, 'ugc2_claim_nonce')));
+    expect(md.utm_source).toBe('fb');
+  });
+
+  it('O2/I5: /api/checkout -> Set-Cookie -> claim-ticket end to end, after two checkout calls paying the first', async () => {
+    const prev = process.env.APP_URL;
+    process.env.APP_URL = 'https://ariyalab.test';
+    try {
+      const first = await callCheckout({ body: { plan: 'monthly', returnTo: '/ugc-2' }, host: 'www.ariyalab.test' });
+      const firstSession = lastCreated();
+      expect(firstSession.success_url.startsWith('https://www.ariyalab.test/ugc-2/claim?')).toBe(true);
+      const nonce1 = cookieValue(first, 'ugc2_claim_nonce');
+      expect(nonce1).toMatch(/^[A-Za-z0-9_-]{32}$/);
+
+      // Second click / second tab in the same browser: the cookie is reused.
+      const second = await callCheckout({
+        body: { plan: 'monthly', returnTo: '/ugc-2' },
+        host: 'www.ariyalab.test',
+        cookie: `ugc2_claim_nonce=${nonce1}`,
+      });
+      const browserNonce = cookieValue(second, 'ugc2_claim_nonce') || nonce1;
+
+      // The buyer pays the FIRST session.
+      const paid = [...S.state.sessions.values()].find((x) => x.success_url === firstSession.success_url && x.metadata?.claim_ticket === firstSession.metadata.claim_ticket);
+      const customer = newCustomer();
+      const subId = newSub(customer);
+      Object.assign(paid, {
+        payment_status: 'paid',
+        customer,
+        subscription: structuredClone(S.state.subs.get(subId)),
+        line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+      });
+      const res = await callRoute(claimTicket, {
+        user: newUser(),
+        cookies: { ugc2_claim_sid: paid.id, ugc2_claim_nonce: browserNonce },
+      });
+      expect(res.statusCode).toBe(200);
+      expect(S.state.customers.get(customer).metadata[KEY.plan]).toBe('monthly');
+    } finally {
+      if (prev === undefined) delete process.env.APP_URL;
+      else process.env.APP_URL = prev;
+    }
+  });
+
+  it('refuses to replace a profile link to a different live customer, allows it when that customer is gone', async () => {
+    const buyer = newUser();
+    const existing = newCustomer();
+    await link(buyer.id, existing);
+    const other = newCustomer();
+    const session = topupSession({ customer: other, buyer });
+    expect((await confirmAs(buyer, session.id)).statusCode).toBe(409);
+    expect(legacyCredits(other)).toBe(0);
+
+    S.state.customers.get(existing).deleted = true;
+    expect((await confirmAs(buyer, session.id)).statusCode).toBe(200);
+    expect(legacyCredits(other)).toBe(TOPUP_S.credits);
+  });
+
+  it('a deleted Stripe customer is a recorded skip, not a permanent 500', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    S.state.customers.get(customer).deleted = true;
+    const session = topupSession({ customer, buyer });
+    const res = await deliver(completedEvent(session));
+    expect(res.statusCode).toBe(200);
+    expect(await recorded(`checkout:${session.id}:done`)).toBe(true);
+  });
+
+  it('claim reports a too-old session as skipped, and the 7-day cut spares finished sessions', async () => {
+    const payer = newUser('late-payer@example.test');
+    const old = subSession({ customer: newCustomer(), email: payer.email, created: nowS() - 8 * 24 * 3600 });
+    const late = await callRoute(claim, { user: payer, query: { session_id: old.id } });
+    expect(late.statusCode).toBe(200);
+    expect(late.body.skipped).toBe('too_old');
+    expect(late.body.alreadyProcessed).toBe(false);
+
+    const payer2 = newUser('payer3@example.test');
+    const fresh = subSession({ customer: newCustomer(), email: payer2.email });
+    expect((await callRoute(claim, { user: payer2, query: { session_id: fresh.id } })).statusCode).toBe(200);
+    S.state.sessions.get(fresh.id).created = nowS() - 8 * 24 * 3600;
+    const again = await callRoute(claim, { user: payer2, query: { session_id: fresh.id } });
+    expect(again.body.alreadyProcessed).toBe(true);
+    expect(again.body.skipped).toBeUndefined();
+  });
+});
+
+describe('review fixes, billing_v2 on', () => {
+  beforeAll(() => setBillingV2(true));
+  afterAll(() => setBillingV2(false));
+
+  it('O1: the webhook writes nothing for another app\'s purchase', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    const session = topupSession({ customer, buyer });
+    session.line_items = { data: [{ price: { lookup_key: 'haelabs_topup_s_v1' } }] };
+    expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+    expect((await db.query('select 1 from public.profiles where id = $1', [buyer.id])).rows).toHaveLength(0);
+    expect((await db.query("select 1 from public.stripe_events where id like $1", [`checkout:${session.id}%`])).rows).toHaveLength(0);
+    expect((await db.query('select 1 from public.credit_pending_grants where stripe_customer_id = $1', [customer])).rows).toHaveLength(0);
+
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 1500, amount_refunded: 1500, payment_intent: session.payment_intent };
+    S.state.charges.set(charge.id, charge);
+    expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } })).statusCode).toBe(200);
+    expect((await db.query('select 1 from public.credit_reversals where source_ref = $1', [`checkout:${session.id}`])).rows).toHaveLength(0);
+  });
+
+  it('I2: a cold instance that cannot read billing_v2 retries instead of granting on the legacy path', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    await link(buyer.id, customer);
+    const session = topupSession({ customer, buyer });
+    setPricingDb({ query: async () => { throw new Error('db down'); } });
+    let res;
+    try {
+      res = await deliver(completedEvent(session));
+    } finally {
+      setPricingDb(db);
+    }
+    expect(res.statusCode).toBe(500);
+    expect(legacyCredits(customer)).toBe(0);
+    expect((await getBalance(buyer.id)).available).toBe(0);
+  });
+
+  it('I6: a refund that arrives before the grant scales it down, a full one skips it', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    await link(buyer.id, customer);
+    const session = topupSession({ customer, buyer });
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 1500, amount_refunded: 750, payment_intent: session.payment_intent };
+    S.state.charges.set(charge.id, charge);
+    const refund = { id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } };
+    expect((await deliver(refund)).statusCode).toBe(200);
+    expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+    const half = Math.ceil(V2_TOPUP_S / 2);
+    expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - half);
+    await deliver({ ...refund, id: `evt_${randomUUID()}` });
+    expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - half);
+
+    const full = topupSession({ customer, buyer });
+    const fullCharge = { id: `ch_${randomUUID().slice(0, 8)}`, amount: 1500, amount_refunded: 1500, payment_intent: full.payment_intent };
+    S.state.charges.set(fullCharge.id, fullCharge);
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: fullCharge } });
+    await deliver(completedEvent(full));
+    expect((await getBalance(buyer.id)).topup).toBe(V2_TOPUP_S - half);
+    expect((await db.query('select 1 from public.credit_ledger where ref = $1', [`checkout:${full.id}`])).rows).toHaveLength(0);
+  });
+
+  it('O3a: a customer linked to several users parks the grant instead of failing forever', async () => {
+    const customer = newCustomer();
+    await link(newUser().id, customer);
+    await link(newUser().id, customer);
+    const session = topupSession({ customer, buyer: null });
+    expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+    const parked = await db.query('select claimed_by from public.credit_pending_grants where ref = $1', [`checkout:${session.id}`]);
+    expect(parked.rows).toEqual([{ claimed_by: null }]);
+  });
+
+  it('O3b: a stranded duplicate pending grant is dropped and the rest is claimed', async () => {
+    const user = newUser();
+    const customer = newCustomer();
+    await link(user.id, customer);
+    const invoiceRef = `invoice:in_${randomUUID().slice(0, 8)}`;
+    await renewPlanCredits({ userId: user.id, allotment: V2_MONTHLY, ref: invoiceRef });
+    await db.query(
+      `insert into public.credit_pending_grants (stripe_customer_id, currency, amount, bucket, reason, ref) values
+       ($1, 'video', $2, 'plan', 'plan_renewal', $3), ($1, 'video', 50, 'topup', 'stripe_topup', $4)`,
+      [customer, V2_MONTHLY, invoiceRef, `checkout:manual_${randomUUID().slice(0, 8)}`]
+    );
+    const session = topupSession({ customer, buyer: user });
+    const res = await confirmAs(user, session.id);
+    expect(res.statusCode).toBe(200);
+    expect(await getBalance(user.id)).toMatchObject({ plan: V2_MONTHLY, topup: V2_TOPUP_S + 50 });
+    expect((await db.query('select 1 from public.credit_pending_grants where ref = $1', [invoiceRef])).rows).toHaveLength(0);
+  });
+
+  it('invoices grant only for paid first and cycle periods, read through the SDK', async () => {
+    const user = newUser();
+    const customer = newCustomer();
+    await link(user.id, customer);
+    const send = (inv, payload) => deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: payload || inv } });
+
+    const proration = paidInvoice({ customer, subId: newSub(customer), reason: 'subscription_update' });
+    await send(proration);
+    expect((await getBalance(user.id)).plan).toBe(0);
+
+    const trialSub = newSub(customer);
+    S.state.subs.get(trialSub).status = 'trialing';
+    await send(paidInvoice({ customer, subId: trialSub }));
+    expect((await getBalance(user.id)).plan).toBe(0);
+
+    // 100% promo: paid with amount 0 still renews. The event payload here
+    // lacks `subscription` (newer endpoint API versions); the SDK read has it.
+    const promo = paidInvoice({ customer, subId: newSub(customer), reason: 'subscription_cycle' });
+    S.state.invoices.get(promo.id).amount_paid = 0;
+    expect((await send(promo, { id: promo.id, object: 'invoice' })).statusCode).toBe(200);
+    expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+  });
+
+  it('links a signed-in subscriber from the webhook so a closed tab does not leave the grant parked', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    const session = subSession({ customer, metadata: { supabase_user_id: buyer.id }, extra: { client_reference_id: buyer.id } });
+    expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+    const row = await db.query('select stripe_customer_id from public.profiles where id = $1', [buyer.id]);
+    expect(row.rows).toEqual([{ stripe_customer_id: customer }]);
+  });
+
+  it('replaying an old top-up session after 11 newer ones grants nothing (v2)', async () => {
+    const buyer = newUser();
+    const customer = newCustomer();
+    const sessions = Array.from({ length: 12 }, () => topupSession({ customer, buyer }));
+    for (const x of sessions) expect((await confirmAs(buyer, x.id)).statusCode).toBe(200);
+    expect((await getBalance(buyer.id)).topup).toBe(12 * V2_TOPUP_S);
+    const replay = await confirmAs(buyer, sessions[0].id);
+    expect(replay.statusCode).toBe(200);
+    expect(replay.body.creditsAdded).toBe(0);
+    await deliver(completedEvent(sessions[0]));
+    expect((await getBalance(buyer.id)).topup).toBe(12 * V2_TOPUP_S);
   });
 });
