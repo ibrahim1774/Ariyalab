@@ -3,6 +3,7 @@ import { useState } from 'react';
 import Button from '../ui/Button';
 import { rerollShot } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { usePricing } from './PricingContext';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import GenerateConfirm from './GenerateConfirm';
@@ -14,7 +15,8 @@ import styles from './Steps.module.css';
 function ClipActions({ shot, project, status, refresh, returnTo }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
-  const info = rerollInfo(status, shot);
+  const pricing = usePricing();
+  const info = rerollInfo(status, shot, pricing);
   const inFlight = shot.status === 'queued' || shot.status === 'generating';
 
   async function reroll() {
@@ -32,14 +34,10 @@ function ClipActions({ shot, project, status, refresh, returnTo }) {
 
   return (
     <div className={styles.clipActions}>
-      {shot.status === 'ready' && shot.clip_url && (
-        // eslint-disable-next-line jsx-a11y/media-has-caption
-        <video className={styles.clip} controls preload="metadata" poster={shot.still_url || undefined} src={shot.clip_url} aria-label={`Clip for shot ${shot.ord + 1}`} />
-      )}
       {shot.status === 'ready' && (
         <>
           <Button variant="ghost" size="sm" arrow={false} onClick={reroll} disabled={busy || inFlight}>
-            {busy ? 'Re-rolling…' : 'Re-roll this shot'}
+            {busy ? 'Making it again…' : 'Make it again'}
           </Button>
           <span className={styles.hint} data-testid="reroll-info">{info.text}</span>
         </>
@@ -49,7 +47,7 @@ function ClipActions({ shot, project, status, refresh, returnTo }) {
   );
 }
 
-/** `status` is the whole /status payload (needed for the re-roll allowance). */
+/** `status` is the whole /status payload (needed for the allowance of tries). */
 export default function StepReview({ project, shots = [], status, refresh, onNext, goTo, returnTo }) {
   const [retryIds, setRetryIds] = useState(null);
   const generated = shots.filter(isGenerated);
@@ -57,10 +55,10 @@ export default function StepReview({ project, shots = [], status, refresh, onNex
     <div className={styles.step}>
       <div className={styles.stepHead}>
         <h2>Review <span className="accent-word">every shot</span></h2>
-        <p>Play each clip. Re-roll any shot you want to try again.</p>
+        <p>Play each clip. Use Make it again on any shot you want to redo.</p>
       </div>
       {shots.length === 0 ? (
-        <EmptyState icon="film" title="Your clips will appear here" text="Once your shots are made you can play and re-roll each one.">
+        <EmptyState icon="film" title="Your clips will appear here" text="Once your shots are made you can play each one and make it again if you want.">
           {goTo && <Button variant="ghost" onClick={() => goTo('generate')}>Go to generate</Button>}
         </EmptyState>
       ) : (

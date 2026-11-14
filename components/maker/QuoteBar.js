@@ -3,6 +3,7 @@ import Link from 'next/link';
 
 import { getBilling, getQuote } from '../../lib/story/client';
 import { QUALITY_LABELS } from '../../lib/pricingConstants';
+import { usePricing } from './PricingContext';
 import { estimateCredits } from './steps';
 import styles from './QuoteBar.module.css';
 
@@ -17,6 +18,7 @@ const count = (n) => Number(n || 0).toLocaleString();
 export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
   const [quote, setQuote] = useState(null);
   const [billing, setBilling] = useState(null);
+  const pricing = usePricing();
 
   const shotSignature = shots.map((s) => `${s.id}:${s.seconds}:${s.quality}:${s.source}`).join('|');
   const projectId = project?.id;
@@ -47,13 +49,14 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
   }, [reloadKey]);
 
   if (!project) return null;
-  const estimate = estimateCredits(project);
+  const estimate = estimateCredits(project, pricing);
   const total = quote ? quote.total : estimate;
   const available = billing?.balance?.available;
   // While billing v2 is off the balance is in the old unit, so a shortfall against a v2 price would be wrong.
   const comparable = billing?.v2 === true && typeof available === 'number';
   const short = comparable && available < total ? total - available : 0;
 
+  const lines = quote?.lines || [];
   return (
     <section className={styles.bar} aria-label="Credit estimate" data-testid="quote-bar">
       <div className={styles.row}>
@@ -67,8 +70,12 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
         {billing && typeof available === 'number' && (
           <div className={styles.balance}>
             <span className={styles.label}>Your balance</span>
-            <strong data-testid="quote-balance">{count(available)} credits</strong>
+            <strong data-testid="quote-balance">{count(available)}<span className={styles.unit}> credits</span></strong>
+            <span className={styles.balanceWord}>balance</span>
           </div>
+        )}
+        {short > 0 && (
+          <Link href="/app/billing" className={styles.topUp}>Top up</Link>
         )}
       </div>
       {short > 0 && (
@@ -76,17 +83,20 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
           You need {count(short)} more credits. <Link href="/app/billing">Top up credits</Link>
         </p>
       )}
-      {quote?.lines?.length > 0 && (
-        <details className={styles.details}>
+      {(lines.length > 0 || short > 0) && (
+        <details className={`${styles.details} ${lines.length === 0 ? styles.phoneOnly : ''}`}>
           <summary>Details</summary>
-          <ul>
-            {quote.lines.map((l, i) => (
-              <li key={`${l.label}-${i}`}>
-                <span>{l.label}</span>
-                <span>{count(l.credits)}</span>
-              </li>
-            ))}
-          </ul>
+          {short > 0 && <p className={styles.shortInDetails}>Short by {count(short)} credits.</p>}
+          {lines.length > 0 && (
+            <ul>
+              {lines.map((l, i) => (
+                <li key={`${l.label}-${i}`}>
+                  <span>{l.label}</span>
+                  <span>{count(l.credits)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </details>
       )}
     </section>

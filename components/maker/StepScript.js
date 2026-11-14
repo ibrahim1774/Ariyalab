@@ -105,19 +105,22 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
   const [saveState, setSaveState] = useState({});
   const [sceneErrors, setSceneErrors] = useState({});
 
+  const [loadError, setLoadError] = useState(null);
+  const [attempt, setAttempt] = useState(0);
+
   useEffect(() => {
     let alive = true;
+    setLoadError(null);
     getScript(projectId)
       .then((s) => alive && setScript(s))
       .catch((err) => {
-        if (!alive) return;
-        setScript(null);
-        setError(err);
+        // A failed read is not "no script yet": never offer to write one because of it.
+        if (alive) setLoadError(err);
       });
     return () => {
       alive = false;
     };
-  }, [projectId]);
+  }, [projectId, attempt]);
 
   async function write() {
     setBusy('write');
@@ -133,7 +136,7 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
   }
 
   async function revise(e) {
-    e.preventDefault();
+    e?.preventDefault();
     if (!note.trim()) return;
     setBusy('revise');
     setError(null);
@@ -178,11 +181,18 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
         <p>Edit any line or picture description. Notes below a scene are suggestions, not blockers.</p>
       </div>
 
-      {script === undefined && <p className={styles.muted} role="status">Loading your script…</p>}
+      {loadError && (
+        <EmptyState icon="alert" title="We could not load your script" text="Nothing was changed.">
+          <ErrorNotice error={loadError} returnTo={returnTo} onRefresh={refresh} />
+          <Button onClick={() => setAttempt((n) => n + 1)}>Try again</Button>
+        </EmptyState>
+      )}
+
+      {script === undefined && !loadError && <p className={styles.muted} role="status">Loading your script…</p>}
 
       {script === null && (
         <EmptyState icon="text" title="Your script will appear here" text="We write it from what you told us. You can edit every line after.">
-          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={write} />
           <Button onClick={write} disabled={busy === 'write'}>{busy === 'write' ? 'Writing your script…' : 'Write my script'}</Button>
           <p className={styles.srOnly} role="status" aria-live="polite">{busy === 'write' ? 'Writing your script' : ''}</p>
         </EmptyState>
@@ -216,7 +226,7 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
                 <span>Revise with a note</span>
                 <textarea rows={2} maxLength={1000} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Make the opening funnier." />
               </label>
-              <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+              <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={() => revise()} />
               <div className={styles.actions}>
                 <Button type="submit" variant="ghost" disabled={busy === 'revise' || !note.trim()}>
                   {busy === 'revise' ? 'Revising…' : 'Revise script'}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import Stepper from '../ui/Stepper';
 import { ChatPanelSlot } from './slots';
@@ -12,6 +12,26 @@ import styles from './MakerLayout.module.css';
 export default function MakerLayout({ title, steps, currentId, onSelect, quote, children, notice }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
+  const summaryRef = useRef(null);
+  const chatToggleRef = useRef(null);
+
+  // Escape closes whichever sheet is open and gives focus back to the button that opened it.
+  useEffect(() => {
+    if (!sheetOpen && !stepsOpen) return undefined;
+    const onKey = (e) => {
+      if (e.key !== 'Escape') return;
+      if (stepsOpen) {
+        setStepsOpen(false);
+        summaryRef.current?.focus();
+      } else {
+        setSheetOpen(false);
+        chatToggleRef.current?.focus();
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [sheetOpen, stepsOpen]);
+
   const position = Math.max(0, steps.findIndex((st) => st.id === currentId));
   const currentLabel = steps[position]?.label || '';
   return (
@@ -20,6 +40,7 @@ export default function MakerLayout({ title, steps, currentId, onSelect, quote, 
         <div className={styles.titleRow}>
           <h1 className={styles.title} title={title || 'New video'}>{title || 'New video'}</h1>
           <button
+            ref={chatToggleRef}
             type="button"
             className={styles.chatToggle}
             aria-expanded={sheetOpen}
@@ -32,7 +53,7 @@ export default function MakerLayout({ title, steps, currentId, onSelect, quote, 
         <nav className={styles.steps} aria-label="Steps">
           <Stepper steps={steps} currentId={currentId} onSelect={onSelect} fit />
         </nav>
-        <button type="button" className={styles.stepSummary} aria-label="Show all steps" aria-expanded={stepsOpen} onClick={() => setStepsOpen((v) => !v)}>
+        <button ref={summaryRef} type="button" className={styles.stepSummary} aria-expanded={stepsOpen} onClick={() => setStepsOpen((v) => !v)}>
           <span>Step {position + 1} of {steps.length}, {currentLabel}</span>
           <span aria-hidden="true" className={styles.chevron}>{stepsOpen ? '▴' : '▾'}</span>
         </button>

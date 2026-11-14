@@ -5,6 +5,8 @@ import Button from '../ui/Button';
 import ErrorNotice from './ErrorNotice';
 import { signInHref } from './errors';
 import MakerLayout from './MakerLayout';
+import { MakerNavProvider } from './MakerNav';
+import { PricingProvider } from './PricingContext';
 import QuoteBar from './QuoteBar';
 import StepCast from './StepCast';
 import StepGenerate from './StepGenerate';
@@ -21,7 +23,7 @@ import useProject from './useProject';
 import styles from './Steps.module.css';
 
 /** The maker for one project: stepper, the current step, the quote bar, and the chat slot. */
-export default function MakerPage({ id, returnTo }) {
+function MakerPageInner({ id, returnTo }) {
   const data = useProject(id);
   const { project, shots, cast, jobs, loading, error, refresh, save } = data;
   const [view, setView] = useState(null);
@@ -54,6 +56,7 @@ export default function MakerPage({ id, returnTo }) {
 
   if (!project) {
     return (
+      <MakerNavProvider value={{ goTo }}>
       <MakerLayout title="Your video" steps={stepsFor(null).map((s) => ({ id: s.id, label: s.label, locked: true }))} currentId="start">
         {loading ? (
           <p className={styles.muted} role="status">Loading your video…</p>
@@ -64,6 +67,7 @@ export default function MakerPage({ id, returnTo }) {
           </>
         )}
       </MakerLayout>
+      </MakerNavProvider>
     );
   }
 
@@ -99,6 +103,7 @@ export default function MakerPage({ id, returnTo }) {
   }
 
   return (
+    <MakerNavProvider value={{ goTo }}>
     <MakerLayout
       title={project.title}
       steps={steps}
@@ -109,5 +114,15 @@ export default function MakerPage({ id, returnTo }) {
     >
       {body}
     </MakerLayout>
+    </MakerNavProvider>
+  );
+}
+
+/** The maker for one project: stepper, the current step, the quote bar, and the chat slot. */
+export default function MakerPage(props) {
+  return (
+    <PricingProvider>
+      <MakerPageInner {...props} />
+    </PricingProvider>
   );
 }

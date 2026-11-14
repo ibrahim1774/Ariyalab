@@ -36,8 +36,8 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
       <div className={styles.stepHead}>
         <h2>Your <span className="accent-word">storyboard</span></h2>
         <p>One picture for every shot, in order. This step is cheap, and nothing expensive starts until you confirm.</p>
-        <StyleNote project={project} />
       </div>
+      <StyleNote project={project} />
 
       {shots.length === 0 ? (
         <EmptyState icon="film" title="Your shots will appear here once the cast is picked" text="We split your script into shots and show each one as a picture.">

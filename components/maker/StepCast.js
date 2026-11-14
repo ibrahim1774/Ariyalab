@@ -2,11 +2,11 @@ import { useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
-import { DEFAULTS } from '../../lib/pricingConstants';
-import { pickCast, regenCast, startCast } from '../../lib/story/client';
+import { pickCast, regenCast, retryCast, startCast } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
+import { usePricing } from './PricingContext';
 import { AssetPickerSlot } from './slots';
 import { EmptyState, Skeleton, StyleNote, Tile } from './Tiles';
 import styles from './Steps.module.css';
@@ -23,7 +23,8 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
-  const left = Math.max(0, DEFAULTS.included.castRegenPerCharacter - (cast.regens_used || 0));
+  const pricing = usePricing();
+  const left = Math.max(0, pricing.included.castRegenPerCharacter - (cast.regens_used || 0));
 
   async function run(kind, fn) {
     setBusy(kind);
@@ -45,6 +46,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       setNote('');
     });
   };
+  const retry = () => run('retry', () => retryCast(projectId, cast.id));
   const pending = cast.status === 'pending';
   const candidates = cast.candidates || [];
 
@@ -75,7 +77,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'}
             text={cast.status === 'blocked' ? blockedReason(cast, jobs) : 'Try again, or describe a change below.'}
           >
-            <Button variant="ghost" size="sm" onClick={regenerate} disabled={busy === 'regen'}>Try again</Button>
+            <Button variant="ghost" size="sm" onClick={retry} disabled={busy === 'retry'}>Try again</Button>
           </Tile>
         </div>
       )}
@@ -116,7 +118,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             <AssetPickerSlot label="Use my own image" />
           </div>
           <p className={styles.hint}>
-            {left} regeneration{left === 1 ? '' : 's'} included for {cast.name}, then {DEFAULTS.castRegen} credits each.
+            {left} regeneration{left === 1 ? '' : 's'} included for {cast.name}, then {pricing.castRegen} credits each.
           </p>
         </form>
       )}
@@ -126,6 +128,8 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
 }
 
 export default function StepCast({ project, cast = [], jobs = [], refresh, onNext, returnTo }) {
+  const pricing = usePricing();
+  const makingCount = cast.filter((c) => c.status === 'pending').length;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -149,12 +153,16 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       <div className={styles.stepHead}>
         <h2>Meet your <span className="accent-word">cast</span></h2>
         <p>Each character gets three options. Pick one, or describe a change and make new ones.</p>
-        <StyleNote project={project} />
       </div>
+      <StyleNote project={project} />
+
+      {makingCount > 0 && (
+        <p className={styles.srOnly} role="status" aria-live="polite">Drawing {makingCount} character{makingCount === 1 ? '' : 's'}</p>
+      )}
 
       {cast.length === 0 && (
-        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${DEFAULTS.projectFee} credits is taken when the cast is first made.`}`}>
-          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${pricing.projectFee} credits is taken when the cast is first made.`}`}>
+          <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={start} />
           <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
         </EmptyState>
       )}

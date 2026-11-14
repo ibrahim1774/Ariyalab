@@ -1,3 +1,4 @@
+.stepSummary, .stepSheet, .scrim { display: none; }
 .layout { width: 100%; max-width: 2000px; margin: 0 auto; min-width: 0; }
 .top { position: relative; margin: 0 0 10px; min-width: 0; }
 .titleRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
@@ -68,7 +69,6 @@
   .scrim { display: block; position: fixed; inset: 0; z-index: 30; border: 0; background: rgba(22, 19, 15, 0.35); }
 }
 
-.stepSummary, .stepSheet, .scrim { display: none; }
 
 @media (max-width: 760px) {
   .title { -webkit-line-clamp: 1; font-size: 18px; }

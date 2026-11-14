@@ -94,6 +94,28 @@ describe('createProject', () => {
   });
 });
 
+describe('listProjects thumbnails', () => {
+  it('uses the first ready still by order when no thumbnail is set, and keeps a set thumbnail', async () => {
+    const userId = userA();
+    const a = await createProject({ userId, input: { title: 'With stills' } });
+    const b = await createProject({ userId, input: { title: 'No stills' } });
+    const c = await createProject({ userId, input: { title: 'Has thumbnail' } });
+    await storyDb().update('story_projects', { id: c.id }, { thumbnail_url: '/set.png' });
+    const shot = (project, ord, still_url, status) => ({ project_id: project.id, ord, still_url, status, description: 'd', line: 'l', seconds: 5 });
+    await storyDb().insert('story_shots', [
+      shot(a, 2, '/second.png', 'still_ready'),
+      shot(a, 1, '/first.png', 'still_ready'),
+      shot(a, 0, null, 'draft'),
+      shot(c, 0, '/ignored.png', 'still_ready'),
+    ]);
+    const list = await listProjects({ userId });
+    const by = (id) => list.find((p) => p.id === id);
+    expect(by(a.id).thumbnail_url).toBe('/first.png');
+    expect(by(b.id).thumbnail_url ?? null).toBeNull();
+    expect(by(c.id).thumbnail_url).toBe('/set.png');
+  });
+});
+
 describe('getProject / listProjects', () => {
   it("another user's getProject throws NotFoundError", async () => {
     const project = await createProject({ userId: userA(), input: BRIEF });

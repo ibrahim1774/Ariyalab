@@ -66,29 +66,29 @@ describe('stepper', () => {
   it('follows Project.step, marks stale steps with a badge and lets earlier steps be opened', async () => {
     client.getStatus.mockResolvedValue(status({ project: project({ step: 'cast' }), shots: [shot(1, { stale: true })] }));
     render(<MakerPage id="p1" returnTo="/app/p/p1" />);
-    const stateOf = (name) => screen.getByRole('button', { name: new RegExp(name) }).closest('li').getAttribute('data-state');
+    const stateOf = (name) => screen.getByRole('button', { name: new RegExp(`^${name}`) }).closest('li').getAttribute('data-state');
     await waitFor(() => expect(stateOf('Cast')).toBe('current'));
     expect(stateOf('Script')).toBe('done');
     expect(stateOf('Storyboard')).toBe('stale');
     expect(screen.getByText('Needs update')).toBeInTheDocument();
     expect(stateOf('Generate')).toBe('upcoming');
     // Later steps are locked, earlier ones open.
-    expect(screen.getByRole('button', { name: /Generate/ })).toBeDisabled();
-    fireEvent.click(screen.getByRole('button', { name: /Purpose/ }));
+    expect(screen.getByRole('button', { name: /^Generate/ })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^Purpose/ }));
     expect(await screen.findByText(/What is this video/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Purpose/ })).toHaveAttribute('aria-current', 'step');
+    expect(screen.getByRole('button', { name: /^Purpose/ })).toHaveAttribute('aria-current', 'step');
   });
 
   it('shows the breakdown step only for a project started from a video', async () => {
     client.getStatus.mockResolvedValue(status({ project: project({ step: 'script', reference_id: 'r1' }) }));
     client.getScript.mockResolvedValue(null);
     render(<MakerPage id="p1" returnTo="/app/p/p1" />);
-    expect(await screen.findByRole('button', { name: /Breakdown/ })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /^Breakdown/ })).toBeInTheDocument();
     cleanup();
     client.getStatus.mockResolvedValue(status({ project: project({ step: 'script', reference_id: null }) }));
     render(<MakerPage id="p1" returnTo="/app/p/p1" />);
-    await screen.findByRole('button', { name: /Script/ });
-    expect(screen.queryByRole('button', { name: /Breakdown/ })).toBeNull();
+    await screen.findByRole('button', { name: /^Script/ });
+    expect(screen.queryByRole('button', { name: /^Breakdown/ })).toBeNull();
   });
 
   it('shows the quote bar from the length step on, not before', async () => {
@@ -175,7 +175,7 @@ describe('generate', () => {
 });
 
 describe('review', () => {
-  it('plays finished clips and shows the re-roll allowance from the status payload', async () => {
+  it('plays finished clips and shows the allowance of tries from the status payload', async () => {
     client.rerollShot.mockResolvedValue({});
     const shots = [shot(1, { status: 'ready', clip_url: '/c1.mp4' }), shot(2, { status: 'ready', clip_url: '/c2.mp4' })];
     const refresh = vi.fn();
@@ -183,8 +183,8 @@ describe('review', () => {
       <StepReview project={project({ step: 'review' })} shots={shots} status={{ shots, project: project({ rerolls_used: 0 }), rerolls: { included: 2, used: 1, credits: 70 } }} refresh={refresh} onNext={vi.fn()} returnTo="/" />,
     );
     expect(container.querySelectorAll('video')).toHaveLength(2);
-    expect(screen.getAllByTestId('reroll-info')[0]).toHaveTextContent('1 re-roll included, then 70 credits');
-    fireEvent.click(screen.getAllByRole('button', { name: 'Re-roll this shot' })[0]);
+    expect(screen.getAllByTestId('reroll-info')[0]).toHaveTextContent('1 try included, then 70 credits');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Make it again' })[0]);
     await waitFor(() => expect(client.rerollShot).toHaveBeenCalledWith('p1', 's1'));
     expect(refresh).toHaveBeenCalled();
   });
@@ -192,7 +192,7 @@ describe('review', () => {
   it('works the allowance out from the project when the payload has none', () => {
     const shots = Array.from({ length: 5 }, (_, i) => shot(i + 1, { status: 'ready', clip_url: '/c.mp4', seconds: 5, quality: 'standard' }));
     render(<StepReview project={project()} shots={shots} status={{ shots, project: project({ rerolls_used: 0 }) }} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    expect(screen.getAllByTestId('reroll-info')[0]).toHaveTextContent('1 re-roll included, then 55 credits');
+    expect(screen.getAllByTestId('reroll-info')[0]).toHaveTextContent('1 try included, then 55 credits');
   });
 });
 
@@ -415,7 +415,7 @@ describe('waiting, failed and empty states', () => {
       await flush();
       for (const card of container.querySelectorAll('[data-media-card]')) {
         seen += 1;
-        expect(card.querySelector('img, [data-skeleton], [data-tile]'), card.outerHTML.slice(0, 120)).not.toBeNull();
+        expect(card.querySelector('img, video, [data-skeleton], [data-tile]'), card.outerHTML.slice(0, 120)).not.toBeNull();
       }
       unmount();
     }
@@ -585,11 +585,11 @@ describe('storyboard step', () => {
     expect(screen.getByRole('button', { name: /Continue to voice and sound/ })).toBeDisabled();
   });
 
-  it('re-rolls a still, edits a description, changes quality', async () => {
+  it('makes a still again, edits a description, changes quality', async () => {
     client.makeStills.mockResolvedValue({});
     client.updateShot.mockResolvedValue({});
     render(<StepStoryboard project={project()} shots={[shot(1)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    fireEvent.click(screen.getByRole('button', { name: /Re-roll, 2 credits/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Make it again, 2 credits/ }));
     await waitFor(() => expect(client.makeStills).toHaveBeenCalledWith('p1', ['s1']));
     fireEvent.click(screen.getByRole('button', { name: 'Edit description' }));
     fireEvent.change(screen.getByLabelText('Description of shot 1'), { target: { value: 'A new idea' } });
@@ -645,7 +645,7 @@ describe('errors', () => {
   });
 
   it('429 shows the server message', () => {
-    render1(new StoryApiError({ status: 429, code: 'daily_limit', message: 'You have made 3 videos today. Come back tomorrow.' }));
+    render1(new StoryApiError({ status: 429, code: 'rate_limited', message: 'You have made 3 videos today. Come back tomorrow.' }));
     expect(screen.getByText('You have made 3 videos today. Come back tomorrow.')).toBeInTheDocument();
   });
 
@@ -774,6 +774,7 @@ describe('copy rules', () => {
     [/[—–]/, 'a dash used as punctuation'],
     [/\s-\s/, 'a spaced hyphen'],
     [/\bfree\b/i, 'the word free'],
+    [/re-?roll/i, 'the old word for make it again'],
     [/guarantee/i, 'a guarantee'],
     [/\b(results|sales|customers) (are|is) (certain|assured)\b/i, 'a promise of results'],
     [new RegExp(`\\b(${FORBIDDEN_NAMES.map((n) => String(n).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})\\b`, 'i'), 'a studio, character or celebrity name'],

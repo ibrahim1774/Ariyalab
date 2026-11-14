@@ -26,3 +26,5 @@
 .title { margin-bottom: 12px; font-size: 22px; }
 .body { flex: 1 1 auto; min-height: 0; overflow-y: auto; color: var(--text-dim); font-size: 15px; line-height: 1.6; }
 .footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 10px; margin-top: 16px; flex-shrink: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+
+.dialog:focus { outline: none; }

@@ -1,7 +1,7 @@
 // The maker's step model. The UI has twelve steps; Project.step has nine values
 // ('brief' covers Start, Purpose, Style and Length). Pure helpers, no React.
 
-import { DEFAULTS, creditsForVideo } from '../../lib/pricingConstants';
+import { DEFAULTS } from '../../lib/pricingConstants';
 
 export const UI_STEPS = [
   { id: 'start', label: 'Start', server: 'brief' },
@@ -72,26 +72,31 @@ export function missingStills(shots = []) {
   return shots.filter(isGenerated).filter((s) => !s.still_url).length;
 }
 
-// ---- credits
+// ---- credits (every function takes the pricing from usePricing(); DEFAULTS only stand in while it loads)
 
-export const shotCredits = (shot) =>
-  DEFAULTS.perSecond[shot.quality] != null ? DEFAULTS.perSecond[shot.quality] * Math.max(3, Math.ceil(shot.seconds || 3)) : 0;
+const GEN_SHOT_SECONDS = 3;
 
-/** Estimate before a real quote exists, from the client-safe helper. Leaves out the project fee once it is paid. */
-export function estimateCredits(project) {
+export const shotCredits = (shot, pricing = DEFAULTS) =>
+  pricing.perSecond[shot.quality] != null ? pricing.perSecond[shot.quality] * Math.max(3, Math.ceil(shot.seconds || 3)) : 0;
+
+/** Estimate before a real quote exists: the project fee plus the per second rate over whole 3 second shots. */
+export function estimateCredits(project, pricing = DEFAULTS) {
   if (!project) return 0;
-  const total = creditsForVideo({ quality: project.quality || 'standard', seconds: project.seconds || 30 });
-  return project.fee_charged ? total - DEFAULTS.projectFee : total;
+  const seconds = project.seconds || 30;
+  const generated = Math.ceil(seconds / GEN_SHOT_SECONDS) * GEN_SHOT_SECONDS;
+  const rate = pricing.perSecond[project.quality || 'standard'] ?? 0;
+  const fee = project.fee_charged ? 0 : pricing.projectFee;
+  return fee + rate * generated;
 }
 
-/** "2 re-rolls included, then 42 credits" for a shot. Prefers numbers from the status payload. */
-export function rerollInfo(status, shot) {
+/** "2 tries included, then 42 credits" for a shot. Prefers numbers from the status payload. */
+export function rerollInfo(status, shot, pricing = DEFAULTS) {
   const shots = status?.shots || [];
-  const included = status?.rerolls?.included ?? Math.floor(shots.length * DEFAULTS.freeRerollShare);
+  const included = status?.rerolls?.included ?? Math.floor(shots.length * pricing.freeRerollShare);
   const used = status?.rerolls?.used ?? status?.project?.rerolls_used ?? 0;
   const left = Math.max(0, included - used);
-  const credits = status?.rerolls?.credits ?? shotCredits(shot);
-  return { left, credits, text: `${left} re-roll${left === 1 ? '' : 's'} included, then ${credits} credits` };
+  const credits = status?.rerolls?.credits ?? shotCredits(shot, pricing);
+  return { left, credits, text: `${left} ${left === 1 ? 'try' : 'tries'} included, then ${credits} credits` };
 }
 
 // ---- dates

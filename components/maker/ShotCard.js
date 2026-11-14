@@ -1,11 +1,13 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import Pill from '../ui/Pill';
-import { DEFAULTS, QUALITY_LABELS } from '../../lib/pricingConstants';
-import { makeStills, updateShot } from '../../lib/story/client';
+import { QUALITY_LABELS } from '../../lib/pricingConstants';
+import { makeStills, retryStill, updateShot } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { usePricing } from './PricingContext';
+import useMediaQuery from './useMediaQuery';
 import { AssetPickerSlot } from './slots';
 import { Skeleton, Tile } from './Tiles';
 import styles from './ShotCard.module.css';
@@ -36,6 +38,15 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(shot.description || '');
   const [more, setMore] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const fieldRef = useRef(null);
+  const pricing = usePricing();
+  const isPhone = useMediaQuery('(max-width: 760px)');
+
+  // Take a change made elsewhere (the chat, another tab) unless the customer is typing in the field.
+  useEffect(() => {
+    if (typeof document === 'undefined' || document.activeElement !== fieldRef.current) setText(shot.description || '');
+  }, [shot.description]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const locked = BUSY.has(shot.status) || Boolean(busy);
@@ -45,10 +56,21 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   const retryNode =
     retry ??
     (editable && failed ? (
-      <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('still', () => makeStills(project.id, [shot.id]))}>Try again</Button>
+      <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('still', () => retryStill(project.id, shot.id))}>Try again</Button>
     ) : null);
+  const clipReady = !editable && shot.status === 'ready' && shot.clip_url;
   let media;
-  if (failed) {
+  if (clipReady) {
+    media =
+      isPhone && !playing ? (
+        <button type="button" className={styles.play} style={shot.still_url ? { backgroundImage: `url(${shot.still_url})` } : undefined} aria-label={`Play clip ${shot.ord + 1}`} onClick={() => setPlaying(true)}>
+          <span aria-hidden="true">▶</span>
+        </button>
+      ) : (
+        // eslint-disable-next-line jsx-a11y/media-has-caption
+        <video className={styles.video} controls playsInline autoPlay={isPhone} preload="none" poster={shot.still_url || undefined} src={shot.clip_url} aria-label={`Clip for shot ${shot.ord + 1}`} />
+      );
+  } else if (failed) {
     media = (
       <Tile tone="error" icon={shot.status === 'blocked' ? 'block' : 'alert'} title={shot.status === 'blocked' ? 'This shot was blocked' : 'This shot did not work'} text={shot.error || 'Change the description or try again.'}>
         {retryNode}
@@ -90,7 +112,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   };
 
   return (
-    <Card className={styles.card} padded={false} data-shot={shot.id} data-status={shot.status} data-media-card="">
+    <Card className={`${styles.card} ${isPhone && playing ? styles.playingCard : ''}`} padded={false} data-shot={shot.id} data-status={shot.status} data-media-card="">
       <div className={styles.still}>
         {media}
         <span className={styles.number}>{shot.ord + 1}</span>
@@ -108,7 +130,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
           <form onSubmit={saveText} className={styles.edit}>
             <label>
               <span className={styles.srOnly}>Description of shot {shot.ord + 1}</span>
-              <textarea rows={3} value={text} maxLength={600} onChange={(e) => setText(e.target.value)} />
+              <textarea ref={fieldRef} rows={3} value={text} maxLength={600} onChange={(e) => setText(e.target.value)} />
             </label>
             <div className={styles.row}>
               <Button type="submit" size="sm" arrow={false} disabled={locked || !text.trim()}>Save</Button>
@@ -129,7 +151,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
           <div className={`${styles.actions} ${more ? styles.actionsOpen : ''}`}>
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} title="Make a new picture for this shot"
               onClick={() => run('still', () => makeStills(project.id, [shot.id]))}>
-              {busy === 'still' ? 'Making…' : `Re-roll, ${DEFAULTS.stillReroll} credits`}
+              {busy === 'still' ? 'Making…' : `Make it again, ${pricing.stillReroll} credits`}
             </Button>
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>
             <label className={styles.quality}>

@@ -88,7 +88,7 @@ export default function GenerateConfirm({ open, onClose, project, shotIds, onSta
             <span>Total</span>
             <strong data-testid="confirm-total">{count(quote.total)} credits</strong>
           </p>
-          {comparable && (
+          {comparable && short === 0 && (
             <p className={styles.hint} data-testid="confirm-after">
               Your balance after: {count(Math.max(0, after))} credits
             </p>

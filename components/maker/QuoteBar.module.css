@@ -18,20 +18,24 @@
 .details ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 4px; }
 .details li { display: flex; justify-content: space-between; gap: 12px; }
 
+.balanceWord, .topUp, .shortInDetails { display: none; }
+.phoneOnly { display: none; }
+
+/* Phone: one 44 px row. Credits, balance and a Top up link; the long sentence waits under Details. */
 @media (max-width: 900px) {
-  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; padding: 4px 12px; border-radius: 16px; box-shadow: var(--shadow-sm); }
-  .row { flex: 1 1 auto; }
-  .short { order: 3; flex-basis: 100%; }
-  .details { order: 2; margin: 0; flex: 0 0 auto; }
-  .details[open] { flex-basis: 100%; order: 4; }
-  .details summary { font-size: 13px; padding: 0 6px; }
-  .row { flex-wrap: nowrap; align-items: center; gap: 8px; }
+  .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0 6px; padding: 0 10px; min-height: 44px; border-radius: 16px; box-shadow: var(--shadow-sm); }
+  .row { flex: 1 1 auto; min-width: 0; flex-wrap: nowrap; align-items: center; justify-content: flex-start; gap: 10px; }
   .cost { flex-direction: row; align-items: baseline; gap: 8px; }
   .label, .meta { display: none; }
-  .total { font-size: 16px; }
-  .balance { flex-direction: row; align-items: baseline; gap: 6px; font-size: 14px; }
-  .balance .label { display: inline; }
-  .short a { display: inline-flex; align-items: center; min-height: 44px; }
-  .short { margin: 0 0 4px; padding: 2px 8px; font-size: 13px; }
-  .details summary { min-height: 44px; display: flex; align-items: center; }
+  .total { font-size: 15px; white-space: nowrap; }
+  .balance { flex-direction: row; align-items: baseline; gap: 4px; font-size: 14px; white-space: nowrap; }
+  .unit { display: none; }
+  .balanceWord { display: inline; font-size: 12px; color: var(--text-dim); }
+  .topUp { display: inline-flex; align-items: center; min-height: 44px; padding: 0 4px; color: var(--error); font-size: 14px; font-weight: 600; text-decoration: underline; white-space: nowrap; }
+  .short { display: none; }
+  .details { margin: 0; flex: 0 0 auto; }
+  .phoneOnly { display: block; }
+  .details[open] { flex-basis: 100%; order: 4; padding-bottom: 8px; }
+  .details summary { min-height: 44px; display: flex; align-items: center; font-size: 13px; padding: 0 4px; }
+  .shortInDetails { display: block; margin: 0 0 6px; color: var(--error); font-size: 13px; }
 }

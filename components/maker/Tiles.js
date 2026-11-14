@@ -44,7 +44,7 @@ export function Skeleton({ status, line, ratio, image, ...rest }) {
       {image && <span className={styles.ghost} style={{ backgroundImage: `url(${image})` }} aria-hidden="true" />}
       <span className={styles.shimmerLayer} aria-hidden="true" />
       <span className={styles.skeletonText}>
-        <strong role="status" aria-live="polite">{status}</strong>
+        <strong>{status}</strong>
         {line && <span>{line}</span>}
       </span>
     </div>

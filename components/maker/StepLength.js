@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
@@ -30,23 +30,27 @@ export default function StepLength({ project, save, onNext, returnTo }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
-  async function choose(patch, apply, revert) {
-    apply();
+  // The last choices the server accepted. A failed save puts these back, never the values from the first render.
+  const saved = useRef({ seconds, quality, aspect });
+
+  async function choose(key, value, patch, setValue) {
+    setValue(value);
     setSaving(true);
     setError(null);
     try {
       await save(patch);
+      saved.current = { ...saved.current, [key]: value };
     } catch (err) {
-      revert();
+      setValue(saved.current[key]);
       setError(err);
     } finally {
       setSaving(false);
     }
   }
 
-  const pickSeconds = (n) => choose({ seconds: n }, () => setSeconds(n), () => setSeconds(seconds));
-  const pickQuality = (q) => choose(qualityPatch(q), () => setQuality(q), () => setQuality(quality));
-  const pickAspect = (a) => choose({ aspect: a }, () => setAspect(a), () => setAspect(aspect));
+  const pickSeconds = (n) => choose('seconds', n, { seconds: n }, setSeconds);
+  const pickQuality = (q) => choose('quality', q, qualityPatch(q), setQuality);
+  const pickAspect = (a) => choose('aspect', a, { aspect: a }, setAspect);
 
   return (
     <div className={styles.step}>

@@ -47,7 +47,7 @@ export default function StepPurpose({ project, save, onNext, returnTo }) {
     <div className={styles.step}>
       <div className={styles.stepHead}>
         <h2>What is this video <span className="accent-word">for</span>?</h2>
-        <p>This helps the script fit your goal without feeling like an ad.</p>
+        <p>This helps the script fit your goal in a way that tells a story.</p>
       </div>
       <form onSubmit={submit} className={styles.step}>
       <Card>

@@ -18,6 +18,23 @@ export function describeError(err, { returnTo } = {}) {
   const server = (err?.serverMessage || '').trim();
   const out = { title: '', message: '', action: null, refresh: false, signIn: false, field: err?.field || null };
 
+  // Codes first: the same status can mean different things (a 429 is a daily limit or a chat limit).
+  if (code === 'daily_limit') {
+    return { ...out, title: 'Daily limit reached', message: 'You have written 3 scripts for this video today. Come back tomorrow, or pick a plan for more.', action: { label: 'See plans', href: '/app/billing' } };
+  }
+  if (code === 'chat_limit') {
+    return { ...out, title: 'Chat limit reached', message: 'This video has used all its included changes.', action: { label: 'See plans', href: '/app/billing' } };
+  }
+  if (code === 'script_blocked') {
+    return { ...out, title: 'That script could not be written', message: server || 'Change the brief and try again.', action: { label: 'Edit the brief', step: 'purpose' } };
+  }
+  if (code === 'provider_failed') {
+    return { ...out, title: 'That did not work', message: server || 'Something went wrong while making that. Please try again.', action: { label: 'Try again', retry: true } };
+  }
+  if (code === 'quote_changed') {
+    return { ...out, title: 'The price changed', message: 'Check the new total below, then confirm again.' };
+  }
+
   if (status === 401) {
     return { ...out, title: 'Please sign in', message: 'Your session ended. Sign in again and you will come right back here.', action: { label: 'Sign in', href: signInHref(returnTo) }, signIn: true };
   }
