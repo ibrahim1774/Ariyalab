@@ -1,73 +1,56 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=IBM+Plex+Mono:wght@300;400;500;600&family=Manrope:wght@300;400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Outfit:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400;1,500;1,600&family=IBM+Plex+Mono:wght@300;400;500;600&display=swap');
 
 :root {
   /* ───────────────────────────────────────────────────────────
-     ARIYA LAB — "Obsidian & Platinum" design system.
-     A cinematic, monochrome luxury palette. The premium feel comes
-     from MATERIAL — layered glass, specular highlights, soft long
-     shadows, fine grain — not from a colored accent. Everything is
-     driven by a single `--accent` token: flip it to a champagne
-     (#c9a96e) in one line if warmth is ever wanted.
+     Light cream-and-orange theme. The real tokens (--bg, --surface,
+     --text, --text-dim, --accent, --accent-deep, --border, radii) live
+     in styles/theme.css. This block keeps the old Obsidian & Platinum
+     names alive, remapped to light values, so legacy CSS modules still
+     render. Prefer the theme.css tokens in new code.
      ─────────────────────────────────────────────────────────── */
 
-  /* Surfaces — deep neutral obsidian, subtly cool */
-  --bg: #060607;
-  --bg-deep: #030304;
-  --surface-0: #0a0a0c;
-  --surface-1: #101013;
-  --surface-2: #17171b;
-  --surface-3: #1e1e23;
-  --border: rgba(255, 255, 255, 0.08);
-  --border-strong: rgba(255, 255, 255, 0.15);
+  --bg-deep: #F6F2E8;
+  --surface-0: #FFFFFF;
+  --surface-1: #FBF8F1;
+  --surface-2: #F5F0E4;
+  --surface-3: #EDE6D6;
+  --border-strong: rgba(22, 19, 15, 0.18);
+  --text-faint: #9A9388;
 
-  /* Text — cool neutral whites */
-  --text: #f6f6f7;
-  --text-dim: #a6a6ad;
-  --text-faint: #5e5e66;
+  --accent-soft: rgba(240, 138, 75, 0.12);
+  --accent-line: rgba(240, 138, 75, 0.35);
+  --accent-grad: linear-gradient(135deg, #F59A60 0%, #DB6F2E 100%);
+  --accent-glow: 0 8px 30px rgba(240, 138, 75, 0.25);
+  --accent-glow-strong: 0 12px 44px rgba(240, 138, 75, 0.4);
 
-  /* Accent — single source of truth. Platinum by default. */
-  --accent: #f2f2f4;
-  --accent-deep: #c2c2c8;
-  --accent-soft: rgba(255, 255, 255, 0.08);
-  --accent-line: rgba(255, 255, 255, 0.22);
-  --accent-grad: linear-gradient(135deg, #ffffff 0%, #c4c4cc 100%);
-  --accent-glow: 0 8px 36px rgba(255, 255, 255, 0.14);
-  --accent-glow-strong: 0 12px 52px rgba(255, 255, 255, 0.26);
-
-  /* Legacy `--gold*` aliases — kept so existing component CSS that
-     references them keeps working. Mapped onto the accent. */
+  /* Legacy `--gold*` aliases, mapped onto the accent. */
   --gold: var(--accent);
   --gold-deep: var(--accent-deep);
   --gold-grad: var(--accent-grad);
   --gold-glow: var(--accent-glow);
   --gold-glow-strong: var(--accent-glow-strong);
 
-  /* Status — desaturated to preserve monochrome harmony */
-  --success: #cfe9d6;
-  --success-bg: rgba(207, 233, 214, 0.07);
-  --error: #e8a4a4;
-  --error-bg: rgba(232, 164, 164, 0.08);
-  --warning: #e6e6e6;
+  /* Status, darkened so it reads on cream */
+  --success: #2F8A54;
+  --success-bg: rgba(47, 138, 84, 0.1);
+  --error: #C0392B;
+  --error-bg: rgba(192, 57, 43, 0.08);
+  --warning: #B7791F;
 
-  /* Glass material — the core of the premium look */
-  --glass-bg: linear-gradient(
-    180deg,
-    rgba(255, 255, 255, 0.045) 0%,
-    rgba(255, 255, 255, 0.018) 40%,
-    rgba(255, 255, 255, 0.012) 100%
-  );
-  --glass-border: rgba(255, 255, 255, 0.1);
-  --glass-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.09);
+  /* Legacy glass material, now a soft white card */
+  --glass-bg: linear-gradient(180deg, #FFFFFF 0%, #FFFFFF 100%);
+  --glass-border: rgba(22, 19, 15, 0.08);
+  --glass-highlight: inset 0 0 0 rgba(255, 255, 255, 0);
 
-  /* Elevation — soft, long, cinematic shadows */
-  --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
-  --shadow-md: 0 12px 32px -12px rgba(0, 0, 0, 0.6);
-  --shadow-lg: 0 30px 70px -32px rgba(0, 0, 0, 0.75);
-  --shadow-xl: 0 50px 120px -50px rgba(0, 0, 0, 0.85);
+  /* Elevation, soft warm shadows */
+  --shadow-sm: 0 1px 3px rgba(22, 19, 15, 0.08);
+  --shadow-md: 0 10px 28px -12px rgba(22, 19, 15, 0.16);
+  --shadow-lg: 0 24px 60px -28px rgba(22, 19, 15, 0.2);
+  --shadow-xl: 0 40px 100px -44px rgba(22, 19, 15, 0.26);
 
-  /* Type */
-  --font-display: 'Cormorant Garamond', 'Times New Roman', serif;
-  --font-body: 'Manrope', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  /* Type: one family (Outfit) for display and body */
+  --font-display: 'Outfit', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
   --font-mono: 'IBM Plex Mono', 'SFMono-Regular', Menlo, monospace;
 
   /* Shape */
@@ -100,50 +83,13 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
-  font-feature-settings: 'ss01', 'cv11';
-  min-height: 100%;
+    min-height: 100%;
 }
 
 body {
   position: relative;
   overflow-x: hidden;
-  /* Base canvas: deep radial fall-off from near-black center to pure
-     black edges, giving the page a sense of depth before any content. */
-  background:
-    radial-gradient(120% 120% at 50% -10%, #0c0c10 0%, var(--bg) 38%, var(--bg-deep) 100%);
-}
-
-/* Atmospheric layer — extremely subtle cool "aurora" light pools that
-   give the obsidian canvas depth and motion. Neutral/cool only (no
-   warm hues, no purple slop). GPU-promoted, sits behind content. */
-body::before {
-  content: '';
-  position: fixed;
-  inset: -20% -10% auto -10%;
-  height: 80vh;
-  pointer-events: none;
-  z-index: 0;
-  background:
-    radial-gradient(46% 60% at 18% 0%, rgba(180, 200, 255, 0.05), transparent 60%),
-    radial-gradient(40% 50% at 85% 8%, rgba(255, 255, 255, 0.045), transparent 62%),
-    radial-gradient(55% 70% at 50% 120%, rgba(150, 170, 210, 0.035), transparent 60%);
-  filter: blur(8px);
-  transform: translateZ(0);
-  will-change: transform;
-}
-
-/* Grain + cinematic vignette. Fine film grain over the whole page,
-   then a soft edge-darkening to focus the eye on center content. */
-body::after {
-  content: '';
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: 2;
-  opacity: 1;
-  background-image:
-    radial-gradient(ellipse 90% 80% at center, transparent 46%, rgba(0, 0, 0, 0.5) 100%),
-    url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 0.85 0'/></filter><rect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/></svg>");
+  background: var(--bg);
 }
 
 a {
@@ -172,21 +118,21 @@ h2,
 h3,
 h4 {
   font-family: var(--font-display);
-  font-weight: 500;
-  letter-spacing: -0.012em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   margin: 0;
 }
 
 /* Keyboard focus — refined platinum ring (mouse users never see it). */
 :focus-visible {
   outline: none;
-  box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(255, 255, 255, 0.45);
+  box-shadow: var(--focus-ring);
   border-radius: var(--radius-sm);
 }
 
 ::selection {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: rgba(240, 138, 75, 0.28);
+  color: var(--text);
 }
 
 ::-webkit-scrollbar {
@@ -202,7 +148,7 @@ h4 {
   border: 3px solid var(--bg);
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #2a2a31;
+  background: var(--border-strong);
 }
 
 /* ───────────────────────────────────────────────────────────
@@ -227,7 +173,7 @@ h4 {
   inset: 0 0 auto 0;
   height: 50%;
   border-radius: inherit;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.06), transparent);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), transparent);
   pointer-events: none;
 }
 
@@ -238,26 +184,20 @@ h4 {
   justify-content: center;
   gap: 10px;
   padding: 13px 22px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   font-family: var(--font-body);
   font-size: 15px;
   font-weight: 600;
-  letter-spacing: 0.01em;
-  color: #0a0a0b;
-  background: linear-gradient(180deg, #ffffff 0%, #d6d6db 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.85),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
-    0 10px 28px -10px rgba(255, 255, 255, 0.32);
+  color: #fff;
+  background: var(--accent);
+  box-shadow: 0 10px 24px -10px rgba(219, 111, 46, 0.55);
   cursor: pointer;
-  transition: transform 0.18s var(--ease-out-quint), box-shadow 0.25s var(--ease), filter 0.2s var(--ease);
+  transition: transform 0.18s var(--ease-out-quint), box-shadow 0.25s var(--ease), background 0.2s var(--ease);
 }
 .btn-primary:hover {
   transform: translateY(-2px);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.9),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.12),
-    0 16px 40px -12px rgba(255, 255, 255, 0.42);
+  background: var(--accent-deep);
+  box-shadow: 0 16px 32px -12px rgba(219, 111, 46, 0.6);
 }
 .btn-primary:active {
   transform: translateY(0);
@@ -270,12 +210,12 @@ h4 {
   justify-content: center;
   gap: 8px;
   padding: 12px 18px;
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-pill);
   font-family: var(--font-body);
   font-size: 14px;
   font-weight: 500;
   color: var(--text-dim);
-  background: rgba(255, 255, 255, 0.02);
+  background: var(--surface);
   border: 1px solid var(--border);
   cursor: pointer;
   transition: color 0.2s var(--ease), border-color 0.2s var(--ease), background 0.2s var(--ease), transform 0.18s var(--ease-out-quint);
@@ -283,7 +223,7 @@ h4 {
 .btn-ghost:hover {
   color: var(--text);
   border-color: var(--border-strong);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--surface-1);
   transform: translateY(-1px);
 }
 
@@ -330,10 +270,10 @@ h4 {
 @keyframes pulseGlow {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgba(207, 233, 214, 0.5);
+    box-shadow: 0 0 0 0 rgba(47, 138, 84, 0.4);
   }
   50% {
-    box-shadow: 0 0 0 6px rgba(207, 233, 214, 0);
+    box-shadow: 0 0 0 6px rgba(47, 138, 84, 0);
   }
 }
 
@@ -366,7 +306,7 @@ h4 {
 
 /* Shimmering platinum text — for headline accents. */
 .shimmer-text {
-  background: linear-gradient(100deg, #8a8a92 0%, #ffffff 45%, #8a8a92 70%);
+  background: linear-gradient(100deg, var(--accent-deep) 0%, #F7B27F 45%, var(--accent-deep) 70%);
   background-size: 200% auto;
   -webkit-background-clip: text;
   background-clip: text;

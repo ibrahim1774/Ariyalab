@@ -1,0 +1,26 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9500;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(22, 19, 15, 0.4);
+  backdrop-filter: blur(4px);
+  animation: fadeIn 0.2s var(--ease) both;
+}
+.dialog {
+  width: 100%;
+  max-width: 480px;
+  max-height: 90vh;
+  overflow-y: auto;
+  padding: 28px;
+  background: var(--surface);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-float);
+  animation: scaleIn 0.22s var(--ease-out-quint) both;
+}
+.title { margin-bottom: 12px; font-size: 22px; }
+.body { color: var(--text-dim); font-size: 15px; line-height: 1.6; }
+.footer { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }

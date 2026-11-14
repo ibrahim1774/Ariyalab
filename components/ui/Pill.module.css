@@ -1,0 +1,17 @@
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.accent { background: var(--accent-tint); border-color: transparent; color: var(--accent-deep); }
+.success { background: var(--success-bg); border-color: transparent; color: var(--success); }
+.dark { background: var(--text); border-color: transparent; color: #fff; }
