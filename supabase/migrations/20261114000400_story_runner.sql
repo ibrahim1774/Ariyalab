@@ -25,6 +25,8 @@
 --                       run's value); the copy is retried from it, so the task
 --                       is not polled and a sync run is not repeated for it.
 --                       Cleared when the job is done or re-queued
+--   kept_at             when provider_result was first kept; the sweep ends a
+--                       kept answer that could not be copied within 30 minutes
 --
 -- story_projects.runner_ticked_at: when the cron last ticked the project, so
 -- story_pending_projects rotates instead of always serving the oldest.
@@ -47,7 +49,8 @@ alter table public.story_jobs
   add column rate_limited_since timestamptz,
   add column lease_until timestamptz,
   add column nudged_at timestamptz,
-  add column provider_result jsonb;
+  add column provider_result jsonb,
+  add column kept_at timestamptz;
 
 alter table public.story_projects add column runner_ticked_at timestamptz;
 

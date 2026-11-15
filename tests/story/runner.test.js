@@ -752,9 +752,11 @@ describe('slow provider tasks', () => {
     let row = await jobRow(job.id);
     expect(row).toMatchObject({ status: 'running', mirror_tries: 0, lease_until: null });
     expect(row.provider_result).toEqual({ url: MOCK_URLS.clip });
+    expect(row.kept_at.getTime()).toBe(at(50 * MIN).getTime()); // round 5 B1: when the answer was first kept
     expect(calls.poll).toHaveLength(1);
     await sweep({ now: at(56 * MIN), deadline: Date.now() + 5_000 }); // past cap + grace, still no copy time: kept, not failed
     expect(await jobRow(job.id)).toMatchObject({ status: 'running', mirror_tries: 0 });
+    expect((await jobRow(job.id)).kept_at.getTime()).toBe(at(50 * MIN).getTime());
     await sweep({ now: at(57 * MIN), deadline: Date.now() + 40_000 }); // time to copy: copied from the kept result, no new poll
     row = await jobRow(job.id);
     expect(row).toMatchObject({ status: 'done', mirror_tries: 1, provider_result: null });
@@ -771,7 +773,7 @@ describe('slow provider tasks', () => {
     registerHandler('still', handler);
     const job = await enqueue({ projectId: project.id, kind: 'still', holdId, costCredits: 20 });
     await tick({ projectId: project.id, now: T0 });
-    await raw.query(`update story_jobs set provider_result = $2 where id = $1`, [job.id, JSON.stringify({ url: MOCK_URLS.still })]);
+    await raw.query(`update story_jobs set provider_result = $2, kept_at = $3 where id = $1`, [job.id, JSON.stringify({ url: MOCK_URLS.still }), at(26 * MIN)]);
     mirror.fail = 10;
     for (const t of [26, 30, 35, 40, 45]) await sweep({ now: at(t * MIN), deadline: Date.now() + 15_000 });
     expect(await jobRow(job.id)).toMatchObject({ status: 'failed', mirror_tries: 4, error: 'We could not save the generated file. Please try again.' });
@@ -1588,9 +1590,92 @@ describe('runCron', () => {
     });
     await enqueue({ projectId: busy.id, kind: 'clip' });
     await runCron({ now: at(26 * MIN), deadline: Date.now() + 200, sweepMs: 50 });
-    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.' });
-    expect(await held(capped)).toBe(40);
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', error: 'This took too long. Please try again.', applied_at: null });
     expect(stillCalls.poll).toHaveLength(0);
+    // Past its deadline the sweep only ended the job; the next sweep releases the hold and runs onFail (round 5 B2).
+    expect(await held(capped)).toBe(60);
+    expect(stillCalls.fail).toHaveLength(0);
+    await sweep({ now: at(27 * MIN) });
+    expect(await held(capped)).toBe(40);
+    expect(stillCalls.fail).toHaveLength(1);
+  });
+
+  it('a kept answer older than 30 minutes is ended by the sweep even past its deadline; side effects run once, on the next sweep (round 5 B1, B2)', async () => {
+    const project = await newProject();
+    const holdId = await withHold(project);
+    const { handler, calls } = fakeAsync();
+    registerHandler('clip', handler);
+    const job = await enqueue({ projectId: project.id, kind: 'clip', holdId, costCredits: 30 });
+    await tick({ projectId: project.id, now: T0 });
+    await raw.query(`update story_jobs set provider_result = $2, kept_at = $3, locked_until = $3 where id = $1`, [job.id, JSON.stringify({ url: MOCK_URLS.clip }), at(MIN)]);
+    expect(RUNNER_CONFIG.keptMaxMinutes).toBe(30);
+    await sweep({ now: at(30 * MIN), deadline: Date.now() - 1 }); // kept 29 minutes: still waits
+    expect(await jobRow(job.id)).toMatchObject({ status: 'running' });
+    await sweep({ now: at(31 * MIN), deadline: Date.now() - 1 }); // kept 30 minutes, sweep past its deadline
+    let row = await jobRow(job.id);
+    expect(row).toMatchObject({ status: 'failed', error: 'We could not save the generated file. Please try again.', applied_at: null });
+    expect(mirror.calls).toHaveLength(0);
+    expect(logSpy.mock.calls.some((c) => c.join(' ').includes('OPERATOR') && c.join(' ').includes(job.id))).toBe(true);
+    expect(credit.releases).toHaveLength(0); // no release RPC and no onFail inline when late
+    expect(calls.fail).toHaveLength(0);
+    await sweep({ now: at(31 * MIN + 1) });
+    await sweep({ now: at(40 * MIN) });
+    row = await jobRow(job.id);
+    expect(row.applied_at).not.toBeNull();
+    expect(credit.releases).toHaveLength(1);
+    expect(calls.fail).toHaveLength(1);
+    expect(await held(project)).toBe(30);
+    expect(calls.submit).toHaveLength(1);
+  });
+
+  it('a kept video answer is copied in a cron run whose ticks are saturated (kept copies run first) (round 5 B1)', async () => {
+    runner._configure({ cronMirrorExtraMs: 0, mirrorDeadlineMarginMs: 100, mirrorMinMs: { image: 1_000, video: 1_000, audio: 1_000 } });
+    const kept = await newProject();
+    const { handler: first } = fakeAsync();
+    registerHandler('clip', first);
+    const job = await enqueue({ projectId: kept.id, kind: 'clip' });
+    await tick({ projectId: kept.id, now: T0 });
+    await raw.query(`update story_jobs set provider_result = $2, kept_at = $3, locked_until = $3 where id = $1`, [job.id, JSON.stringify({ url: MOCK_URLS.clip }), at(60)]);
+    const submits = [];
+    registerHandler('clip', {
+      submit: async (j) => { submits.push(j.id); await new Promise((r) => setTimeout(r, 120)); return { provider: 'mock', taskId: `busy-${j.id}` }; },
+      poll: async () => ({ status: 'pending', url: null, error: null }),
+    });
+    for (let i = 0; i < 8; i++) {
+      const p = await newProject();
+      for (let k = 0; k < 3; k++) await enqueue({ projectId: p.id, kind: 'clip' });
+    }
+    // The kept job's project has the newest work, so ticks reach it last (if at all).
+    await raw.query(`update story_jobs set created_at = now() + interval '1 hour' where id = $1`, [job.id]);
+    await runCron({ now: at(120), deadline: Date.now() + 1_500, sweepMs: 300 });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 1, provider_result: null, kept_at: null });
+    expect(submits.length).toBeGreaterThan(0); // the ticks still ran with the time left
+  });
+
+  it('the kept-copies phase copies the oldest kept answer first and starts no copy once ticks would get under half the window (round 5 B1)', async () => {
+    runner._configure({ cronMirrorExtraMs: 0, mirrorDeadlineMarginMs: 100, mirrorMinMs: { image: 100, video: 100, audio: 100 } });
+    const project = await newProject();
+    const { handler } = fakeAsync();
+    registerHandler('still', handler);
+    const newer = await enqueue({ projectId: project.id, kind: 'still' });
+    const older = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: T0 });
+    await raw.query(`update story_jobs set provider_result = $2, kept_at = $3, locked_until = $3 where id = $1`, [newer.id, JSON.stringify({ url: MOCK_URLS.still }), at(90)]);
+    await raw.query(`update story_jobs set provider_result = $2, kept_at = $3, locked_until = $3 where id = $1`, [older.id, JSON.stringify({ url: MOCK_URLS.still }), at(30)]);
+    mirror.delayMs = 800;
+    // Ticks must not copy the second one either: the project's tick polls only after the phase.
+    await raw.query(`update story_jobs set created_at = now() + interval '1 hour' where project_id = $1`, [project.id]);
+    const blocker = await newProject();
+    registerHandler('clip', {
+      submit: async (j) => { await new Promise((r) => setTimeout(r, 1_000)); return { provider: 'mock', taskId: `b-${j.id}` }; },
+      poll: async () => ({ status: 'pending', url: null, error: null }),
+    });
+    await enqueue({ projectId: blocker.id, kind: 'clip' });
+    await runCron({ now: at(120), deadline: Date.now() + 1_500, sweepMs: 300 });
+    expect(mirror.calls[0].key).toContain(older.id);
+    expect(mirror.calls.filter((c) => c.key.includes(newer.id))).toHaveLength(0);
+    expect(await jobRow(older.id)).toMatchObject({ status: 'done' });
+    expect(await jobRow(newer.id)).toMatchObject({ status: 'running', mirror_tries: 0 });
   });
 
   it('copies started by cron ticks end before the tick deadline; only sweep copies get the extra time (round 4 N1)', async () => {
