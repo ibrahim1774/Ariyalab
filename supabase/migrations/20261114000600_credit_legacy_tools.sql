@@ -26,15 +26,18 @@ create table public.credit_legacy_holds (
   route text not null check (route <> ''),
   provider text,
   job_id text,
+  -- 'reserving': recorded before the ledger hold is taken (the hold may not
+  -- exist yet); 'open': held, waiting on the job.
   status text not null default 'open'
-    check (status in ('open', 'settle_retry', 'release_retry', 'settled', 'released')),
+    check (status in ('reserving', 'open', 'settle_retry', 'release_retry', 'settled', 'released')),
   last_error text,
   attempts integer not null default 0,
+  last_attempt_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
-create index credit_legacy_holds_due_idx on public.credit_legacy_holds (created_at)
-  where status in ('open', 'settle_retry', 'release_retry');
+create index credit_legacy_holds_due_idx on public.credit_legacy_holds (last_attempt_at nulls first, created_at)
+  where status in ('reserving', 'open', 'settle_retry', 'release_retry');
 
 create table public.credit_swap_uses (
   user_id uuid not null,
@@ -63,16 +66,49 @@ alter table public.credit_legacy_migrations enable row level security;
 -- ---------------------------------------------------------------- legacy holds
 
 create function public.credit_legacy_hold_open(
-  p_hold uuid, p_user uuid, p_currency text, p_amount integer, p_route text
+  p_hold uuid, p_user uuid, p_currency text, p_amount integer, p_route text, p_status text default 'open'
 )
 returns void
 language sql
 security definer
 set search_path = public, pg_temp
 as $$
-  insert into credit_legacy_holds (hold_id, user_id, currency, amount, route)
-  values (p_hold, p_user, p_currency, p_amount, p_route)
+  insert into credit_legacy_holds (hold_id, user_id, currency, amount, route, status)
+  values (p_hold, p_user, p_currency, p_amount, p_route, p_status)
   on conflict (hold_id) do nothing;
+$$;
+
+-- A reconciler look that did not end the hold: counts it and moves the row to
+-- the back of the queue (credit_legacy_holds_due orders by last_attempt_at).
+create function public.credit_legacy_hold_touch(p_hold uuid, p_error text default null)
+returns void
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  update credit_legacy_holds
+     set attempts = attempts + 1, last_attempt_at = now(), last_error = coalesce(p_error, last_error), updated_at = now()
+   where hold_id = p_hold;
+$$;
+
+-- A 'reserving' record whose ledger hold never happened.
+create function public.credit_legacy_hold_forget(p_hold uuid)
+returns void
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  delete from credit_legacy_holds where hold_id = p_hold and status = 'reserving';
+$$;
+
+-- 'none' (no such ledger hold), 'active' or 'closed'.
+create function public.credit_legacy_hold_ledger_state(p_hold uuid)
+returns text
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select coalesce((select status from credit_holds where id = p_hold), 'none');
 $$;
 
 create function public.credit_legacy_hold_attach(p_hold uuid, p_provider text, p_job text)
@@ -97,6 +133,7 @@ as $$
      set status = p_status,
          last_error = p_error,
          attempts = attempts + case when p_status in ('settle_retry', 'release_retry') then 1 else 0 end,
+         last_attempt_at = case when p_status in ('settle_retry', 'release_retry') then now() else last_attempt_at end,
          updated_at = now()
    where hold_id = p_hold and status not in ('settled', 'released');
 $$;
@@ -108,9 +145,9 @@ security definer
 set search_path = public, pg_temp
 as $$
   select * from credit_legacy_holds
-   where status in ('open', 'settle_retry', 'release_retry')
+   where status in ('reserving', 'open', 'settle_retry', 'release_retry')
      and created_at < now() - make_interval(mins => p_older_than_minutes)
-   order by created_at
+   order by last_attempt_at nulls first, created_at
    limit p_limit;
 $$;
 
@@ -122,7 +159,8 @@ language sql
 security definer
 set search_path = public, pg_temp
 as $$
-  select jsonb_build_object('swap_id', swap_id, 'count', count)
+  select jsonb_build_object('swap_id', swap_id, 'count', count,
+                            'stale', swap_id is null and updated_at < now() - interval '2 minutes')
     from credit_swap_uses where user_id = p_user and frame_id = p_frame;
 $$;
 
@@ -152,6 +190,24 @@ begin
    where user_id = p_user and frame_id = p_frame and count = p_expected
    returning count into v;
   return v;
+end
+$$;
+
+-- Undoes claim number p_count when its job never started (still no job id).
+create function public.credit_unclaim_swap_use(p_user uuid, p_frame text, p_count integer)
+returns void
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if p_count = 1 then
+    delete from credit_swap_uses
+     where user_id = p_user and frame_id = p_frame and count = 1 and swap_id is null;
+  else
+    update credit_swap_uses set count = count - 1, updated_at = now()
+     where user_id = p_user and frame_id = p_frame and count = p_count and swap_id is null;
+  end if;
 end
 $$;
 
@@ -203,6 +259,20 @@ as $$
   select exists (
     select 1 from credit_ledger
      where user_id = p_user and currency = 'video' and reason = 'plan_renewal' and created_at >= p_since
+  );
+$$;
+
+-- True when a plan renewal for this Stripe customer was parked since p_since
+-- (claimed or not): the v2 webhook already granted that period.
+create function public.credit_has_pending_renewal_since(p_customer text, p_since timestamptz)
+returns boolean
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (
+    select 1 from credit_pending_grants
+     where stripe_customer_id = p_customer and currency = 'video' and reason = 'plan_renewal' and created_at >= p_since
   );
 $$;
 
@@ -292,6 +362,8 @@ begin
       where n.nspname = 'public'
         and p.proname = any (array[
           'credit_legacy_hold_open', 'credit_legacy_hold_attach', 'credit_legacy_hold_mark',
+          'credit_legacy_hold_touch', 'credit_legacy_hold_forget', 'credit_legacy_hold_ledger_state',
+          'credit_unclaim_swap_use', 'credit_has_pending_renewal_since',
           'credit_legacy_holds_due', 'credit_swap_use', 'credit_claim_swap_use', 'credit_record_swap',
           'credit_reset_plan', 'credit_has_plan_renewal_since', 'credit_migrate_legacy',
           'credit_legacy_migrated', 'credit_legacy_migration_of'

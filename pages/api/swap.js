@@ -5,7 +5,7 @@ import { createMotionTransferPrediction, getPrediction, normalizeStatus } from '
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
 import { signingConfigured, verifySwapToken, signJobId } from '../../lib/jobToken';
-import { getEntitlement, getSwapUse, claimSwapUse, recordSwapUse } from '../../lib/entitlement';
+import { getEntitlement, getSwapUse, claimSwapUse, unclaimSwapUse, recordSwapUse } from '../../lib/entitlement';
 
 // One character-frame charge covers at most this many motion-transfer
 // jobs, and a new one only starts after the previous one failed.
@@ -110,10 +110,13 @@ export default async function handler(req, res) {
     }
     // billing_v2 only: a use claimed by a call whose job id is not recorded
     // yet is a swap starting right now.
-    if (use && !use.swapId) {
+    // billing_v2 only: a use claimed by a call whose job id is not recorded
+    // yet is a swap starting right now, unless the claim is over 2 minutes
+    // old (stale): then it counts as a failed attempt.
+    if (use && !use.swapId && !use.stale) {
       return res.status(409).json({ error: 'This swap is starting. Try again in a few seconds.' });
     }
-    if (use && !(await previousSwapFailed(use.swapId))) {
+    if (use && use.swapId && !(await previousSwapFailed(use.swapId))) {
       return res.status(200).json({
         jobId,
         predictionId: signJobId(session.user.id, use.swapId),
@@ -172,12 +175,22 @@ export default async function handler(req, res) {
       mode: safeMode,
     });
 
-    const prediction = await createMotionTransferPrediction({
-      imageUrl,
-      videoUrl,
-      mode: safeMode,
-      characterOrientation: 'video',
-    });
+    let prediction;
+    try {
+      prediction = await createMotionTransferPrediction({
+        imageUrl,
+        videoUrl,
+        mode: safeMode,
+        characterOrientation: 'video',
+      });
+    } catch (createErr) {
+      // The job did not start: give the use back (billing_v2) so the paid
+      // frame is not locked out.
+      await unclaimSwapUse(entitlement, paid.framePredictionId, claimed).catch((e) =>
+        console.error('[swap] could not undo the swap use', e)
+      );
+      throw createErr;
+    }
     const normalized = normalizeStatus(prediction);
 
     try {

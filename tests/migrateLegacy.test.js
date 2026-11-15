@@ -20,7 +20,7 @@ vi.mock('../lib/stripe.js', async (importOriginal) => {
 
 const { runMigration } = await import('../scripts/migrate-legacy-credits.mjs');
 const { setCreditsDb, getBalance, renewPlanCredits } = await import('../lib/credits.js');
-const { setGrantsDb, v2PlanAllotment } = await import('../lib/grants.js');
+const { setGrantsDb, v2PlanAllotment, claimPendingGrants } = await import('../lib/grants.js');
 const { setPricingDb, _resetPricingCache } = await import('../lib/pricing.js');
 const { PLANS } = await import('../lib/stripe.js');
 const { KEY } = await import('../lib/metaKeys.js');
@@ -321,6 +321,36 @@ describe('renewals around the switch (probe E)', () => {
     const out = await apply([], 10);
     expect(out.rows[0].legacyCredits).toBe(100 + PLANS.monthly.cap);
     expect(out.rows[0].split).toMatchObject({ videoPlan: 160 });
+  });
+});
+
+describe('round 2: a renewal parked for the customer counts too (probe E4)', () => {
+  const parkRenewal = (cid, ref) =>
+    db.query(
+      `insert into public.credit_pending_grants (stripe_customer_id, currency, amount, original_amount, bucket, reason, ref)
+       values ($1, 'video', $2, $2, 'plan', 'plan_renewal', $3)`,
+      [cid, v2PlanAllotment('monthly'), ref]
+    );
+
+  it('unlinked: the parked renewal is not simulated again; after link and claim the customer has 181', async () => {
+    const u = randomUUID();
+    const cid = addCustomer(seeded(100, { [KEY.periodStart]: String((nowS() - 31 * DAY) * 1000) }), { startedAgoS: 3 * 3600 });
+    await parkRenewal(cid, `invoice:in_E4_${cid}`);
+    const out = await apply();
+    expect(out.rows[0]).toMatchObject({ legacyCredits: 100, v2Credits: 21, action: 'park' });
+    await linkProfile(u, cid);
+    await claimPendingGrants(cid, u);
+    expect((await getBalance(u)).available).toBe(160 + 21);
+  });
+
+  it('linked but not yet claimed: the same', async () => {
+    const u = randomUUID();
+    const cid = addCustomer(seeded(100, { [KEY.periodStart]: String((nowS() - 31 * DAY) * 1000) }), { startedAgoS: 3 * 3600 });
+    await parkRenewal(cid, `invoice:in_E4b_${cid}`);
+    await linkProfile(u, cid);
+    const out = await apply();
+    expect(out.rows[0]).toMatchObject({ legacyCredits: 100, v2Credits: 21 });
+    expect((await getBalance(u)).available).toBe(160 + 21); // the re-run claim delivered the parked renewal
   });
 });
 

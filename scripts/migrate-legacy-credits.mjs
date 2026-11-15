@@ -27,8 +27,8 @@
  *     imageCredits, action, split, plan, subscriptionStatus }
  * legacyCredits is what the legacy reader (lib/entitlement.js) would show now:
  * the stored balance, plus a period rollover not yet applied (only for a
- * period that started before --cutoff and that the ledger has not already
- * renewed), plus the cap backfill. Trialing customers: the remaining trial
+ * period that started before --cutoff and that the v2 webhook has not already
+ * renewed, in the ledger or parked for the customer), plus the cap backfill. Trialing customers: the remaining trial
  * credits plus their top-ups.
  *
  * Conversion and split:
@@ -115,7 +115,7 @@ async function ourSubscription(stripe, customerId) {
 }
 
 // What the legacy reader would show now (read only).
-async function legacyVideoBalance({ md, sub, plan, cutoffMs, userId }) {
+async function legacyVideoBalance({ md, sub, plan, cutoffMs, userId, customerId }) {
   if (!sub || !plan) return int(md[KEY.credits]);
   if (sub.status === 'trialing') {
     const used = int(md[KEY.trialCreditsUsed]) || (md[KEY.trialUsed] === '1' ? 1 : 0);
@@ -131,13 +131,13 @@ async function legacyVideoBalance({ md, sub, plan, cutoffMs, userId }) {
   else credits = cap;
   const neverSeeded = stored === 0 && !hasCredits;
   if (periodStartMs > stored && !neverSeeded && periodStartMs < cutoffMs) {
-    // A renewal the v2 webhook already granted for this period is not added again.
+    // A renewal the v2 webhook already granted for this period (in the
+    // user's ledger, or parked for the customer: unlinked, or linked but not
+    // yet claimed) is not added again.
+    const since = new Date(periodStartMs).toISOString();
     const renewed =
-      userId &&
-      (await callCreditFunction('credit_has_plan_renewal_since', {
-        p_user: userId,
-        p_since: new Date(periodStartMs).toISOString(),
-      }));
+      (userId && (await callCreditFunction('credit_has_plan_renewal_since', { p_user: userId, p_since: since }))) ||
+      (await callCreditFunction('credit_has_pending_renewal_since', { p_customer: customerId, p_since: since }));
     if (!renewed) credits += cap;
   }
   if (md[KEY.lastSeededCap] !== String(cap) && credits < cap) credits = cap;
@@ -150,7 +150,9 @@ async function planRow(stripe, customer, opts) {
   const users = await usersForCustomer(customer.id);
   const linkedUserId = users.length === 1 ? users[0] : null;
 
-  const legacyCredits = await legacyVideoBalance({ md, sub, plan, cutoffMs: opts.cutoffMs, userId: linkedUserId });
+  const legacyCredits = await legacyVideoBalance({
+    md, sub, plan, cutoffMs: opts.cutoffMs, userId: linkedUserId, customerId: customer.id,
+  });
   const legacyImageCredits = int(md[KEY.imageCredits]);
   const v2Credits = legacyToV2(legacyCredits);
   const planLegacy = sub?.status === 'active' && plan ? Math.min(legacyCredits, CAPS[plan]) : 0;

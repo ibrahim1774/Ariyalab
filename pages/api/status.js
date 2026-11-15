@@ -68,7 +68,8 @@ export default async function handler(req, res) {
   const { predictionId, hold } = token;
   // Only the kie routes (image-to-video, ugc-animate) sign a hold into the
   // job id, so such a job is a kie job whatever `vendor` the client sent.
-  const isKie = vendor === 'kie' || Boolean(hold);
+  // The creating routes name their vendor 'kie-kling' / 'kie-seedance'.
+  const isKie = String(vendor || '').startsWith('kie') || Boolean(hold);
 
   // Idempotently settle the credit reservation we made when the job
   // was queued. Refund on vendor failure, drop tracking on success.
@@ -81,7 +82,7 @@ export default async function handler(req, res) {
     if (status !== 'complete' && status !== 'error') return;
     try {
       if (hold) {
-        await settleHeldJob({ hold, jobId: predictionId, failed: status === 'error' });
+        await settleHeldJob({ hold: { ...hold, userId: session.user.id }, jobId: predictionId, failed: status === 'error' });
         return;
       }
       const entitlement = await getEntitlement({

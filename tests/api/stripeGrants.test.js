@@ -2540,3 +2540,50 @@ describe('task 6: heal-topups minors', () => {
     expect(failed.body.charge.error).toMatch(/check the payment in Stripe/);
   });
 });
+
+// Task 6 round 2 (P5): a customer moved by the legacy migration is granted in
+// the ledger even when billing_v2 is switched off again.
+describe('task 6 round 2: migrated customers are granted in the ledger whatever the flag', () => {
+  beforeAll(() => setBillingV2(false));
+  const migrate = (customerId, userId) =>
+    db.query(
+      `insert into public.credit_legacy_migrations (customer_id, currency, user_id, plan, topup, parked)
+       values ($1, 'video', $2, 10, 0, false)`,
+      [customerId, userId]
+    );
+
+  it('a top-up after the switch-off lands in the ledger, not in Stripe metadata', async () => {
+    const { grantForCheckoutSession } = await import('../../lib/grants.js');
+    const user = newUser();
+    const customer = newCustomer({ [KEY.credits]: '500' });
+    await link(user.id, customer);
+    await migrate(customer, user.id);
+    const session = topupSession({ customer, buyer: user });
+    const out = await grantForCheckoutSession(session, { userId: user.id });
+    expect(out.granted).toBe(true);
+    expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S);
+    expect(mdOf(customer)[KEY.credits]).toBe('500');
+  });
+
+  it('a renewal invoice after the switch-off lands in the ledger', async () => {
+    const { grantForInvoice } = await import('../../lib/grants.js');
+    const user = newUser();
+    const customer = newCustomer();
+    await link(user.id, customer);
+    await migrate(customer, user.id);
+    const subId = newSub(customer);
+    const out = await grantForInvoice(paidInvoice({ customer, subId, reason: 'subscription_cycle' }));
+    expect(out.granted).toBe(true);
+    expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+  });
+
+  it('a customer that was not migrated still takes the legacy path', async () => {
+    const { grantForCheckoutSession } = await import('../../lib/grants.js');
+    const user = newUser();
+    const customer = newCustomer({ [KEY.credits]: '500' });
+    await link(user.id, customer);
+    await grantForCheckoutSession(topupSession({ customer, buyer: user }), { userId: user.id });
+    expect(mdOf(customer)[KEY.credits]).toBe(String(500 + TOPUP_S.credits));
+    expect((await getBalance(user.id)).topup).toBe(0);
+  });
+});

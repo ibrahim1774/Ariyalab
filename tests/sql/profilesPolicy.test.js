@@ -116,6 +116,20 @@ describe('profiles guard trigger on a Supabase-like table', () => {
     expect(rows[0].r).toBe('linked');
   });
 
+  it('round 2: the guard sorts last among BEFORE triggers and its helpers are executable by the browser roles', async () => {
+    const { rows } = await db.query(
+      `select tgname from pg_trigger where tgrelid = 'public.profiles'::regclass and not tgisinternal order by tgname`
+    );
+    expect(rows.map((r) => r.tgname).at(-1)).toBe('zz_ariyalab_profiles_customer_guard');
+    const { rows: priv } = await db.query(
+      `select r.rolname, bool_and(has_function_privilege(r.rolname, p.oid, 'execute')) as ok
+         from pg_proc p cross join (values ('anon'), ('authenticated')) r(rolname)
+        where p.pronamespace = 'public'::regnamespace and p.proname like 'ariyalab\\_profiles\\_%'
+        group by r.rolname order by r.rolname`
+    );
+    expect(priv).toEqual([{ rolname: 'anon', ok: true }, { rolname: 'authenticated', ok: true }]);
+  });
+
   it('anon gained nothing', async () => {
     await expect(as(db, 'anon', `update public.profiles set display_name = 'x'`)).rejects.toThrow(/permission denied/);
   });
@@ -179,9 +193,9 @@ describe('the guard holds whatever the grants look like', () => {
       await db.exec(`${TABLE} grant select, insert, update on public.profiles to authenticated;`);
       await db.exec(POLICY);
       const check = `select tgenabled from pg_trigger
-                      where tgrelid = 'public.profiles'::regclass and tgname = 'ariyalab_profiles_customer_guard'`;
+                      where tgrelid = 'public.profiles'::regclass and tgname = 'zz_ariyalab_profiles_customer_guard'`;
       expect((await db.query(check)).rows[0].tgenabled).toBe('O');
-      await db.exec('alter table public.profiles disable trigger ariyalab_profiles_customer_guard');
+      await db.exec('alter table public.profiles disable trigger zz_ariyalab_profiles_customer_guard');
       expect((await db.query(check)).rows[0].tgenabled).toBe('D');
       // Re-applying the migration turns it back on.
       await db.exec(POLICY);

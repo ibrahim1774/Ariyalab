@@ -41,7 +41,8 @@ const { getEntitlement, reserveCredits, refundCredits, settleReservation, decrem
   '../lib/entitlement'
 );
 const { verifyJobToken, signJobId } = await import('../lib/jobToken');
-const { reconcileLegacyHolds } = await import('../lib/legacyHolds');
+const { reconcileLegacyHolds, recordHold, attachJob, endHold } = await import('../lib/legacyHolds');
+const { holdCredits, releaseHold } = await import('../lib/credits.js');
 const swap = (await import('../pages/api/swap')).default;
 const cronLegacyHolds = (await import('../pages/api/cron/legacy-holds')).default;
 const { KEY } = await import('../lib/metaKeys');
@@ -507,5 +508,145 @@ describe('round 1: migrated customers cannot spend on the legacy path (F-I5)', (
     } finally {
       await db.query(`delete from public.credit_legacy_migrations where customer_id = 'cus_test'`);
     }
+  });
+});
+
+// ---------------------------------------------------------------- round 2
+
+describe('round 2: the reconciler gives up on time and nothing starves the batch (P2, P6, P9)', () => {
+  async function mk({ amount = 5, route = 'image-to-video', provider = null, job = null, ageMin = 0, status = null, hold = true } = {}) {
+    const holdId = randomUUID();
+    if (hold) await holdCredits({ userId: user.id, currency: 'video', amount, projectId: null, holdId });
+    await recordHold({ holdId, userId: user.id, currency: 'video', amount, route });
+    if (provider) await attachJob(holdId, { provider, jobId: job });
+    if (status) await db.query('update public.credit_legacy_holds set status = $2 where hold_id = $1', [holdId, status]);
+    await db.query('update public.credit_legacy_holds set created_at = now() - make_interval(mins => $2) where hold_id = $1', [holdId, ageMin]);
+    return holdId;
+  }
+  const st = async (h) => (await db.query('select status from public.credit_legacy_holds where hold_id = $1', [h])).rows[0]?.status;
+  const throwing = async () => {
+    throw new Error('task not found');
+  };
+
+  it('a kie job whose status read keeps failing is released after the cap (holds probe row c)', async () => {
+    await grant(100);
+    const c = await mk({ provider: 'kie', job: 'k_404', ageMin: 3000 });
+    await reconcileLegacyHolds({ getKie: throwing });
+    expect(await st(c)).toBe('released');
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 100 });
+  });
+
+  it('a failing row does not block the others, even one row per run (hol probe)', async () => {
+    await grant(100);
+    const stuck = await mk({ provider: 'kie', job: 'k_err', ageMin: 30 }); // inside the cap, read fails
+    const fresh = await mk({ ageMin: 60 }); // never submitted: due for release
+    for (let i = 0; i < 3; i += 1) await reconcileLegacyHolds({ limit: 1, getKie: throwing });
+    expect(await st(fresh)).toBe('released');
+    expect(await st(stuck)).toBe('open');
+    const { rows } = await db.query('select attempts from public.credit_legacy_holds where hold_id = $1', [stuck]);
+    expect(rows[0].attempts).toBeGreaterThanOrEqual(1);
+  });
+
+  it('a settle_retry with no job id is settled, not released (ref legacy:<route>:<hold id>)', async () => {
+    await grant(100);
+    const f = await mk({ route: 'character-frame', amount: 21, ageMin: 11, status: 'settle_retry' });
+    await reconcileLegacyHolds();
+    expect(await st(f)).toBe('settled');
+    const { rows } = await db.query(`select ref from public.credit_ledger where user_id = $1 and op = 'settle'`, [user.id]);
+    expect(rows).toEqual([{ ref: `legacy:character-frame:${f}` }]);
+  });
+
+  it("'reserving' records: an orphaned hold is released; a record whose hold never happened is deleted", async () => {
+    await grant(100);
+    const orphan = await mk({ ageMin: 20, status: 'reserving' });
+    const never = await mk({ ageMin: 20, status: 'reserving', hold: false });
+    await reconcileLegacyHolds();
+    expect(await st(orphan)).toBe('released');
+    expect(await st(never)).toBeUndefined();
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 100 });
+  });
+
+  it('reserveCredits records the intent before holding: a failed record holds nothing', async () => {
+    await grant(100);
+    const ent = await entitlementFor();
+    failOn.add('credit_legacy_hold_open');
+    await expect(reserveCredits(ent, 10, { route: 'test' })).rejects.toThrow();
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 100 });
+    const { rows } = await db.query('select count(*)::int as n from public.credit_holds where user_id = $1', [user.id]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('a successful job whose hold was already released is charged directly with the same ref (P9)', async () => {
+    await grant(100);
+    const g = await mk({ amount: 10 });
+    await releaseHold({ holdId: g });
+    await endHold({ hold: { holdId: g, amount: 10, route: 'image-to-video', userId: user.id, currency: 'video' }, jobId: 'k_late', failed: false });
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 90 });
+    // Settled normally first, then reported closed again: charged once.
+    const h = await mk({ amount: 10 });
+    await endHold({ hold: { holdId: h, amount: 10, route: 'image-to-video', userId: user.id, currency: 'video' }, jobId: 'k_twice', failed: false });
+    await endHold({ hold: { holdId: h, amount: 10, route: 'image-to-video', userId: user.id, currency: 'video' }, jobId: 'k_twice', failed: false });
+    expect(await getBalance(user.id)).toMatchObject({ available: 80 });
+  });
+});
+
+describe('round 2: /api/status treats every kie vendor as kie (P8)', () => {
+  it("a legacy job polled with vendor 'kie-seedance' that fails after the switch is refunded", async () => {
+    setMetadata({ [KEY.pendingJobs]: 'old-seed:100' });
+    kieMocks.getKiePrediction.mockImplementation(async () => ({ state: 'fail', failMsg: 'x' }));
+    await call(status, { method: 'GET', query: { predictionId: signJobId(user.id, 'old-seed'), vendor: 'kie-seedance' } });
+    expect(kieMocks.getKiePrediction).toHaveBeenCalledWith('old-seed');
+    expect(await getBalance(user.id)).toMatchObject({ topup: 21 });
+  });
+});
+
+describe('round 2: a swap claim is undone when the job does not start (P4)', () => {
+  const HYBRID = 'https://replicate.delivery/hybrid.jpg';
+  const VIDEO = 'https://x.test/v.mp4';
+  async function frame() {
+    await grant(100);
+    const res = await call(characterFrame, {
+      body: { firstFrameUrl: 'https://x.test/f.jpg', referenceImageUrl: 'https://x.test/r.jpg', sourceVideoUrl: VIDEO, swapMode: 'face' },
+    });
+    replicateMocks.getPrediction.mockImplementation(async (id) =>
+      id === 'frame-pred-1' ? { status: 'succeeded', output: HYBRID } : { status: 'processing' }
+    );
+    return { imageUrl: HYBRID, videoUrl: VIDEO, swapToken: res.body.swapToken };
+  }
+
+  it('the provider refuses the job: the claim is rolled back and a retry starts', async () => {
+    const body = await frame();
+    replicateMocks.createMotionTransferPrediction.mockImplementationOnce(async () => {
+      throw new Error('replicate down');
+    });
+    expect((await call(swap, { body })).statusCode).toBe(500);
+    const { rows } = await db.query('select count(*)::int as n from public.credit_swap_uses where user_id = $1', [user.id]);
+    expect(rows[0].n).toBe(0);
+    replicateMocks.createMotionTransferPrediction.mockImplementation(async () => ({ id: 'swap-ok', status: 'starting' }));
+    const retry = await call(swap, { body });
+    expect(retry.statusCode).toBe(200);
+  });
+
+  it('a claim left without a job id for more than 2 minutes counts as failed', async () => {
+    const body = await frame();
+    await db.query(
+      `insert into public.credit_swap_uses (user_id, frame_id, swap_id, count, updated_at)
+       values ($1, 'frame-pred-1', null, 1, now() - interval '3 minutes')`,
+      [user.id]
+    );
+    replicateMocks.createMotionTransferPrediction.mockImplementation(async () => ({ id: 'swap-new', status: 'starting' }));
+    const res = await call(swap, { body });
+    expect(res.statusCode).toBe(200);
+    const { rows } = await db.query('select swap_id, count from public.credit_swap_uses where user_id = $1', [user.id]);
+    expect(rows).toEqual([{ swap_id: 'swap-new', count: 2 }]);
+  });
+
+  it('a fresh claim without a job id still answers 409 (a swap is starting)', async () => {
+    const body = await frame();
+    await db.query(
+      `insert into public.credit_swap_uses (user_id, frame_id, swap_id, count) values ($1, 'frame-pred-1', null, 1)`,
+      [user.id]
+    );
+    expect((await call(swap, { body })).statusCode).toBe(409);
   });
 });

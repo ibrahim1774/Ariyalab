@@ -937,7 +937,7 @@ export default function Ugc3Page() {
                 if (next === 'standard') setDuration((d) => snapToStandardPreset(d));
               }}
             />
-            <ResolutionPicker
+            <ResolutionPicker billing={entitlement?.billing}
               model={model}
               resolution={resolution}
               audio={audio}
@@ -946,7 +946,7 @@ export default function Ugc3Page() {
                 setAudio(next.audio);
               }}
             />
-            <DurationSlider
+            <DurationSlider billing={entitlement?.billing}
               value={duration}
               onChange={setDuration}
               model={model}
@@ -1190,7 +1190,7 @@ export default function Ugc3Page() {
                 if (next === 'standard') setDuration((d) => snapToStandardPreset(d));
               }}
             />
-          <ResolutionPicker
+          <ResolutionPicker billing={entitlement?.billing}
             model={model}
             resolution={resolution}
             audio={audio}

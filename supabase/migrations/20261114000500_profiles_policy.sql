@@ -4,7 +4,10 @@
 -- ============================================================================
 --
 -- WHAT IT CHANGES (additive: one function, one trigger, no grant changes)
---   A BEFORE INSERT OR UPDATE trigger on public.profiles refuses any change
+--   A BEFORE INSERT OR UPDATE trigger on public.profiles
+--   (zz_ariyalab_profiles_customer_guard: named to run after any other BEFORE
+--   trigger, so a trigger that rewrites the row cannot slip a change past it)
+--   refuses any change
 --   of stripe_customer_id made by the browser roles (`anon`,
 --   `authenticated`): setting it on insert, or changing it on update (to
 --   another value or to null). It raises SQLSTATE 42501 with a message
@@ -32,7 +35,7 @@
 --
 -- AFTER APPLYING (and again before turning billing_v2 on):
 --   select tgenabled from pg_trigger
---    where tgrelid = 'public.profiles'::regclass and tgname = 'ariyalab_profiles_customer_guard';
+--    where tgrelid = 'public.profiles'::regclass and tgname = 'zz_ariyalab_profiles_customer_guard';
 --   must return one row with 'O' (or 'A'). 'D' means disabled: re-apply this file.
 --
 -- The migration ends with a hard check that the trigger exists and is
@@ -41,7 +44,7 @@
 -- whole migration is rolled back.
 --
 -- ROLL BACK:
---   drop trigger if exists ariyalab_profiles_customer_guard on public.profiles;
+--   drop trigger if exists zz_ariyalab_profiles_customer_guard on public.profiles;
 --   drop function if exists public.ariyalab_profiles_customer_guard();
 --   drop function if exists public.ariyalab_profiles_customer_check(text, text, text);
 --   drop function if exists public.ariyalab_profiles_customer_unchanged(uuid, text);
@@ -140,21 +143,34 @@ begin
     return;
   end if;
 
-  if not exists (select 1 from pg_trigger where tgrelid = v_rel and tgname = 'ariyalab_profiles_customer_guard') then
-    create trigger ariyalab_profiles_customer_guard
+  if not exists (select 1 from pg_trigger where tgrelid = v_rel and tgname = 'zz_ariyalab_profiles_customer_guard') then
+    create trigger zz_ariyalab_profiles_customer_guard
       before insert or update on public.profiles
       for each row execute function public.ariyalab_profiles_customer_guard();
   end if;
   -- Re-applying turns a disabled guard back on (that needs the table owner).
-  if exists (select 1 from pg_trigger where tgrelid = v_rel and tgname = 'ariyalab_profiles_customer_guard' and tgenabled = 'D') then
-    alter table public.profiles enable trigger ariyalab_profiles_customer_guard;
+  if exists (select 1 from pg_trigger where tgrelid = v_rel and tgname = 'zz_ariyalab_profiles_customer_guard' and tgenabled = 'D') then
+    alter table public.profiles enable trigger zz_ariyalab_profiles_customer_guard;
+  end if;
+
+  -- The trigger runs the helpers as the caller: the browser roles need EXECUTE
+  -- (additive; PUBLIC usually has it already).
+  if exists (select 1 from pg_roles where rolname = 'anon') then
+    grant execute on function public.ariyalab_profiles_customer_check(text, text, text),
+                              public.ariyalab_profiles_customer_unchanged(uuid, text),
+                              public.ariyalab_profiles_customer_guard() to anon;
+  end if;
+  if exists (select 1 from pg_roles where rolname = 'authenticated') then
+    grant execute on function public.ariyalab_profiles_customer_check(text, text, text),
+                              public.ariyalab_profiles_customer_unchanged(uuid, text),
+                              public.ariyalab_profiles_customer_guard() to authenticated;
   end if;
 
   -- Hard check: the trigger exists and fires for ordinary sessions.
   select tgenabled into v_enabled from pg_trigger
-   where tgrelid = v_rel and tgname = 'ariyalab_profiles_customer_guard';
+   where tgrelid = v_rel and tgname = 'zz_ariyalab_profiles_customer_guard';
   if v_enabled is null or v_enabled not in ('O', 'A') then
-    raise exception 'ariyalab_profiles_customer_guard is missing or disabled (tgenabled=%)', v_enabled;
+    raise exception 'zz_ariyalab_profiles_customer_guard is missing or disabled (tgenabled=%)', v_enabled;
   end if;
 
   -- Self-test as authenticated, where the applying role may become it.

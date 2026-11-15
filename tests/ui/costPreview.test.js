@@ -28,4 +28,18 @@ describe('cost previews follow the billing flag', () => {
     const v2 = renderToStaticMarkup(<ResolutionPicker model="studio-pro" resolution="1080p" audio billing="v2" />);
     expect(v2).toContain('21 cr/sec');
   });
+
+  it('round 2: the v2 per-second rate is not rounded (it agrees with the charged total)', () => {
+    const v2 = renderToStaticMarkup(<ResolutionPicker model="standard" resolution="480p" audio billing="v2" />);
+    expect(v2).toContain('3.15 cr/sec'); // 15/s x 0.21; 5 s is charged ceil(15.75) = 16
+  });
+
+  it('round 2: /ugc-3 passes the billing flag to its pickers', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync(new URL('../../pages/ugc-3/index.js', import.meta.url), 'utf8');
+    const tags = src.match(/<(DurationSlider|ResolutionPicker)\b[^>]*/g) || [];
+    expect(tags.length).toBeGreaterThan(0);
+    for (const t of tags) expect(t).toContain('billing={entitlement?.billing}');
+    expect(src).not.toMatch(/costForDuration\(duration, model, resolution, audio\)/);
+  });
 });
