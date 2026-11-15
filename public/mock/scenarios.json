@@ -118,28 +118,6 @@
      ]
     },
     {
-     "id": "c3",
-     "name": "Mr. Hall",
-     "description": "The older barber with a grey beard who taught Marcus the trade",
-     "status": "ready",
-     "chosen_index": null,
-     "regens_used": 0,
-     "candidates": [
-      {
-       "url": "/mock/cast-hall-0.jpg",
-       "key": "hall0"
-      },
-      {
-       "url": "/mock/cast-hall-1.jpg",
-       "key": "hall1"
-      },
-      {
-       "url": "/mock/cast-hall-2.jpg",
-       "key": "hall2"
-      }
-     ]
-    },
-    {
      "id": "c4",
      "name": "Little Jay",
      "description": "A boy who counts the line",
