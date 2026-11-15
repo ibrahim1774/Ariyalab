@@ -57,6 +57,12 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
   const short = comparable && available < total ? total - available : 0;
 
   const lines = quote?.lines || [];
+  // With a server quote the label describes what was quoted (the shots), not the brief.
+  const qualities = [...new Set(shots.map((s) => s.quality))];
+  const subLabel =
+    quote && shots.length > 0
+      ? `${shots.length} ${shots.length === 1 ? 'shot' : 'shots'}, ${shots.reduce((n, s) => n + (s.seconds || 0), 0)} seconds, ${qualities.length === 1 ? QUALITY_LABELS[qualities[0]] || qualities[0] : 'Mixed quality'}`
+      : `${QUALITY_LABELS[project.quality] || project.quality}, ${project.seconds} seconds`;
   return (
     <section className={styles.bar} aria-label="Credit estimate" data-testid="quote-bar">
       <div className={styles.row}>
@@ -64,7 +70,7 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
           <span className={styles.label}>{quote ? 'Quote for this video' : 'Estimated cost'}</span>
           <strong className={styles.total} data-testid="quote-total">{count(total)} credits</strong>
           <span className={styles.meta}>
-            {QUALITY_LABELS[project.quality] || project.quality}, {project.seconds} seconds
+            {subLabel}
           </span>
         </div>
         {billing && typeof available === 'number' && (

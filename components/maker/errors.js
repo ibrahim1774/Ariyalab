@@ -6,6 +6,16 @@ export function signInHref(returnTo) {
   return `/sign-in?returnTo=${encodeURIComponent(path)}`;
 }
 
+const LIMIT_NOUN = { script_write: ['script', 'scripts'], project_create: ['new video', 'new videos'], reference_analysis: ['video analysis', 'video analyses'] };
+
+/** Says what the daily limit counts when the server tells us the limit and the action. */
+function dailyLimitMessage(body) {
+  const n = Number(body?.limit);
+  if (!Number.isFinite(n)) return 'You have reached today\u2019s limit. Come back tomorrow, or pick a plan for more.';
+  const [one, many] = LIMIT_NOUN[body?.action] || ['try', 'tries'];
+  return `You have used your ${n} ${n === 1 ? one : many} for today. Come back tomorrow, or pick a plan for more.`;
+}
+
 const num = (n) => Number(n || 0).toLocaleString();
 
 /**
@@ -20,7 +30,7 @@ export function describeError(err, { returnTo } = {}) {
 
   // Codes first: the same status can mean different things (a 429 is a daily limit or a chat limit).
   if (code === 'daily_limit') {
-    return { ...out, title: 'Daily limit reached', message: Number.isFinite(Number(err?.body?.limit)) ? `You have reached the limit of ${Number(err.body.limit)} for today. Come back tomorrow, or pick a plan for more.` : 'You have reached today\u2019s limit. Come back tomorrow, or pick a plan for more.', action: { label: 'See plans', href: '/app/billing' } };
+    return { ...out, title: 'Daily limit reached', message: dailyLimitMessage(err?.body), action: { label: 'See plans', href: '/app/billing' } };
   }
   if (code === 'chat_limit') {
     return { ...out, title: 'Chat limit reached', message: 'This video has used all its included changes.', action: { label: 'See plans', href: '/app/billing' } };

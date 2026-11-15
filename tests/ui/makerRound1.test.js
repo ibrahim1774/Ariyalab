@@ -342,9 +342,23 @@ describe('quote strip', () => {
 });
 
 describe('round 2', () => {
-  it('daily_limit uses the limit from the error body when there is one', () => {
-    const d = describeError(new StoryApiError({ status: 429, code: 'daily_limit', body: { limit: 5 } }));
-    expect(d.message).toBe('You have reached the limit of 5 for today. Come back tomorrow, or pick a plan for more.');
+  it('daily_limit says what it counts, from the error body', () => {
+    const e = (body) => describeError(new StoryApiError({ status: 429, code: 'daily_limit', body }));
+    expect(e({ limit: 5, action: 'script_write' }).message).toBe('You have used your 5 scripts for today. Come back tomorrow, or pick a plan for more.');
+    expect(e({ limit: 3, action: 'project_create' }).message).toBe('You have used your 3 new videos for today. Come back tomorrow, or pick a plan for more.');
+    expect(e({ limit: 1, action: 'reference_analysis' }).message).toBe('You have used your 1 video analysis for today. Come back tomorrow, or pick a plan for more.');
+    expect(e({ limit: 5 }).message).toBe('You have used your 5 tries for today. Come back tomorrow, or pick a plan for more.');
+  });
+
+  it('QuoteBar builds its sub-label from the quote and the shots, not the brief', async () => {
+    client.getQuote.mockResolvedValue({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro narrated shots', credits: 420 }] });
+    const shots = Array.from({ length: 10 }, (_, i) => shot(i + 1, { seconds: 3 }));
+    const { rerender } = render(<QuoteBar project={project({ seconds: 75, quality: 'standard' })} shots={shots} />);
+    await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('510 credits'));
+    expect(screen.getByText('10 shots, 30 seconds, Pro narrated')).toBeInTheDocument();
+    const mixed = shots.map((s, i) => (i === 0 ? { ...s, quality: 'standard' } : s));
+    rerender(<QuoteBar project={project()} shots={mixed} />);
+    await waitFor(() => expect(screen.getByText('10 shots, 30 seconds, Mixed quality')).toBeInTheDocument());
   });
 
   it('useMediaQuery answers from matchMedia on the very first render', async () => {
