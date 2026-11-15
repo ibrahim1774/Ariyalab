@@ -5,13 +5,15 @@
  * Live cost reflects model × resolution × audio.
  */
 
-import { costForGeneration } from '../lib/cost';
+import { costForBilling } from '../lib/cost';
 
 export const STANDARD_DURATION_PRESETS = [4, 6, 12];
 
 // Convenience helper for callers that compute cost outside the slider.
-export function costForDuration(seconds, model = 'standard', resolution = '480p', audio = false) {
-  return costForGeneration({ seconds, model, resolution, audio });
+// `billing` is the entitlement's flag ('v2' = ledger credits, the price the
+// server charges then; anything else = legacy credits).
+export function costForDuration(seconds, model = 'standard', resolution = '480p', audio = false, billing = null) {
+  return costForBilling(billing, { seconds, model, resolution, audio });
 }
 
 export function snapToStandardPreset(d) {
@@ -32,8 +34,9 @@ export default function DurationSlider({
   model = 'standard',
   resolution = '480p',
   audio = false,
+  billing = null,
 }) {
-  const cost = costForGeneration({ seconds: value, model, resolution, audio });
+  const cost = costForBilling(billing, { seconds: value, model, resolution, audio });
   const isStandard = model === 'standard';
 
   return (

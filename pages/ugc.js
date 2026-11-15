@@ -160,7 +160,7 @@ export default function UgcPage() {
     if (authUser) fetchEntitlement();
   }, [authUser, fetchEntitlement]);
 
-  const cost = costForDuration(duration, model, resolution, audio);
+  const cost = costForDuration(duration, model, resolution, audio, entitlement?.billing);
   const storyScenes = story?.scenes || [];
   const latestScene = storyScenes[storyScenes.length - 1] || null;
   const atSceneCap = storyScenes.length >= MAX_SCENES;
@@ -896,7 +896,7 @@ export default function UgcPage() {
                 if (next === 'standard') setDuration((d) => snapToStandardPreset(d));
               }}
             />
-            <ResolutionPicker
+            <ResolutionPicker billing={entitlement?.billing}
               model={model}
               resolution={resolution}
               audio={audio}
@@ -905,7 +905,7 @@ export default function UgcPage() {
                 setAudio(next.audio);
               }}
             />
-            <DurationSlider
+            <DurationSlider billing={entitlement?.billing}
               value={duration}
               onChange={setDuration}
               model={model}
@@ -1148,7 +1148,7 @@ export default function UgcPage() {
                 if (next === 'standard') setDuration((d) => snapToStandardPreset(d));
               }}
             />
-          <ResolutionPicker
+          <ResolutionPicker billing={entitlement?.billing}
             model={model}
             resolution={resolution}
             audio={audio}

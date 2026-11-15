@@ -200,7 +200,7 @@ describe('every admin surface uses the gate', () => {
 
   it('the /admin page checks on the server', async () => {
     const ctx = () => ({ req: { headers: {} }, res: { setHeader() {}, getHeader() {} }, resolvedUrl: '/admin' });
-    expect(await adminPageProps(ctx())).toEqual({ props: { gate: 'ok', adminEmail: ADMIN.email } });
+    expect(await adminPageProps(ctx())).toMatchObject({ props: { gate: 'ok', adminEmail: ADMIN.email } });
     unconfirmed();
     expect(await adminPageProps(ctx())).toEqual({ props: { gate: 'forbidden', adminEmail: null } });
     delete process.env.ADMIN_EMAILS;
@@ -247,9 +247,10 @@ describe('pages/api/admin/grant-credits.js', () => {
     expect(await getBalance(t.id)).toMatchObject({ topup: 40, plan: 0 });
     // A user on the third page: the search followed nextPage to the end.
     expect(S.listCalls).toBeGreaterThanOrEqual(3);
-    // The same ref for a different amount is a different operation.
-    const conflict = await grant({ email: t.email, credits: 41, ref });
-    expect(conflict.statusCode).toBe(409);
+    // A used ref grants nothing more, whatever the amount.
+    const reused = await grant({ email: t.email, credits: 41, ref });
+    expect(reused.body.already).toBe(true);
+    expect(await getBalance(t.id)).toMatchObject({ topup: 40 });
     expect(S.updates).toEqual([]);
   });
 
@@ -293,5 +294,35 @@ describe('pages/api/admin/grant-credits.js', () => {
     const res = await grant({ email: t.email, credits: 5, ref: randomUUID() });
     expect(res.statusCode).toBe(404);
     expect(res.body.code).toBe('NO_CUSTOMER');
+  });
+});
+
+describe('round 1 minors', () => {
+  it('only email_confirmed_at counts as a confirmed email', async () => {
+    const { isConfirmedAdmin } = await import('../../lib/adminEmails.js');
+    expect(isConfirmedAdmin({ email: ADMIN.email, confirmed_at: CONFIRMED })).toBe(false);
+    expect(isConfirmedAdmin({ email: ADMIN.email, email_confirmed_at: CONFIRMED })).toBe(true);
+  });
+
+  it('a grant ref is used once across all users (billing_v2)', async () => {
+    await setV2(true);
+    const a = { id: randomUUID(), email: `a-${randomUUID()}@example.test` };
+    const b = { id: randomUUID(), email: `b-${randomUUID()}@example.test` };
+    S.users = [a, b];
+    const ref = randomUUID();
+    expect((await call(grantCreditsRoute, { body: { email: a.email, credits: 10, ref } })).statusCode).toBe(200);
+    const reused = await call(grantCreditsRoute, { body: { email: b.email, credits: 10, ref } });
+    expect(reused.statusCode).toBe(200);
+    expect(reused.body.already).toBe(true);
+    expect((await getBalance(a.id)).available).toBe(10);
+    expect((await getBalance(b.id)).available).toBe(0);
+  });
+
+  it('the admin page says which credits a grant adds', async () => {
+    const ctx = { req: { headers: {} }, res: { setHeader() {}, getHeader() {} }, resolvedUrl: '/admin' };
+    await setV2(true);
+    expect((await adminPageProps(ctx)).props.billing).toBe('v2');
+    await setV2(false);
+    expect((await adminPageProps(ctx)).props.billing).toBe('legacy');
   });
 });

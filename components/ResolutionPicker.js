@@ -7,7 +7,7 @@
  * Live credit cost on the CTA reflects whatever the user picks.
  */
 
-import { ratePerSecond } from '../lib/cost';
+import { ratePerSecond, legacyCreditsToV2 } from '../lib/cost';
 
 const RESOLUTIONS = ['480p', '720p', '1080p'];
 
@@ -17,12 +17,15 @@ export default function ResolutionPicker({
   audio = false,
   onChange,
   disabled = false,
+  billing = null,
 }) {
   const update = (patch) => {
     if (!onChange) return;
     onChange({ resolution, audio, ...patch });
   };
-  const currentRate = ratePerSecond({ model, resolution, audio });
+  // Under billing_v2 the rate is shown in the new credits the server charges.
+  const legacyRate = ratePerSecond({ model, resolution, audio });
+  const currentRate = billing === 'v2' ? legacyCreditsToV2(legacyRate) : legacyRate;
   return (
     <div style={wrapStyle}>
       <div style={labelRowStyle}>

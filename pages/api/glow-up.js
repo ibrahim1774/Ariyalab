@@ -4,6 +4,7 @@ import { getUserFromRequest } from '../../lib/supabaseServer';
 import {
   getImageEntitlement,
   reserveImageCredit,
+  attachImageJob,
   settleImageCredit,
   refundImageCredit,
   IMAGE_REFILL,
@@ -198,6 +199,7 @@ export default async function handler(req, res) {
     try {
       creditReserved = await reserveImageCredit(entitlement, { route: 'glow-up' });
     } catch (mdErr) {
+      if (mdErr.code === 'MIGRATED') return res.status(409).json({ error: mdErr.message, code: 'MIGRATED' });
       console.warn('[glow-up] credit reserve failed', mdErr.message);
       return res.status(500).json({ error: 'Could not reserve credit.' });
     }
@@ -246,6 +248,8 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: createData?.msg || 'Image generation failed.' });
     }
     const taskId = createData.data.taskId;
+    // billing_v2: record the kie task this hold pays for (lib/legacyHolds.js).
+    await attachImageJob(entitlement, taskId);
     console.log('[glow-up] task created', JSON.stringify({ taskId, mode, createMs: Date.now() - startedAt }));
 
     // 2. Poll recordInfo until state success, fail, or timeout.

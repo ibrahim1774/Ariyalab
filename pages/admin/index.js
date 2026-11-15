@@ -3,6 +3,7 @@ import Head from 'next/head';
 
 import styles from '../../styles/Home.module.css';
 import { checkAdmin } from '../../lib/adminGate';
+import { isBillingV2 } from '../../lib/billingFlags';
 
 /*
  * The admin page is checked on the server with the same gate as the admin
@@ -17,7 +18,11 @@ export async function getServerSideProps({ req, res, resolvedUrl }) {
       redirect: { destination: `/sign-in?returnTo=${encodeURIComponent(resolvedUrl || '/admin')}`, permanent: false },
     };
   }
-  if (gate.status === 200) return { props: { gate: 'ok', adminEmail: gate.user.email || null } };
+  if (gate.status === 200) {
+    // Which credits a manual grant adds (label only; the API decides).
+    const billing = (await isBillingV2()) ? 'v2' : 'legacy';
+    return { props: { gate: 'ok', adminEmail: gate.user.email || null, billing } };
+  }
   return { props: { gate: gate.status === 503 ? 'disabled' : 'forbidden', adminEmail: null } };
 }
 
@@ -26,7 +31,7 @@ function newGrantRef() {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
 }
 
-export default function AdminPage({ gate, adminEmail }) {
+export default function AdminPage({ gate, adminEmail, billing }) {
   if (gate !== 'ok') {
     return (
       <main className={styles.page}>
@@ -40,10 +45,11 @@ export default function AdminPage({ gate, adminEmail }) {
       </main>
     );
   }
-  return <AdminTools adminEmail={adminEmail} />;
+  return <AdminTools adminEmail={adminEmail} billing={billing} />;
 }
 
-function AdminTools({ adminEmail }) {
+function AdminTools({ adminEmail, billing }) {
+  const creditsLabel = billing === 'v2' ? 'credits (new)' : 'credits';
 
   const [email, setEmail] = useState('');
   const [credits, setCredits] = useState(12);
@@ -251,7 +257,7 @@ function AdminTools({ adminEmail }) {
 
           <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             <span style={{ fontSize: 12, letterSpacing: '0.18em', textTransform: 'uppercase', color: 'var(--text-dim)' }}>
-              Credits to add
+              {billing === 'v2' ? 'Credits (new) to add' : 'Credits to add'}
             </span>
             <input
               type="number"
@@ -292,7 +298,7 @@ function AdminTools({ adminEmail }) {
               transition: 'transform 0.18s, box-shadow 0.2s',
             }}
           >
-            {busy ? 'Granting…' : `Grant ${credits} credit${Number(credits) === 1 ? '' : 's'}`}
+            {busy ? 'Granting…' : `Grant ${credits} ${creditsLabel}`}
           </button>
         </form>
 

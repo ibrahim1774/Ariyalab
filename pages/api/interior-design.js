@@ -4,6 +4,7 @@ import { getUserFromRequest } from '../../lib/supabaseServer';
 import {
   getImageEntitlement,
   reserveImageCredit,
+  attachImageJob,
   settleImageCredit,
   refundImageCredit,
 } from '../../lib/entitlement';
@@ -247,6 +248,7 @@ export default async function handler(req, res) {
     try {
       creditReserved = await reserveImageCredit(entitlement, { route: 'interior-design' });
     } catch (mdErr) {
+      if (mdErr.code === 'MIGRATED') return res.status(409).json({ error: mdErr.message, code: 'MIGRATED' });
       console.warn('[interior-design] credit reserve failed', mdErr.message);
       return res.status(500).json({ error: 'Could not reserve credit.' });
     }
@@ -313,6 +315,8 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: createData?.msg || 'Generation failed.' });
     }
     const taskId = createData.data.taskId;
+    // billing_v2: record the kie task this hold pays for (lib/legacyHolds.js).
+    await attachImageJob(entitlement, taskId);
 
     // 2. Poll recordInfo until success / fail / timeout. Defensive
     // result-URL parsing matches lib/kie.js normalizeKieStatus.

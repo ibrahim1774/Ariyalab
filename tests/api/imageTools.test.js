@@ -14,7 +14,9 @@ const S = vi.hoisted(() => ({
   updates: [],
   user: null,
   customerId: 'cus_img',
+  customerCreated: Math.floor(Date.now() / 1000) - 3 * 86400,
   kie: { create: 'ok', record: 'success' },
+  tasks: 0,
   fetches: [],
 }));
 
@@ -22,7 +24,7 @@ vi.mock('../../lib/stripe', async (importOriginal) => {
   const actual = await importOriginal();
   const api = {
     customers: {
-      retrieve: async () => ({ id: S.customerId, metadata: { ...S.metadata } }),
+      retrieve: async () => ({ id: S.customerId, created: S.customerCreated, metadata: { ...S.metadata } }),
       // Stripe merges metadata: listed keys are set, '' removes a key.
       update: async (_id, { metadata }) => {
         S.updates.push({ ...metadata });
@@ -77,7 +79,8 @@ function fakeFetch(url) {
   const json = (body) => ({ ok: true, status: 200, text: async () => JSON.stringify(body) });
   if (/createTask|kontext\/generate/.test(url)) {
     if (S.kie.create === 'fail') return json({ code: 500, msg: 'kie down' });
-    return json({ code: 200, data: { taskId: 'task-1' } });
+    S.tasks += 1;
+    return json({ code: 200, data: { taskId: `task-${S.tasks}` } });
   }
   if (/recordInfo/.test(url)) {
     return json({
@@ -194,7 +197,7 @@ describe('billing_v2: image credits are ledger currency "image"', () => {
       `select ref from public.credit_ledger where user_id = $1 and currency = 'image' and op = 'settle'`,
       [S.user.id]
     );
-    expect(rows).toEqual([{ ref: 'legacy:glow-up:task-1' }]);
+    expect(rows).toEqual([{ ref: `legacy:glow-up:task-${S.tasks}` }]);
     expect(S.updates).toEqual([]);
   });
 
@@ -230,6 +233,41 @@ describe('billing_v2: image credits are ledger currency "image"', () => {
     expect(out.statusCode).toBe(402);
     expect(out.body).toEqual({ error: 'paywall', reason: 'image-credits-exhausted' });
     expect(S.fetches.filter((u) => /createTask/.test(u))).toHaveLength(30);
+  });
+});
+
+describe('round 1: v2 image allotment resets each window, anchored on the customer (M1)', () => {
+  beforeEach(() => setV2(true));
+  afterEach(() => vi.restoreAllMocks());
+
+  it('unused monthly image credits do not roll over; purchased ones stay', async () => {
+    subscribe();
+    S.customerCreated = Math.floor(Date.now() / 1000) - 3 * DAY / 1000;
+    await grantCredits({ userId: S.user.id, currency: 'image', amount: 50, bucket: 'topup', reason: 'test', ref: randomUUID() });
+    expect((await balanceGet()).body.imageCreditsRemaining).toBe(80);
+    for (let i = 0; i < 5; i += 1) expect((await generate()).statusCode).toBe(200);
+    expect(await imageBalance()).toMatchObject({ plan: 25, topup: 50 });
+    // 30 days later, the next window: the plan bucket is 30 again, not 55.
+    const later = Date.now() + 30 * DAY;
+    vi.spyOn(Date, 'now').mockReturnValue(later);
+    expect((await balanceGet()).body.imageCreditsRemaining).toBe(80);
+    expect(await imageBalance()).toMatchObject({ plan: 30, topup: 50 });
+    // A new subscription in the same window does not add another 30.
+    subscribe();
+    await balanceGet();
+    expect(await imageBalance()).toMatchObject({ plan: 30, topup: 50 });
+  });
+});
+
+describe('round 1: only this app\'s subscriptions count (dual-site customers)', () => {
+  it('a haelabs.live subscription listed first is skipped; alone it is no plan', async () => {
+    await setV2(true);
+    const haelabs = { id: 'sub_hae', status: 'active', start_date: Math.floor(Date.now() / 1000), items: { data: [{ price: { id: 'p_h', lookup_key: 'haelabs_monthly' } }] } };
+    S.subs = [haelabs];
+    expect((await generate()).statusCode).toBe(402);
+    subscribe();
+    S.subs = [haelabs, ...S.subs];
+    expect((await generate()).statusCode).toBe(200);
   });
 });
 

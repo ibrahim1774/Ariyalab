@@ -19,10 +19,11 @@ import { runOnce, GrantInProgressError } from '../../../lib/grants';
  *   - ref:     one id per submission (the admin page sends a fresh UUID per
  *              click). A retry with the same ref grants nothing more.
  *
+ * A ref is used once across ALL users (lib/grants.js runOnce on
+ * `admin-grant:<ref>`): re-sending it, even for another email, grants nothing.
  * billing_v2: a top-up grant in the ledger (reason admin_grant, ref
  * admin:<ref>); no Stripe customer needed. Legacy: adds to this app's credit
- * key on the user's Stripe customer, once per ref (lib/grants.js runOnce),
- * sending only that key.
+ * key on the user's Stripe customer, sending only that key.
  *
  * Returns: { ok, billing, added, ... } or { error, code } (codes: NO_USER,
  * NO_CUSTOMER, NOT_ADMIN).
@@ -66,14 +67,19 @@ export default async function handler(req, res) {
 
     if (await isBillingV2Strict()) {
       try {
-        const balance = await grantCredits({
-          userId: targetUser.id,
-          currency: 'video',
-          amount,
-          bucket: 'topup',
-          reason: REASON,
-          ref: `admin:${ref}`,
-        });
+        const balance = await runOnce(`admin-grant:${ref}`, () =>
+          grantCredits({
+            userId: targetUser.id,
+            currency: 'video',
+            amount,
+            bucket: 'topup',
+            reason: REASON,
+            ref: `admin:${ref}`,
+          })
+        );
+        if (balance === 'already') {
+          return res.status(200).json({ ok: true, already: true, billing: 'v2', supabaseUserId: targetUser.id });
+        }
         return res.status(200).json({
           ok: true,
           billing: 'v2',
@@ -85,6 +91,9 @@ export default async function handler(req, res) {
       } catch (err) {
         if (err instanceof RefConflictError) {
           return res.status(409).json({ error: 'This ref was already used for a different grant. Nothing was granted.' });
+        }
+        if (err instanceof GrantInProgressError) {
+          return res.status(409).json({ error: 'This grant is in progress. Try again in a couple of minutes.' });
         }
         throw err;
       }

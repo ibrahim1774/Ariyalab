@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { FACE_SWAP_COST, legacyCreditsToV2 } from '../lib/cost';
 import Script from 'next/script';
 
 import styles from '../styles/Home.module.css';
@@ -560,7 +561,7 @@ export default function Home() {
       entitlement.tier === 'yearly' ||
           entitlement.tier === 'admin') && (
           <PricingBanner
-            lines={[{ label: 'Face Swap', cost: '100 credits per swap' }]}
+            lines={[{ label: 'Face Swap', cost: `${entitlement?.billing === 'v2' ? legacyCreditsToV2(FACE_SWAP_COST) : FACE_SWAP_COST} credits per swap` }]}
           />
         )}
 
