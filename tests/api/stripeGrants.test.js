@@ -11,6 +11,7 @@ const S = vi.hoisted(() => {
     invoices: new Map(),
     charges: new Map(),
     disputes: new Map(),
+    paymentIntents: new Map(),
     failCustomerUpdates: 0,
     failSessionRetrieves: 0,
     created: [], // checkout.sessions.create params
@@ -103,6 +104,16 @@ const S = vi.hoisted(() => {
     },
     invoices: { retrieve: async (id) => clone(state.invoices.get(id)) },
     charges: { retrieve: async (id) => clone(state.charges.get(id)) },
+    paymentIntents: {
+      retrieve: async (id, { expand = [] } = {}) => {
+        const pi = clone(state.paymentIntents.get(id));
+        if (!pi) throw Object.assign(new Error(`No such payment_intent: ${id}`), { code: 'resource_missing' });
+        if (expand.includes('latest_charge') && typeof pi.latest_charge === 'string') {
+          pi.latest_charge = clone(state.charges.get(pi.latest_charge)) || pi.latest_charge;
+        }
+        return pi;
+      },
+    },
     disputes: {
       list: async ({ charge }) => ({ data: [...state.disputes.values()].filter((d) => d.charge === charge).map(clone) }),
     },
@@ -111,7 +122,7 @@ const S = vi.hoisted(() => {
   return { state, api };
 });
 
-const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false, users: [], endlessUsers: false }));
+const auth = vi.hoisted(() => ({ user: null, db: null, failProfileRead: false, users: [], endlessUsers: false, listCalls: 0 }));
 
 vi.mock('../../lib/stripe', async (importOriginal) => {
   const actual = await importOriginal();
@@ -129,13 +140,16 @@ vi.mock('../../lib/supabaseServer', () => {
     // pages/api/admin/heal-topups.js finds the account by email.
     auth: {
       admin: {
-        // Paginated like Supabase: `perPage` users per page, pages from 1.
+        // Paginated like Supabase: `perPage` users per page, pages from 1,
+        // and nextPage (null on the last page).
         listUsers: async ({ page = 1, perPage = 50 } = {}) => {
+          auth.listCalls += 1;
           if (auth.endlessUsers) {
             const users = Array.from({ length: perPage }, (_, i) => ({ id: `filler-${page}-${i}`, email: `filler-${page}-${i}@example.test` }));
-            return { data: { users }, error: null };
+            return { data: { users, nextPage: page + 1 }, error: null };
           }
-          return { data: { users: auth.users.slice((page - 1) * perPage, page * perPage) }, error: null };
+          const users = auth.users.slice((page - 1) * perPage, page * perPage);
+          return { data: { users, nextPage: page * perPage < auth.users.length ? page + 1 : null }, error: null };
         },
       },
     },
@@ -2392,5 +2406,137 @@ describe('round 5: B3 and B4, billing_v2 off', () => {
       linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, c, { via: 'ticket', forceAbandonEarlierMerge: true })
     ).rejects.toThrow('Your account is already linked to a different billing profile. Contact support so we can merge your new purchase.');
     expect(mdOf(a)[KEY.relinkCarry]).toBe('100:0');
+  });
+});
+
+// Task 6: the Task 5 minors on the admin merge (pages/api/admin/heal-topups.js)
+describe('task 6: heal-topups minors', () => {
+  beforeAll(async () => {
+    await setBillingV2(false);
+    await setRelinkMode('support');
+  });
+
+  it("accepts a session whose payment_status is 'no_payment_required'", async () => {
+    const { user, fresh } = await returningBuyer();
+    knownAccount(user);
+    const { session } = ticketSub(fresh, { email: user.email });
+    S.state.sessions.get(session.id).payment_status = 'no_payment_required';
+    const dry = await healAs({ sessionId: session.id });
+    expect(dry.statusCode).toBe(200);
+    expect(dry.body.payment.paymentStatus).toBe('no_payment_required');
+    S.state.sessions.get(session.id).payment_status = 'unpaid';
+    expect((await healAs({ sessionId: session.id })).statusCode).toBe(400);
+  });
+
+  it('the account search ends when Supabase reports no next page', async () => {
+    const saved = auth.users.splice(0);
+    try {
+      for (let i = 0; i < 1000; i += 1) auth.users.push({ id: `full-${i}`, email: `full-${i}@example.test` });
+      const { fresh } = await returningBuyer();
+      const { session } = ticketSub(fresh, { email: 'not-there@example.test' });
+      auth.listCalls = 0;
+      const none = await healAs({ sessionId: session.id });
+      expect(none.statusCode).toBe(404);
+      expect(auth.listCalls).toBe(1); // a full first page, but nextPage null: no second read
+    } finally {
+      auth.users.splice(0, auth.users.length, ...saved);
+    }
+  });
+
+  it('the override reason rides in the same Stripe write as the merge', async () => {
+    const { user, fresh } = await returningBuyer();
+    knownAccount(user);
+    const { session } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
+    const from = S.state.updates.length;
+    const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
+    expect(merged.statusCode).toBe(200);
+    const writes = S.state.updates.slice(from).filter((u) => u.id === fresh);
+    const mergeWrite = writes.find((u) => u.metadata[KEY.relinkedFrom]);
+    expect(mergeWrite.metadata[KEY.adminOverrideReason]).toBe(OVERRIDE.reason);
+    expect(writes.filter((u) => KEY.adminOverrideReason in u.metadata)).toHaveLength(1);
+  });
+
+  it('without a merge, a reason that cannot be written stops the link (never lost silently)', async () => {
+    const user = newUser();
+    knownAccount(user);
+    const customer = newCustomer({}, 'someone-else@example.test');
+    const session = topupSession({ customer, email: 'someone-else@example.test' });
+    S.state.failUpdatesFor.set(customer, 99);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
+      expect(res.statusCode).toBe(500);
+    } finally {
+      errors.mockRestore();
+      S.state.failUpdatesFor.delete(customer);
+    }
+    expect(await profileOf(user.id)).toBeNull();
+    expect(await recorded(`checkout:${session.id}:done`)).toBe(false); // nothing granted either
+    const from = S.state.updates.length;
+    const ok = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
+    expect(ok.statusCode).toBe(200);
+    expect(await profileOf(user.id)).toBe(customer);
+    expect(mdOf(customer)[KEY.adminOverrideReason]).toBe(OVERRIDE.reason);
+    // The reason is written first, before the grant and the link.
+    expect(S.state.updates.slice(from).filter((u) => u.id === customer)[0].metadata).toEqual({
+      [KEY.adminOverrideReason]: OVERRIDE.reason,
+    });
+  });
+
+  it('abandoned carries are kept as a list, not overwritten', async () => {
+    await setRelinkMode('auto');
+    try {
+      const user = newUser();
+      knownAccount(user);
+      const a = newCustomer({ [KEY.credits]: '100', [KEY.relinkAbandoned]: 'cus_earliest:7:0' });
+      const b = newCustomer();
+      await link(user.id, a);
+      S.state.failUpdatesFor.set(b, 1);
+      await expect(linkStripeCustomerToProfile(getSupabaseAdmin(), user.id, b, { via: 'admin' })).rejects.toThrow('stripe unavailable');
+      S.state.customers.get(b).deleted = true;
+      const c = newCustomer();
+      const { session } = ticketSub(c, { email: user.email });
+      const warns = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const forced = await healAs({ sessionId: session.id, dryRun: false, forceAbandonEarlierMerge: true });
+        expect(forced.statusCode).toBe(200);
+      } finally {
+        warns.mockRestore();
+      }
+      expect(mdOf(a)[KEY.relinkAbandoned]).toBe(`cus_earliest:7:0,${b}:100:0`);
+    } finally {
+      await setRelinkMode('support');
+    }
+  });
+
+  it("the dry run shows whether the session's charge was refunded or disputed", async () => {
+    const user = newUser();
+    knownAccount(user);
+    const customer = newCustomer({}, user.email);
+    const session = topupSession({ customer, buyer: user });
+    const chargeId = `ch_${randomUUID().slice(0, 10)}`;
+    S.state.charges.set(chargeId, { id: chargeId, amount: 1500, amount_refunded: 500, refunded: false, disputed: true });
+    S.state.paymentIntents.set(session.payment_intent, { id: session.payment_intent, latest_charge: chargeId });
+    const dry = await healAs({ sessionId: session.id });
+    expect(dry.statusCode).toBe(200);
+    expect(dry.body.charge).toEqual({ id: chargeId, amount: 1500, amountRefunded: 500, refunded: false, disputed: true });
+
+    // A subscription session: the charge of its first invoice.
+    const sub = subSession({ customer: newCustomer({}, user.email), email: user.email });
+    const invoiceCharge = `ch_${randomUUID().slice(0, 10)}`;
+    S.state.charges.set(invoiceCharge, { id: invoiceCharge, amount: 500, amount_refunded: 500, refunded: true, disputed: false });
+    const inv = `in_${randomUUID().slice(0, 10)}`;
+    S.state.invoices.set(inv, { id: inv, charge: invoiceCharge });
+    S.state.sessions.get(sub.id).invoice = inv;
+    const subDry = await healAs({ sessionId: sub.id });
+    expect(subDry.body.charge).toMatchObject({ id: invoiceCharge, refunded: true, amountRefunded: 500 });
+
+    // Nothing to look up is null; a lookup that fails is shown, and neither blocks the tool.
+    const none = topupSession({ customer: newCustomer({}, user.email), buyer: user, extra: { payment_intent: null } });
+    expect((await healAs({ sessionId: none.id })).body.charge).toBeNull();
+    const missing = topupSession({ customer: newCustomer({}, user.email), buyer: user });
+    const failed = await healAs({ sessionId: missing.id });
+    expect(failed.statusCode).toBe(200);
+    expect(failed.body.charge.error).toMatch(/check the payment in Stripe/);
   });
 });

@@ -1,30 +1,35 @@
 import { stripe } from '../../../lib/stripe';
-import { getUserFromRequest, getSupabaseAdmin } from '../../../lib/supabaseServer';
+import { getSupabaseAdmin } from '../../../lib/supabaseServer';
 import { KEY } from '../../../lib/metaKeys';
+import { requireAdmin, findUserByEmail, UserSearchIncompleteError } from '../../../lib/adminGate';
+import { isBillingV2Strict } from '../../../lib/billingFlags';
+import { grantCredits, RefConflictError } from '../../../lib/credits';
+import { runOnce, GrantInProgressError } from '../../../lib/grants';
 
 /*
- * Admin tool to manually grant credits to a user by email.
+ * Admin tool to manually grant video credits to a user by email.
  *
- * Gated by the existing ADMIN_EMAILS allowlist (defaults to
- * ibrahim3709@gmail.com — same list lib/entitlement.js uses for the
- * unlimited-admin tier).
+ * Gated by lib/adminGate.js (ADMIN_EMAILS must be set and the admin's email
+ * confirmed).
  *
- * Body: { email, credits }
- *   - email: target user email
- *   - credits: positive integer to ADD to their creditsRemaining
+ * Body: { email, credits, ref }
+ *   - email:   target user email (every page of users is searched)
+ *   - credits: positive integer to ADD (max 10000), in the units of the
+ *              active credit system (v2 credits when billing_v2 is on)
+ *   - ref:     one id per submission (the admin page sends a fresh UUID per
+ *              click). A retry with the same ref grants nothing more.
  *
- * Returns: { ok, beforeCredits, afterCredits, customerId, supabaseUserId }
- *   or { error, code } on failure (codes: NO_USER, NO_CUSTOMER, NOT_ADMIN).
+ * billing_v2: a top-up grant in the ledger (reason admin_grant, ref
+ * admin:<ref>); no Stripe customer needed. Legacy: adds to this app's credit
+ * key on the user's Stripe customer, once per ref (lib/grants.js runOnce),
+ * sending only that key.
+ *
+ * Returns: { ok, billing, added, ... } or { error, code } (codes: NO_USER,
+ * NO_CUSTOMER, NOT_ADMIN).
  */
 
-const DEFAULT_ADMIN_EMAILS = ['ibrahim3709@gmail.com'];
-function adminEmails() {
-  const raw = process.env.ADMIN_EMAILS;
-  if (raw && raw.trim()) {
-    return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  }
-  return DEFAULT_ADMIN_EMAILS.map((s) => s.toLowerCase());
-}
+const REASON = 'admin_grant';
+const REF_PATTERN = /^[A-Za-z0-9_-]{8,100}$/;
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
@@ -32,46 +37,60 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const session = await getUserFromRequest(req, res);
-  if (!session) return res.status(401).json({ error: 'Authentication required.' });
+  const gate = await requireAdmin(req, res);
+  if (!gate) return undefined;
 
-  const callerEmail = (session.user.email || '').toLowerCase();
-  if (!adminEmails().includes(callerEmail)) {
-    return res.status(403).json({ error: 'Admin only.', code: 'NOT_ADMIN' });
-  }
-
-  const { email, credits } = req.body || {};
+  const { email, credits, ref } = req.body || {};
   const targetEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
   const amount = Number.parseInt(credits, 10);
   if (!targetEmail) return res.status(400).json({ error: 'email required' });
   if (!Number.isFinite(amount) || amount <= 0 || amount > 10000) {
     return res.status(400).json({ error: 'credits must be a positive integer (max 10000)' });
   }
+  if (typeof ref !== 'string' || !REF_PATTERN.test(ref)) {
+    return res.status(400).json({ error: 'ref required: one id (8-100 letters, digits, - or _) per submission' });
+  }
 
   try {
     const admin = getSupabaseAdmin();
-
-    // Look up Supabase user by email. The auth.users table isn't directly
-    // queryable via the service-role client's normal `.from('users')`
-    // surface — use the admin auth API.
-    const { data: usersPage, error: listErr } = await admin.auth.admin.listUsers({
-      page: 1,
-      perPage: 1000,
-    });
-    if (listErr) {
-      return res.status(500).json({ error: `User lookup failed: ${listErr.message}` });
+    let targetUser;
+    try {
+      targetUser = await findUserByEmail(admin, targetEmail);
+    } catch (searchErr) {
+      if (!(searchErr instanceof UserSearchIncompleteError)) throw searchErr;
+      return res.status(503).json({ error: `${searchErr.message} Nothing was granted.` });
     }
-    const targetUser = (usersPage?.users || []).find(
-      (u) => (u.email || '').toLowerCase() === targetEmail
-    );
     if (!targetUser) {
-      return res.status(404).json({
-        error: `No Supabase user with email ${targetEmail}.`,
-        code: 'NO_USER',
-      });
+      return res.status(404).json({ error: `No Supabase user with email ${targetEmail}.`, code: 'NO_USER' });
     }
 
-    // Find their Stripe customer via profiles.
+    if (await isBillingV2Strict()) {
+      try {
+        const balance = await grantCredits({
+          userId: targetUser.id,
+          currency: 'video',
+          amount,
+          bucket: 'topup',
+          reason: REASON,
+          ref: `admin:${ref}`,
+        });
+        return res.status(200).json({
+          ok: true,
+          billing: 'v2',
+          email: targetUser.email,
+          supabaseUserId: targetUser.id,
+          added: amount,
+          balance,
+        });
+      } catch (err) {
+        if (err instanceof RefConflictError) {
+          return res.status(409).json({ error: 'This ref was already used for a different grant. Nothing was granted.' });
+        }
+        throw err;
+      }
+    }
+
+    // Legacy: the user's Stripe customer.
     const { data: profile, error: profileErr } = await admin
       .from('profiles')
       .select('stripe_customer_id')
@@ -89,29 +108,40 @@ export default async function handler(req, res) {
       });
     }
 
-    // Read current credits and add.
-    const customer = await stripe().customers.retrieve(customerId);
-    if (customer.deleted) {
+    let outcome;
+    try {
+      outcome = await runOnce(`admin-grant:${ref}`, async () => {
+        const customer = await stripe().customers.retrieve(customerId);
+        if (!customer || customer.deleted) return { deleted: true };
+        const before = Number.parseInt(customer.metadata?.[KEY.credits] || '0', 10) || 0;
+        const after = before + amount;
+        await stripe().customers.update(customerId, { metadata: { [KEY.credits]: String(after) } });
+        return { before, after };
+      });
+    } catch (err) {
+      if (err instanceof GrantInProgressError) {
+        return res.status(409).json({ error: 'This grant is in progress. Try again in a couple of minutes.' });
+      }
+      throw err;
+    }
+    if (outcome === 'already') {
+      return res.status(200).json({ ok: true, already: true, billing: 'legacy', supabaseUserId: targetUser.id, customerId });
+    }
+    if (outcome.deleted) {
       return res.status(404).json({ error: 'Stripe customer was deleted.', code: 'NO_CUSTOMER' });
     }
-    const md = customer.metadata || {};
-    const before = Number.parseInt(md[KEY.credits] || '0', 10) || 0;
-    const after = before + amount;
-    await stripe().customers.update(customerId, {
-      metadata: { ...md, [KEY.credits]: String(after) },
-    });
-
     return res.status(200).json({
       ok: true,
+      billing: 'legacy',
       email: targetUser.email,
       supabaseUserId: targetUser.id,
       customerId,
-      beforeCredits: before,
-      afterCredits: after,
+      beforeCredits: outcome.before,
+      afterCredits: outcome.after,
       added: amount,
     });
   } catch (err) {
     console.error('[admin/grant-credits] failed', err);
-    return res.status(500).json({ error: err.message || 'Grant failed.' });
+    return res.status(500).json({ error: 'Grant failed. See the server log.' });
   }
 }

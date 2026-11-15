@@ -1,9 +1,15 @@
 import { put } from '@vercel/blob';
 
-import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
-import { stripe } from '../../lib/stripe';
+import { getUserFromRequest } from '../../lib/supabaseServer';
+import {
+  getImageEntitlement,
+  reserveImageCredit,
+  settleImageCredit,
+  refundImageCredit,
+  IMAGE_REFILL,
+} from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
-import { KEY, nsEventId } from '../../lib/metaKeys';
+import { nsEventId } from '../../lib/metaKeys';
 import { screenText, screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
 
 /*
@@ -12,17 +18,13 @@ import { screenText, screenImage, ModerationError, moderationErrorResponse } fro
  * Architecture choices:
  *   - Auth: Supabase via getUserFromRequest (matches every other API
  *     route in the project; no NextAuth dependency).
- *   - Entitlement: read directly from Stripe customer metadata. We do
- *     NOT modify lib/entitlement.js. This route maintains its own
- *     IMAGE credit pool (`imageCreditsRemaining` + `imagePeriodStart`)
- *     on the same Stripe customer object — kept strictly separate
- *     from the existing video credit pool (`creditsRemaining`) used
- *     by face-swap / UGC / image-to-video. The two pools never mix.
- *     If image credits run out, the user must wait for refill (or
- *     top up — separate image top-up packs are not yet wired in).
+ *   - Entitlement: the shared image-credit entitlement in lib/entitlement.js
+ *     (getImageEntitlement / reserveImageCredit / settleImageCredit /
+ *     refundImageCredit). Image credits are a pool apart from video
+ *     credits and the two never mix: the ledger's 'image' currency under
+ *     billing_v2, `ariyalab_image_credits` in Stripe metadata otherwise.
  *   - Pool refill: 30 image credits every 30 days for any active sub
- *     (monthly OR yearly). Yearly users effectively get 30 fresh
- *     image credits each rolling month.
+ *     (monthly OR yearly). A refill never wipes purchased image packs.
  *   - Image gen: Nano Banana Pro (Google Gemini 3 Pro Image) via kie.ai's
  *     unified jobs API (POST /api/v1/jobs/createTask, polled via
  *     /jobs/recordInfo). input.image_input accepts up to 8 reference URLs,
@@ -37,10 +39,6 @@ import { screenText, screenImage, ModerationError, moderationErrorResponse } fro
  * page UI to show the remaining counter).
  * POST runs the full generation flow.
  */
-
-const PERIOD_DAYS = 30;
-const CREDITS_PER_PERIOD = 30;
-const PERIOD_MS = PERIOD_DAYS * 24 * 60 * 60 * 1000;
 
 const KIE_BASE = 'https://api.kie.ai/api/v1';
 // Nano Banana Pro (Google Gemini 3 Pro Image) via kie.ai's unified jobs API.
@@ -95,15 +93,6 @@ const PROMPTS = {
     "You are given reference photos of a person. Generate an ultra-realistic cinematic editorial portrait. CRITICAL: Keep the person's face, features, skin tone, eye color, and identity absolutely identical. Apply: dramatic Rembrandt lighting with deep shadows and highlights, commanding confident expression, editorial magazine cover aesthetic, desaturated filmic color grade, 50mm lens from a slight upward angle. Should look like a Forbes or luxury brand cover shoot.",
 };
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'ibrahim3709@gmail.com')
-  .split(',')
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
-
-function isPaidPlan(plan) {
-  return plan === 'monthly' || plan === 'pro' || plan === 'yearly';
-}
-
 export const config = {
   api: { bodyParser: { sizeLimit: '1mb' } },
   // This route blocks up to POLL_TIMEOUT_MS (120s) waiting on kie.ai. Without
@@ -123,38 +112,28 @@ export default async function handler(req, res) {
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Sign in first.' });
 
-  const userEmail = (session.user.email || '').toLowerCase();
-  const isAdmin = ADMIN_EMAILS.includes(userEmail);
-
-  const admin = getSupabaseAdmin();
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('stripe_customer_id')
-    .eq('id', session.user.id)
-    .maybeSingle();
-  const customerId = profile?.stripe_customer_id || null;
-
+  // Shared entitlement (lib/entitlement.js): image credits are the ledger's
+  // 'image' currency under billing_v2, Stripe metadata otherwise.
   let entitlement;
-  if (isAdmin) {
-    entitlement = {
-      tier: 'admin',
-      status: 'admin',
-      imageCreditsRemaining: 9999,
-      nextPeriodStart: Date.now(),
-      md: null,
-      activeSub: { id: 'admin' },
-    };
-  } else {
-    entitlement = await resolveEntitlement(customerId);
+  try {
+    entitlement = await getImageEntitlement({
+      supabase: session.supabase,
+      userId: session.user.id,
+      user: session.user,
+    });
+  } catch (err) {
+    console.error('[glow-up] entitlement failed', err);
+    return res.status(500).json({ error: 'Entitlement check failed.' });
   }
+  const isAdmin = Boolean(entitlement.isAdmin);
 
   if (req.method === 'GET') {
     return res.status(200).json({
       tier: entitlement.tier,
       status: entitlement.status,
       imageCreditsRemaining: entitlement.imageCreditsRemaining,
-      imagePeriodStart: entitlement.nextPeriodStart,
-      periodCap: CREDITS_PER_PERIOD,
+      imagePeriodStart: entitlement.imagePeriodStart,
+      periodCap: IMAGE_REFILL,
     });
   }
 
@@ -211,36 +190,25 @@ export default async function handler(req, res) {
     return res.status(402).json({ error: 'paywall' });
   }
 
-  // Image credits only — no fallback to the video credit pool.
-  let { imageCreditsRemaining: imageCredits } = entitlement;
-  if (!isAdmin) {
-    if (imageCredits > 0) {
-      imageCredits -= 1;
-    } else {
-      return res.status(402).json({ error: 'paywall', reason: 'image-credits-exhausted' });
-    }
-  }
-
-  // Reserve the credit BEFORE calling kie.ai so concurrent calls can't
-  // double-spend. Refund on any failure path below. Mirrors the
-  // pattern used by /api/ugc-image (reserveCredits/refundCredits).
+  // Image credits only — no fallback to the video credit pool. Reserved
+  // BEFORE calling kie.ai so concurrent calls can't double-spend; refunded on
+  // every failure path below.
   let creditReserved = false;
-  if (!isAdmin && customerId && entitlement.md) {
-    const reservedMd = { ...entitlement.md };
-    reservedMd[KEY.imageCredits] = String(imageCredits);
-    reservedMd[KEY.imagePeriodStart] = String(entitlement.nextPeriodStart);
+  if (!isAdmin) {
     try {
-      await stripe().customers.update(customerId, { metadata: reservedMd });
-      creditReserved = true;
+      creditReserved = await reserveImageCredit(entitlement, { route: 'glow-up' });
     } catch (mdErr) {
       console.warn('[glow-up] credit reserve failed', mdErr.message);
       return res.status(500).json({ error: 'Could not reserve credit.' });
+    }
+    if (!creditReserved) {
+      return res.status(402).json({ error: 'paywall', reason: 'image-credits-exhausted' });
     }
   }
 
   const kieKey = process.env.KIE_API_KEY;
   if (!kieKey) {
-    if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+    if (creditReserved) await refundImageCredit(entitlement);
     return res.status(500).json({ error: 'KIE_API_KEY is not configured.' });
   }
 
@@ -274,7 +242,7 @@ export default async function handler(req, res) {
     }
     if (!createRes.ok || createData.code !== 200 || !createData.data?.taskId) {
       console.error('[glow-up] kie.ai create failed', createRes.status, createText.slice(0, 500));
-      if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+      if (creditReserved) await refundImageCredit(entitlement);
       return res.status(502).json({ error: createData?.msg || 'Image generation failed.' });
     }
     const taskId = createData.data.taskId;
@@ -349,13 +317,21 @@ export default async function handler(req, res) {
           lastRec: lastRecSnippet,
         })
       );
-      if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+      if (creditReserved) await refundImageCredit(entitlement);
       const clientError = lastErr
         ? lastErr
         : timedOut
         ? 'Image generation timed out.'
         : 'Image generation failed.';
       return res.status(502).json({ error: clientError });
+    }
+
+    // The image exists: spend the held credit (billing_v2; the legacy path
+    // charged at reserve). A failed settle never fails the generation.
+    try {
+      await settleImageCredit(entitlement, taskId);
+    } catch (settleErr) {
+      console.error('[glow-up] settle failed', settleErr);
     }
 
     // 3. Re-upload kie.ai's CDN result to our own Blob store so the
@@ -401,85 +377,11 @@ export default async function handler(req, res) {
 
     return res.status(200).json({
       imageUrl: storedUrl,
-      imageCreditsRemaining: isAdmin ? 9999 : imageCredits,
+      imageCreditsRemaining: isAdmin ? 9999 : entitlement.imageCreditsRemaining,
     });
   } catch (err) {
     console.error('[glow-up] failed', err);
-    if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+    if (creditReserved) await refundImageCredit(entitlement);
     return res.status(500).json({ error: err.message || 'Generation failed.' });
   }
-}
-
-async function refundCredit({ customerId, isAdmin, md, nextPeriodStart }) {
-  if (isAdmin || !customerId || !md) return;
-  // Re-read current metadata before refund to avoid stomping a parallel
-  // write. The window between reserve and refund is small but real.
-  try {
-    const fresh = await stripe().customers.retrieve(customerId);
-    const freshMd = fresh && !fresh.deleted ? fresh.metadata || {} : {};
-    const next = { ...freshMd };
-    const cur = parseInt(freshMd[KEY.imageCredits] || '0', 10) || 0;
-    next[KEY.imageCredits] = String(cur + 1);
-    // Preserve whatever periodStart we wrote during reserve.
-    if (next[KEY.imagePeriodStart] == null) {
-      next[KEY.imagePeriodStart] = String(nextPeriodStart);
-    }
-    await stripe().customers.update(customerId, { metadata: next });
-  } catch (refundErr) {
-    console.warn('[glow-up] refund failed', refundErr.message);
-  }
-}
-
-async function resolveEntitlement(customerId) {
-  const empty = {
-    tier: 'none',
-    status: 'none',
-    imageCreditsRemaining: 0,
-    nextPeriodStart: Date.now(),
-    md: null,
-    activeSub: null,
-  };
-  if (!customerId) return empty;
-
-  const customer = await stripe().customers.retrieve(customerId);
-  if (!customer || customer.deleted) return empty;
-  const md = customer.metadata || {};
-  const plan = md[KEY.plan] || null;
-
-  const subs = await stripe().subscriptions.list({
-    customer: customerId,
-    status: 'all',
-    limit: 5,
-  });
-  const activeSub = subs.data.find(
-    (s) => s.status === 'active' || s.status === 'trialing'
-  );
-  const status = activeSub?.status || 'none';
-
-  if (!isPaidPlan(plan) || !activeSub) {
-    return {
-      ...empty,
-      tier: plan || 'none',
-      status,
-      md,
-    };
-  }
-
-  const now = Date.now();
-  const periodStart = parseInt(md[KEY.imagePeriodStart] || '0', 10) || 0;
-  let imageCredits = parseInt(md[KEY.imageCredits] || '0', 10) || 0;
-  let nextPeriodStart = periodStart;
-  if (!periodStart || now - periodStart >= PERIOD_MS) {
-    imageCredits = CREDITS_PER_PERIOD;
-    nextPeriodStart = now;
-  }
-
-  return {
-    tier: plan,
-    status,
-    imageCreditsRemaining: imageCredits,
-    nextPeriodStart,
-    md,
-    activeSub,
-  };
 }

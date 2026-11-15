@@ -14,23 +14,15 @@
 // Unattributed sessions come back in their own bucket.
 //
 // Auth: middleware already requires a Supabase session for /api/*; this
-// route additionally requires the caller to be on the admin allowlist.
+// route additionally requires an admin (lib/adminGate.js: ADMIN_EMAILS and a
+// confirmed email).
 
-import { getUserFromRequest } from '../../lib/supabaseServer';
+import { requireAdmin } from '../../lib/adminGate';
 
 export const config = { maxDuration: 60 };
 
-const DEFAULT_ADMIN_EMAILS = ['ibrahim3709@gmail.com'];
 const AD_ACCOUNT_ID = process.env.META_ADS_ACCOUNT_ID || 'act_1731743557488859';
 const GRAPH = 'https://graph.facebook.com/v21.0';
-
-function adminEmails() {
-  const raw = process.env.ADMIN_EMAILS;
-  if (raw && raw.trim()) {
-    return raw.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
-  }
-  return DEFAULT_ADMIN_EMAILS.map((s) => s.toLowerCase());
-}
 
 // Meta reports conversions as an actions list with overlapping rollups
 // ('purchase' aggregates the pixel/omni variants). Prefer the aggregate,
@@ -126,12 +118,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const session = await getUserFromRequest(req, res);
-  if (!session) return res.status(401).json({ error: 'Not signed in' });
-  const callerEmail = (session.user.email || '').toLowerCase();
-  if (!adminEmails().includes(callerEmail)) {
-    return res.status(403).json({ error: 'Not authorized' });
-  }
+  if (!(await requireAdmin(req, res))) return undefined;
 
   // ── range: unix seconds, defaults to the last 7 days ──
   const now = Math.floor(Date.now() / 1000);

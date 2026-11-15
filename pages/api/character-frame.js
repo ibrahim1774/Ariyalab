@@ -1,9 +1,9 @@
 import { createCharacterFramePrediction } from '../../lib/replicate';
 import { getUserFromRequest } from '../../lib/supabaseServer';
-import { getEntitlement, reserveCredits, refundCredits } from '../../lib/entitlement';
+import { getEntitlement, reserveCredits, refundCredits, settleReservation, usesLedger } from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
-import { FACE_SWAP_COST } from '../../lib/cost';
+import { FACE_SWAP_COST, legacyCreditsToV2 } from '../../lib/cost';
 import { signingConfigured, signJobId, signSwapToken } from '../../lib/jobToken';
 
 function isHttpUrl(value) {
@@ -42,11 +42,13 @@ export default async function handler(req, res) {
     entitlement = await getEntitlement({
       supabase: session.supabase,
       userId: session.user.id,
-      email: session.user.email,
+      user: session.user,
     });
   } catch (err) {
     return res.status(500).json({ error: `Entitlement check failed: ${err.message}` });
   }
+  // billing_v2 charges v2 credits (100 -> 21); the legacy path is unchanged.
+  const cost = usesLedger(entitlement) ? legacyCreditsToV2(COST) : COST;
 
   const { firstFrameUrl, referenceImageUrl, sourceVideoUrl, swapMode, mode: motionModeRaw } = req.body || {};
   // Motion quality for the later /api/swap; bound into the swap token.
@@ -66,14 +68,14 @@ export default async function handler(req, res) {
   // the predictionId and let the client poll /api/status — survives
   // tab close because Replicate keeps running on its own.
   try {
-    await reserveCredits(entitlement, COST);
+    await reserveCredits(entitlement, cost, { route: 'character-frame' });
   } catch (err) {
     if (err.code === 'INSUFFICIENT' || err.code === 'NO_PLAN') {
       return res.status(402).json({
         error: 'paywall',
         tier: entitlement.tier,
         creditsRemaining: err.remaining ?? entitlement.creditsRemaining ?? 0,
-        cost: COST,
+        cost,
       });
     }
     return res.status(500).json({ error: err.message });
@@ -88,16 +90,23 @@ export default async function handler(req, res) {
       swapMode: mode,
     });
     console.log('[character-frame] prediction created', { id: prediction.id });
+    // billing_v2: the provider took the job, so the hold is spent now (the
+    // legacy path charged at reserve). A failed settle never fails the job.
+    try {
+      await settleReservation(entitlement, prediction.id);
+    } catch (settleErr) {
+      console.error('[character-frame] settle failed', settleErr);
+    }
     sendCapiEvent({
       eventName: 'Generate',
       eventId: nsEventId(`gen-${prediction.id}`),
-      value: COST,
+      value: cost,
       currency: 'USD',
       email: session.user.email,
       req,
       customData: {
         feature: 'face-swap-stage-1',
-        credits: COST,
+        credits: cost,
         swap_mode: mode,
         supabase_user_id: session.user.id,
       },
@@ -117,7 +126,7 @@ export default async function handler(req, res) {
   } catch (err) {
     console.error('[character-frame] failed; refunding credit', err);
     try {
-      await refundCredits(entitlement, COST);
+      await refundCredits(entitlement, cost);
     } catch (e) {
       console.warn('[character-frame] refund failed', e?.message);
     }

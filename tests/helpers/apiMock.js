@@ -58,6 +58,9 @@ export const supabaseServerModule = {
         historyUpserts.push(row);
         return {};
       },
+      // pricing_config (lib/pricing.js, read strictly by lib/billingFlags.js):
+      // no rows, so billing_v2 is off and the legacy path runs.
+      select: async () => ({ data: [], error: null }),
     }),
   }),
 };

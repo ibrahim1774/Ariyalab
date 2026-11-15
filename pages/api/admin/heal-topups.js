@@ -1,5 +1,12 @@
 import { stripe } from '../../../lib/stripe';
-import { getUserFromRequest, getSupabaseAdmin } from '../../../lib/supabaseServer';
+import { getSupabaseAdmin } from '../../../lib/supabaseServer';
+import {
+  requireAdmin,
+  findUserByEmail,
+  UserSearchIncompleteError,
+  MAX_USER_PAGES,
+  USERS_PER_PAGE,
+} from '../../../lib/adminGate';
 import { KEY } from '../../../lib/metaKeys';
 import {
   assertCanLink,
@@ -56,12 +63,16 @@ import { grantForCheckoutSession, GrantInProgressError } from '../../../lib/gran
  *
  * Ownership evidence. The dry run (and every refusal) shows the payment's
  * email, payment status, client_reference_id, metadata.supabase_user_id,
- * whether a claim ticket exists, the target account's email and whether it
- * is confirmed, and the proof that ties the two: 'client_reference_id',
+ * whether a claim ticket exists, the refund / dispute state of its charge
+ * (`charge`), the target account's email and whether it is confirmed, and
+ * the proof that ties the two: 'client_reference_id',
  * 'metadata', 'email' (payment email equals the account's CONFIRMED email)
  * or 'none'. With 'none' the link needs { overrideOwnership: true, reason }:
  * the reason is logged and written to the new customer's metadata
- * (ariyalab_admin_override_reason). A session that is not paid is refused.
+ * (ariyalab_admin_override_reason): in the same write as the merge when there
+ * is one, otherwise before the grant and the link, so a link never lands
+ * without its reason. A session whose payment_status is neither 'paid' nor
+ * 'no_payment_required' is refused.
  *
  *   { forceAbandonEarlierMerge: true } — only for the 409 that names an
  *                              unfinished earlier merge whose target no
@@ -69,16 +80,9 @@ import { grantForCheckoutSession, GrantInProgressError } from '../../../lib/gran
  *                              up that carry (recorded on the old customer
  *                              as ariyalab_relink_abandoned) and merges.
  *
- * Gated by ADMIN_EMAILS (must be set; there is no built-in fallback, the
- * route answers 503 without it) and the admin's email must be confirmed.
+ * Gated by lib/adminGate.js: ADMIN_EMAILS must be set (503 without it; no
+ * built-in fallback) and the admin's email must be confirmed.
  */
-
-function adminEmails() {
-  return String(process.env.ADMIN_EMAILS || '')
-    .split(',')
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-}
 
 const SESSION_EXPAND = ['line_items.data.price', 'subscription', 'customer'];
 const RETRY_MESSAGE = 'A grant or merge for this customer is in progress. Try again in a couple of minutes.';
@@ -96,24 +100,41 @@ function summarizeCustomer(customer) {
   };
 }
 
-// The project is shared with haelabs.live, so the user list is long: read
-// every page. "Not found" is only answered after the last page; if the page
-// bound is ever hit the search is reported as incomplete, never as "no user".
-const USERS_PER_PAGE = 1000;
-const MAX_USER_PAGES = 200;
-class UserSearchIncompleteError extends Error {}
+const PAID_STATUSES = new Set(['paid', 'no_payment_required']);
+const idOf = (v) => (typeof v === 'string' ? v : v?.id || null);
 
-async function findUserByEmail(admin, email) {
-  const wanted = email.toLowerCase();
-  for (let page = 1; page <= MAX_USER_PAGES; page += 1) {
-    const { data, error } = await admin.auth.admin.listUsers({ page, perPage: USERS_PER_PAGE });
-    if (error) throw new Error(`User lookup failed: ${error.message}`);
-    const users = data?.users || [];
-    const hit = users.find((u) => (u.email || '').toLowerCase() === wanted);
-    if (hit) return hit;
-    if (users.length < USERS_PER_PAGE) return null;
+/**
+ * The refund / dispute state of the charge that paid this session: the
+ * payment intent's latest charge (one-off payments) or the first invoice's
+ * charge (subscriptions). null when there is no charge to look at; a lookup
+ * that fails is reported, never fatal.
+ */
+async function chargeStateOf(cs) {
+  if (!cs) return null;
+  try {
+    let charge = null;
+    const pi = idOf(cs.payment_intent);
+    const invoiceId = idOf(cs.invoice);
+    if (pi) {
+      const intent = await stripe().paymentIntents.retrieve(pi, { expand: ['latest_charge'] });
+      charge = intent?.latest_charge || null;
+    } else if (invoiceId) {
+      const invoice = await stripe().invoices.retrieve(invoiceId);
+      charge = invoice?.charge || null;
+    }
+    if (typeof charge === 'string') charge = await stripe().charges.retrieve(charge);
+    if (!charge) return null;
+    return {
+      id: charge.id,
+      amount: charge.amount ?? null,
+      amountRefunded: charge.amount_refunded ?? 0,
+      refunded: Boolean(charge.refunded),
+      disputed: Boolean(charge.disputed),
+    };
+  } catch (err) {
+    console.warn('[admin/heal-topups] charge lookup failed', err.message);
+    return { error: 'Charge lookup failed; check the payment in Stripe before applying.' };
   }
-  throw new UserSearchIncompleteError();
 }
 
 const lower = (v) => String(v || '').trim().toLowerCase();
@@ -149,19 +170,9 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const admins = adminEmails();
-  if (!admins.length) {
-    return res.status(503).json({ error: 'Admin tools are disabled: ADMIN_EMAILS is not set.' });
-  }
-
-  const session = await getUserFromRequest(req, res);
-  if (!session) return res.status(401).json({ error: 'Authentication required.' });
-
-  const callerEmail = (session.user.email || '').toLowerCase();
-  const callerConfirmed = Boolean(session.user.email_confirmed_at || session.user.confirmed_at);
-  if (!callerConfirmed || !admins.includes(callerEmail)) {
-    return res.status(403).json({ error: 'Admin only.', code: 'NOT_ADMIN' });
-  }
+  const gate = await requireAdmin(req, res);
+  if (!gate) return undefined;
+  const callerEmail = (gate.user.email || '').toLowerCase();
 
   const {
     email,
@@ -285,9 +296,12 @@ export default async function handler(req, res) {
 
     const targetSummary = usableCandidates.find((c) => c.id === targetCustomerId) || null;
     const willChange = currentlyLinked !== targetCustomerId;
-    const evidence = ownershipEvidence({ cs, paymentEmail: cs ? sessionEmail : targetSummary?.email, user });
+    const evidence = {
+      ...ownershipEvidence({ cs, paymentEmail: cs ? sessionEmail : targetSummary?.email, user }),
+      charge: await chargeStateOf(cs),
+    };
 
-    if (cs && cs.payment_status !== 'paid') {
+    if (cs && !PAID_STATUSES.has(cs.payment_status)) {
       return res.status(400).json({
         error: `This checkout session is not paid (status: ${cs.payment_status}). Nothing was changed.`,
         ...evidence,
@@ -340,10 +354,15 @@ export default async function handler(req, res) {
       );
     }
 
-    // Same order as the customer paths: checks, grant, then move + link.
+    // Same order as the customer paths: checks, grant, then move + link. An
+    // override reason rides in the merge write; without a merge it is
+    // written first, so nothing is granted or linked without it.
     let grant = null;
     try {
-      await assertCanLink(user.id, targetCustomerId, { via: 'admin' });
+      const { relinkFrom } = await assertCanLink(user.id, targetCustomerId, { via: 'admin' });
+      if (overridden && !relinkFrom) {
+        await stripe().customers.update(targetCustomerId, { metadata: { [KEY.adminOverrideReason]: overrideReason } });
+      }
       if (cs) {
         grant = await grantForCheckoutSession(cs, {
           userId: user.id,
@@ -353,6 +372,7 @@ export default async function handler(req, res) {
       await linkStripeCustomerToProfile(admin, user.id, targetCustomerId, {
         via: 'admin',
         forceAbandonEarlierMerge: forceAbandonEarlierMerge === true,
+        adminOverrideReason: overridden ? overrideReason : null,
       });
     } catch (mergeErr) {
       if (mergeErr instanceof UnfinishedMergeError) {
@@ -376,15 +396,13 @@ export default async function handler(req, res) {
     }
 
     // Backfill supabase_user_id on the customer so webhook-only paths can
-    // self-heal, and record an ownership override. Only the changed keys are
-    // sent (Stripe merges metadata).
+    // self-heal. Only the changed key is sent (Stripe merges metadata).
     try {
       const cust = await stripe().customers.retrieve(targetCustomerId);
       if (cust && !cust.deleted) {
-        const patch = {};
-        if ((cust.metadata || {}).supabase_user_id !== user.id) patch.supabase_user_id = user.id;
-        if (overridden) patch[KEY.adminOverrideReason] = overrideReason;
-        if (Object.keys(patch).length) await stripe().customers.update(targetCustomerId, { metadata: patch });
+        if ((cust.metadata || {}).supabase_user_id !== user.id) {
+          await stripe().customers.update(targetCustomerId, { metadata: { supabase_user_id: user.id } });
+        }
       }
     } catch (mdErr) {
       console.warn('[admin/heal-topups] metadata backfill failed', mdErr.message);

@@ -38,7 +38,7 @@ export default async function handler(req, res) {
 
   try {
     if (!(await isBillingV2())) {
-      const ent = await getEntitlement({ supabase: session.supabase, userId, email: session.user.email });
+      const ent = await getEntitlement({ supabase: session.supabase, userId, user: session.user });
       return res.status(200).json({
         v2: false,
         balance: { plan: null, topup: null, held: 0, available: ent?.creditsRemaining ?? 0 },

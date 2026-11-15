@@ -1,4 +1,5 @@
 import { stripe } from '../../lib/stripe';
+import { appendSetCookie } from '../../lib/setCookie';
 
 /*
  * /ugc-2/claim — leak-protected hand-off after the pay-first checkout.
@@ -43,10 +44,9 @@ export async function getServerSideProps({ query, res }) {
       cs.payment_status === 'paid' || cs.payment_status === 'no_payment_required';
     if (!paid) return bail('?status=unpaid');
 
-    res.setHeader(
-      'Set-Cookie',
-      `${CLAIM_COOKIE}=${sid}; Path=/; Max-Age=${TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`
-    );
+    // Appended: a Set-Cookie already on the response (a session refresh)
+    // must survive.
+    appendSetCookie(res, `${CLAIM_COOKIE}=${sid}; Path=/; Max-Age=${TTL_SECONDS}; HttpOnly; Secure; SameSite=Lax`);
     // `r` rides as a query param to /ugc-2/welcome. It is NOT the
     // session ticket (which stays in the httpOnly cookie) — just the
     // post-signup destination, which is not secret.

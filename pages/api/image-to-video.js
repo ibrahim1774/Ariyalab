@@ -2,10 +2,17 @@ import { createKlingSinglePrediction } from '../../lib/kie';
 import { createSeedancePrediction } from '../../lib/seedance';
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { signingConfigured, signJobId } from '../../lib/jobToken';
-import { getEntitlement, reserveCredits, refundCredits, trackPendingJob } from '../../lib/entitlement';
+import {
+  getEntitlement,
+  reserveCredits,
+  refundCredits,
+  trackPendingJob,
+  usesLedger,
+  takeHoldForJob,
+} from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
-import { costForGeneration, MODELS, RESOLUTIONS } from '../../lib/cost';
+import { costForGeneration, v2CostForGeneration, MODELS, RESOLUTIONS } from '../../lib/cost';
 import { screenText, screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
 
 function isHttpUrl(value) {
@@ -41,7 +48,7 @@ export default async function handler(req, res) {
 
   let entitlement;
   try {
-    entitlement = await getEntitlement({ supabase: session.supabase, userId: session.user.id, email: session.user.email });
+    entitlement = await getEntitlement({ supabase: session.supabase, userId: session.user.id, user: session.user });
   } catch (err) {
     return res.status(500).json({ error: `Entitlement check failed: ${err.message}` });
   }
@@ -61,7 +68,9 @@ export default async function handler(req, res) {
   const resolution = RESOLUTIONS.includes(resolutionRaw) ? resolutionRaw : '480p';
   const wantAudio = Boolean(audio);
   const dur = clampDuration(duration);
-  const cost = costForGeneration({ seconds: dur, model, resolution, audio: wantAudio });
+  const priced = { seconds: dur, model, resolution, audio: wantAudio };
+  // billing_v2 charges v2 credits (lib/cost.js); the legacy path is unchanged.
+  const cost = usesLedger(entitlement) ? v2CostForGeneration(priced) : costForGeneration(priced);
 
   // Pre-filter prompt + image before charging credits.
   try {
@@ -74,7 +83,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    await reserveCredits(entitlement, cost);
+    await reserveCredits(entitlement, cost, { route: 'image-to-video' });
   } catch (err) {
     if (err.code === 'INSUFFICIENT' || err.code === 'NO_PLAN') {
       return res.status(402).json({
@@ -126,7 +135,7 @@ export default async function handler(req, res) {
       },
     }).catch(() => {});
     return res.status(200).json({
-      predictionId: signJobId(session.user.id, prediction.id),
+      predictionId: signJobId(session.user.id, prediction.id, takeHoldForJob(entitlement)),
       vendor: model === 'studio-pro' ? 'kie-kling' : 'kie-seedance',
       status: 'queued',
       cost,

@@ -1,19 +1,9 @@
-import { getUserFromRequest } from '../../../lib/supabaseServer';
+import { requireAdmin } from '../../../lib/adminGate';
 import { getFeatureTabsEnabled, setFeatureTabsEnabled } from '../../../lib/featureFlags';
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'ibrahim3709@gmail.com')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
-
 export default async function handler(req, res) {
-  const session = await getUserFromRequest(req, res);
-  if (!session) return res.status(401).json({ error: 'Authentication required.' });
-
-  const email = (session.user.email || '').toLowerCase();
-  if (!ADMIN_EMAILS.includes(email)) {
-    return res.status(403).json({ error: 'Admin only.' });
-  }
+  // ADMIN_EMAILS and a confirmed email (lib/adminGate.js).
+  if (!(await requireAdmin(req, res))) return undefined;
 
   if (req.method === 'GET') {
     const enabled = await getFeatureTabsEnabled();

@@ -5,6 +5,7 @@ import {
   CustomerLinkedElsewhereError,
 } from '../../../lib/entitlement';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
+import { appendSetCookie } from '../../../lib/setCookie';
 import { sendCapiEvent } from '../../../lib/meta';
 import { nsEventId } from '../../../lib/metaKeys';
 import {
@@ -50,14 +51,16 @@ const TICKET_TTL_S = 1800;
 // Clears the session-id cookie and removes only this session's nonce from
 // the browser's list, so a second paid session keeps its ticket. The nonce
 // cookie is cleared when nothing is left.
-function clearClaimCookie(res, nonceCookie, checkoutSession) {
+// Appended, so a refreshed session cookie set earlier in the request survives.
+export function clearClaimCookie(res, nonceCookie, checkoutSession) {
   const left = claimCookieWithoutSession(nonceCookie, checkoutSession);
-  res.setHeader('Set-Cookie', [
-    `${CLAIM_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
+  appendSetCookie(res, `${CLAIM_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`);
+  appendSetCookie(
+    res,
     left
       ? `${CLAIM_NONCE_COOKIE}=${left}; Path=/; Max-Age=86400; HttpOnly; Secure; SameSite=Lax`
-      : `${CLAIM_NONCE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`,
-  ]);
+      : `${CLAIM_NONCE_COOKIE}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`
+  );
 }
 
 // A ticket-flow session from before /api/checkout stamped claim_ticket.

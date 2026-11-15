@@ -1,10 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createServerClient } from '@supabase/ssr';
-
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'ibrahim3709@gmail.com')
-  .split(',')
-  .map((s) => s.trim().toLowerCase())
-  .filter(Boolean);
+import { isConfirmedAdmin } from './lib/adminEmails';
 
 // Gated "feature tab" page routes — hidden + blocked for non-admins when
 // the feature-tabs flag is off. NOTE: /ugc-2 and /ugc-3 are deliberately
@@ -110,8 +106,8 @@ export async function middleware(req) {
     (p) => pathname === p || pathname.startsWith(p + '/')
   );
   if (isGated) {
-    const email = (user?.email || '').toLowerCase();
-    const isAdmin = ADMIN_EMAILS.includes(email);
+    // ADMIN_EMAILS (no built-in address) and a confirmed email.
+    const isAdmin = isConfirmedAdmin(user);
     if (!isAdmin) {
       let enabled = true;
       try {

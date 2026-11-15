@@ -1,9 +1,14 @@
 import { put } from '@vercel/blob';
 
-import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
-import { stripe } from '../../lib/stripe';
+import { getUserFromRequest } from '../../lib/supabaseServer';
+import {
+  getImageEntitlement,
+  reserveImageCredit,
+  settleImageCredit,
+  refundImageCredit,
+} from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
-import { KEY, nsEventId } from '../../lib/metaKeys';
+import { nsEventId } from '../../lib/metaKeys';
 import { screenText, screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
 
 /*
@@ -11,19 +16,14 @@ import { screenText, screenImage, ModerationError, moderationErrorResponse } fro
  *
  * Same architecture as /api/glow-up:
  *   - Auth: Supabase via getUserFromRequest
- *   - Entitlement: imageCreditsRemaining pool on Stripe customer
- *     metadata (30 / 30 days, plus image-pack top-ups). NEVER falls
+ *   - Entitlement: the shared image-credit pool in lib/entitlement.js
+ *     (getImageEntitlement), the same pool /api/glow-up uses. NEVER falls
  *     back to the video credit pool.
- *   - Charge: inline reserve-then-refund (no call to a non-existent
- *     recordUsage()).
+ *   - Charge: reserve before kie.ai, settle on success, refund on failure.
  *   - Compute: kie.ai's unified jobs API with model = 'flux_kontext',
  *     image-to-image with one reference photo. Result mirrored to
  *     Vercel Blob via put().
  */
-
-const PERIOD_DAYS = 30;
-const CREDITS_PER_PERIOD = 30;
-const PERIOD_MS = PERIOD_DAYS * 24 * 60 * 60 * 1000;
 
 const KIE_BASE = 'https://api.kie.ai/api/v1';
 // Dedicated Flux Kontext endpoints (NOT the unified /jobs/createTask).
@@ -168,15 +168,6 @@ const BUDGET_PROMPTS = {
   'budget-friendly': 'Budget-friendly approachable materials and finishes.',
 };
 
-const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || 'ibrahim3709@gmail.com')
-  .split(',')
-  .map((e) => e.trim().toLowerCase())
-  .filter(Boolean);
-
-function isPaidPlan(plan) {
-  return plan === 'monthly' || plan === 'pro' || plan === 'yearly';
-}
-
 function safePromptFragment(s, max = 400) {
   if (typeof s !== 'string') return '';
   // Filter ASCII control chars (0-31, 127) by codepoint, collapse
@@ -200,30 +191,20 @@ export default async function handler(req, res) {
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Sign in first.' });
 
-  const userEmail = (session.user.email || '').toLowerCase();
-  const isAdmin = ADMIN_EMAILS.includes(userEmail);
-
-  const admin = getSupabaseAdmin();
-  const { data: profile } = await admin
-    .from('profiles')
-    .select('stripe_customer_id')
-    .eq('id', session.user.id)
-    .maybeSingle();
-  const customerId = profile?.stripe_customer_id || null;
-
+  // Shared entitlement (lib/entitlement.js): image credits are the ledger's
+  // 'image' currency under billing_v2, Stripe metadata otherwise.
   let entitlement;
-  if (isAdmin) {
-    entitlement = {
-      tier: 'admin',
-      status: 'admin',
-      imageCreditsRemaining: 9999,
-      nextPeriodStart: Date.now(),
-      md: null,
-      activeSub: { id: 'admin' },
-    };
-  } else {
-    entitlement = await resolveEntitlement(customerId);
+  try {
+    entitlement = await getImageEntitlement({
+      supabase: session.supabase,
+      userId: session.user.id,
+      user: session.user,
+    });
+  } catch (err) {
+    console.error('[interior-design] entitlement failed', err);
+    return res.status(500).json({ error: 'Entitlement check failed.' });
   }
+  const isAdmin = Boolean(entitlement.isAdmin);
 
   // Validate body.
   const body = req.body || {};
@@ -258,36 +239,25 @@ export default async function handler(req, res) {
     return res.status(402).json({ error: 'paywall' });
   }
 
-  let { imageCreditsRemaining: imageCredits } = entitlement;
-  if (!isAdmin) {
-    if (imageCredits > 0) {
-      imageCredits -= 1;
-    } else {
-      return res
-        .status(402)
-        .json({ error: 'paywall', reason: 'image-credits-exhausted' });
-    }
-  }
-
-  // Reserve credit BEFORE calling kie.ai. Refund on every failure path
-  // below.
+  // Image credits only — no fallback to the video credit pool. Reserved
+  // BEFORE calling kie.ai so concurrent calls can't double-spend; refunded on
+  // every failure path below.
   let creditReserved = false;
-  if (!isAdmin && customerId && entitlement.md) {
-    const reservedMd = { ...entitlement.md };
-    reservedMd[KEY.imageCredits] = String(imageCredits);
-    reservedMd[KEY.imagePeriodStart] = String(entitlement.nextPeriodStart);
+  if (!isAdmin) {
     try {
-      await stripe().customers.update(customerId, { metadata: reservedMd });
-      creditReserved = true;
+      creditReserved = await reserveImageCredit(entitlement, { route: 'interior-design' });
     } catch (mdErr) {
       console.warn('[interior-design] credit reserve failed', mdErr.message);
       return res.status(500).json({ error: 'Could not reserve credit.' });
+    }
+    if (!creditReserved) {
+      return res.status(402).json({ error: 'paywall', reason: 'image-credits-exhausted' });
     }
   }
 
   const kieKey = process.env.KIE_API_KEY;
   if (!kieKey) {
-    if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+    if (creditReserved) await refundImageCredit(entitlement);
     return res.status(500).json({ error: 'KIE_API_KEY is not configured.' });
   }
 
@@ -339,7 +309,7 @@ export default async function handler(req, res) {
         createRes.status,
         createText.slice(0, 500)
       );
-      if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+      if (creditReserved) await refundImageCredit(entitlement);
       return res.status(502).json({ error: createData?.msg || 'Generation failed.' });
     }
     const taskId = createData.data.taskId;
@@ -411,8 +381,16 @@ export default async function handler(req, res) {
     }
 
     if (!resultUrl) {
-      if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+      if (creditReserved) await refundImageCredit(entitlement);
       return res.status(502).json({ error: lastErr || 'Generation timed out.' });
+    }
+
+    // The image exists: spend the held credit (billing_v2; the legacy path
+    // charged at reserve). A failed settle never fails the generation.
+    try {
+      await settleImageCredit(entitlement, taskId);
+    } catch (settleErr) {
+      console.error('[interior-design] settle failed', settleErr);
     }
 
     // 3. Mirror to Vercel Blob so the resulting URL is on our infra
@@ -458,77 +436,11 @@ export default async function handler(req, res) {
     return res.status(200).json({
       renderedImageUrl: storedUrl,
       products: STYLE_PRODUCTS[style] || [],
-      imageCreditsRemaining: isAdmin ? 9999 : imageCredits,
+      imageCreditsRemaining: isAdmin ? 9999 : entitlement.imageCreditsRemaining,
     });
   } catch (err) {
     console.error('[interior-design] failed', err);
-    if (creditReserved) await refundCredit({ customerId, isAdmin, md: entitlement.md, nextPeriodStart: entitlement.nextPeriodStart });
+    if (creditReserved) await refundImageCredit(entitlement);
     return res.status(500).json({ error: err.message || 'Generation failed.' });
   }
-}
-
-async function refundCredit({ customerId, isAdmin, md, nextPeriodStart }) {
-  if (isAdmin || !customerId || !md) return;
-  try {
-    const fresh = await stripe().customers.retrieve(customerId);
-    const freshMd = fresh && !fresh.deleted ? fresh.metadata || {} : {};
-    const next = { ...freshMd };
-    const cur = parseInt(freshMd[KEY.imageCredits] || '0', 10) || 0;
-    next[KEY.imageCredits] = String(cur + 1);
-    if (next[KEY.imagePeriodStart] == null) {
-      next[KEY.imagePeriodStart] = String(nextPeriodStart);
-    }
-    await stripe().customers.update(customerId, { metadata: next });
-  } catch (refundErr) {
-    console.warn('[interior-design] refund failed', refundErr.message);
-  }
-}
-
-async function resolveEntitlement(customerId) {
-  const empty = {
-    tier: 'none',
-    status: 'none',
-    imageCreditsRemaining: 0,
-    nextPeriodStart: Date.now(),
-    md: null,
-    activeSub: null,
-  };
-  if (!customerId) return empty;
-
-  const customer = await stripe().customers.retrieve(customerId);
-  if (!customer || customer.deleted) return empty;
-  const md = customer.metadata || {};
-  const plan = md[KEY.plan] || null;
-
-  const subs = await stripe().subscriptions.list({
-    customer: customerId,
-    status: 'all',
-    limit: 5,
-  });
-  const activeSub = subs.data.find(
-    (s) => s.status === 'active' || s.status === 'trialing'
-  );
-  const status = activeSub?.status || 'none';
-
-  if (!isPaidPlan(plan) || !activeSub) {
-    return { ...empty, tier: plan || 'none', status, md };
-  }
-
-  const now = Date.now();
-  const periodStart = parseInt(md[KEY.imagePeriodStart] || '0', 10) || 0;
-  let imageCredits = parseInt(md[KEY.imageCredits] || '0', 10) || 0;
-  let nextPeriodStart = periodStart;
-  if (!periodStart || now - periodStart >= PERIOD_MS) {
-    imageCredits = CREDITS_PER_PERIOD;
-    nextPeriodStart = now;
-  }
-
-  return {
-    tier: plan,
-    status,
-    imageCreditsRemaining: imageCredits,
-    nextPeriodStart,
-    md,
-    activeSub,
-  };
 }

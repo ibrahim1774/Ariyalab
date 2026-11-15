@@ -1,7 +1,7 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { getUserFromRequest, getSupabaseAdmin } from '../../../lib/supabaseServer';
-import { getEntitlement, reserveCredits, refundCredits } from '../../../lib/entitlement';
+import { getEntitlement, reserveCredits, refundCredits, settleReservation } from '../../../lib/entitlement';
 import { validateEditPlan } from '../../../lib/editPlan';
 import { renderEditPlan } from '../../../lib/ffmpegRender';
 import { createJob, updateProgress, completeJob, failJob } from '../../../lib/renderJobs';
@@ -51,9 +51,9 @@ export default async function handler(req, res) {
     entitlement = await getEntitlement({
       supabase: session.supabase,
       userId: session.user.id,
-      email: session.user.email,
+      user: session.user,
     });
-    await reserveCredits(entitlement, 1);
+    await reserveCredits(entitlement, 1, { route: 'video-render' });
   } catch (err) {
     if (err.code === 'NO_PLAN' || err.code === 'INSUFFICIENT') {
       return res.status(402).json({
@@ -103,6 +103,13 @@ export default async function handler(req, res) {
       onProgress: (p) => updateProgress(renderId, p),
     });
     completeJob(renderId, result.outputUrl);
+    // billing_v2: the render succeeded, so the hold is spent (the legacy
+    // path charged at reserve).
+    try {
+      await settleReservation(entitlement, renderId);
+    } catch (settleErr) {
+      console.error('[video/render] settle failed', settleErr);
+    }
     if (supabaseRow) {
       try {
         const admin = getSupabaseAdmin();

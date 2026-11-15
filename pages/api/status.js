@@ -1,8 +1,8 @@
 import { getPrediction, normalizeStatus } from '../../lib/replicate';
 import { getKiePrediction, normalizeKieStatus } from '../../lib/kie';
 import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
-import { getEntitlement, settlePendingJob } from '../../lib/entitlement';
-import { verifyJobId } from '../../lib/jobToken';
+import { getEntitlement, settlePendingJob, settleHeldJob } from '../../lib/entitlement';
+import { verifyJobToken } from '../../lib/jobToken';
 
 /*
  * Polling endpoint. Dispatches to either Replicate (default — used for
@@ -64,20 +64,28 @@ export default async function handler(req, res) {
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
-  const predictionId = verifyJobId(session.user.id, signedId);
-  if (!predictionId) return res.status(404).json({ error: 'Job not found.' });
+  const token = verifyJobToken(session.user.id, signedId);
+  if (!token) return res.status(404).json({ error: 'Job not found.' });
+  const { predictionId, hold } = token;
 
   // Idempotently settle the credit reservation we made when the job
   // was queued. Refund on vendor failure, drop tracking on success.
   // Only kie.ai jobs (image-to-video, ugc) are tracked today.
+  // A job id that carries a billing_v2 hold (lib/jobToken.js) settles that
+  // hold in the ledger, whatever the flag says now; other ids use the legacy
+  // pendingJobs record.
   async function settleIfTerminal(status) {
     if (!isKie || !session) return;
     if (status !== 'complete' && status !== 'error') return;
     try {
+      if (hold) {
+        await settleHeldJob({ hold, jobId: predictionId, failed: status === 'error' });
+        return;
+      }
       const entitlement = await getEntitlement({
         supabase: session.supabase,
         userId: session.user.id,
-        email: session.user.email,
+        user: session.user,
       });
       await settlePendingJob(entitlement, predictionId, { refund: status === 'error' });
     } catch (err) {

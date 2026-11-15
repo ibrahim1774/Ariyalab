@@ -93,7 +93,7 @@ export default async function handler(req, res) {
     entitlement = await getEntitlement({
       supabase: session.supabase,
       userId: session.user.id,
-      email: session.user.email,
+      user: session.user,
     });
   } catch (err) {
     return res.status(500).json({ error: `Entitlement check failed: ${err.message}` });

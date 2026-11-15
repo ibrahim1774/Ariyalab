@@ -101,7 +101,7 @@ export default async function handler(req, res) {
       entitlement = await getEntitlement({
         supabase: session.supabase,
         userId: session.user.id,
-        email: session.user.email,
+        user: session.user,
       });
       use = await getSwapUse(entitlement, paid.framePredictionId);
     } catch (err) {
