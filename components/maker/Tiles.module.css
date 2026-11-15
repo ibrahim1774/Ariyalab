@@ -80,3 +80,7 @@
 .empty h3 { font-size: 18px; }
 .empty p { margin: 0; color: var(--text-dim); font-size: 14px; max-width: 460px; }
 .styleNote { margin: 0; max-width: 100%; padding: 8px 14px; align-self: flex-start; border-radius: var(--radius-pill); background: var(--accent-tint); color: var(--accent-deep); font-size: 14px; font-weight: 500; }
+@media (max-width: 760px) {
+  .styleNote { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 6px 12px; font-size: 13px; border-radius: 14px; }
+  .styleExtra { display: none; }
+}

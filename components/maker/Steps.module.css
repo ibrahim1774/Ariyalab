@@ -127,6 +127,8 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 .pickButton:disabled { opacity: 0.6; cursor: not-allowed; }
 .blocked, .failed { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--error-bg); color: var(--error); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
 .regen { display: flex; flex-direction: column; gap: 8px; }
+.changeToggle { display: none; min-height: 44px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
+.changeToggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* Storyboard, generate, review */
 .shotGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; align-items: start; }
@@ -182,6 +184,9 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 }
 
 @media (max-width: 760px) {
+  .changeToggle { display: inline-flex; align-items: center; }
+  .regen { display: none; }
+  .regenOpen { display: flex; }
   .stepHead h2 { font-size: 20px; }
   .stepHead p { display: none; }
   .candidates { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }

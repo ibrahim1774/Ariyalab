@@ -20,7 +20,7 @@ export function describeError(err, { returnTo } = {}) {
 
   // Codes first: the same status can mean different things (a 429 is a daily limit or a chat limit).
   if (code === 'daily_limit') {
-    return { ...out, title: 'Daily limit reached', message: 'You have written 3 scripts for this video today. Come back tomorrow, or pick a plan for more.', action: { label: 'See plans', href: '/app/billing' } };
+    return { ...out, title: 'Daily limit reached', message: Number.isFinite(Number(err?.body?.limit)) ? `You have reached the limit of ${Number(err.body.limit)} for today. Come back tomorrow, or pick a plan for more.` : 'You have reached today\u2019s limit. Come back tomorrow, or pick a plan for more.', action: { label: 'See plans', href: '/app/billing' } };
   }
   if (code === 'chat_limit') {
     return { ...out, title: 'Chat limit reached', message: 'This video has used all its included changes.', action: { label: 'See plans', href: '/app/billing' } };

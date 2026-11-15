@@ -21,6 +21,7 @@ function blockedReason(cast, jobs) {
 
 function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const [note, setNote] = useState('');
+  const [change, setChange] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const pricing = usePricing();
@@ -106,7 +107,12 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       )}
 
       {cast.status !== 'pending' && (
-        <form onSubmit={regenerate} className={styles.regen}>
+        <button type="button" className={styles.changeToggle} aria-expanded={change} onClick={() => setChange((v) => !v)}>
+          {change ? 'Hide options' : 'Change this character'}
+        </button>
+      )}
+      {cast.status !== 'pending' && (
+        <form onSubmit={regenerate} className={`${styles.regen} ${change ? styles.regenOpen : ''}`}>
           <label className={styles.field}>
             <span>Describe a change</span>
             <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="A bit older, with round glasses." />

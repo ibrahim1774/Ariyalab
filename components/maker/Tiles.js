@@ -85,7 +85,7 @@ export function StyleNote({ project }) {
   const extra = key === 'custom' && project.style_custom ? `, ${project.style_custom}` : '';
   return (
     <p className={styles.styleNote} data-testid="style-note">
-      Style: {label}{extra}. Every picture follows it.
+      Style: {label}{extra}.<span className={styles.styleExtra}> Every picture follows it.</span>
     </p>
   );
 }

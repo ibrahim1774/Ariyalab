@@ -1,0 +1,701 @@
+{
+ "scen": {
+  "brief": {
+   "project": {
+    "id": "p1",
+    "title": "The barbershop on Maple Street where the line starts before sunrise and nobody minds waiting because the stories are free to hear",
+    "purpose": "service",
+    "offer": "A barbershop with a booking page",
+    "audience": "Local guys",
+    "style": null,
+    "seconds": 30,
+    "aspect": "9:16",
+    "quality": "standard",
+    "mode": "narrated",
+    "step": "brief",
+    "fee_charged": false,
+    "files_expire_at": "2026-12-14T12:00:00Z"
+   }
+  },
+  "script": {
+   "project": {
+    "id": "p1",
+    "title": "The barbershop on Maple Street where the line starts before sunrise and nobody minds waiting because the stories are free to hear",
+    "purpose": "service",
+    "offer": "A barbershop with a booking page",
+    "audience": "Local guys",
+    "style": "3d_family",
+    "seconds": 30,
+    "aspect": "9:16",
+    "quality": "pro_narrated",
+    "mode": "narrated",
+    "step": "script",
+    "fee_charged": false,
+    "files_expire_at": "2026-12-14T12:00:00Z"
+   }
+  },
+  "cast": {
+   "project": {
+    "id": "p1",
+    "title": "The barbershop on Maple Street where the line starts before sunrise and nobody minds waiting because the stories are free to hear",
+    "purpose": "service",
+    "offer": "A barbershop with a booking page",
+    "audience": "Local guys",
+    "style": "3d_family",
+    "seconds": 30,
+    "aspect": "9:16",
+    "quality": "pro_narrated",
+    "mode": "narrated",
+    "step": "cast",
+    "fee_charged": false,
+    "files_expire_at": "2026-12-14T12:00:00Z"
+   },
+   "cast": [
+    {
+     "id": "c0",
+     "name": "Marcus the barber",
+     "description": "The barber who opens the shop",
+     "status": "ready",
+     "chosen_index": 0,
+     "regens_used": 0,
+     "candidates": [
+      {
+       "url": "/mock/cast-marcus-0.jpg",
+       "key": "marcus0"
+      },
+      {
+       "url": "/mock/cast-marcus-1.jpg",
+       "key": "marcus1"
+      },
+      {
+       "url": "/mock/cast-marcus-2.jpg",
+       "key": "marcus2"
+      }
+     ]
+    },
+    {
+     "id": "c1",
+     "name": "Dre",
+     "description": "A young regular in a hoodie",
+     "status": "ready",
+     "chosen_index": null,
+     "regens_used": 0,
+     "candidates": [
+      {
+       "url": "/mock/cast-dre-0.jpg",
+       "key": "dre0"
+      },
+      {
+       "url": "/mock/cast-dre-1.jpg",
+       "key": "dre1"
+      },
+      {
+       "url": "/mock/cast-dre-2.jpg",
+       "key": "dre2"
+      }
+     ]
+    },
+    {
+     "id": "c2",
+     "name": "Tony",
+     "description": "The bearded barber who runs the bookings",
+     "status": "ready",
+     "chosen_index": null,
+     "regens_used": 1,
+     "candidates": [
+      {
+       "url": "/mock/cast-tony-0.jpg",
+       "key": "tony0"
+      },
+      {
+       "url": "/mock/cast-tony-1.jpg",
+       "key": "tony1"
+      },
+      {
+       "url": "/mock/cast-tony-2.jpg",
+       "key": "tony2"
+      }
+     ]
+    },
+    {
+     "id": "c3",
+     "name": "Mr. Hall from next door",
+     "description": "An older neighbour first in line",
+     "status": "ready",
+     "chosen_index": null,
+     "regens_used": 0,
+     "candidates": [
+      {
+       "url": "/mock/cast-hall-0.jpg",
+       "key": "hall0"
+      },
+      {
+       "url": "/mock/cast-hall-1.jpg",
+       "key": "hall1"
+      },
+      {
+       "url": "/mock/cast-hall-2.jpg",
+       "key": "hall2"
+      }
+     ]
+    },
+    {
+     "id": "c4",
+     "name": "Little Jay",
+     "description": "A boy who counts the line",
+     "status": "pending",
+     "candidates": []
+    }
+   ]
+  },
+  "storyboard": {
+   "project": {
+    "id": "p1",
+    "title": "The barbershop on Maple Street where the line starts before sunrise and nobody minds waiting because the stories are free to hear",
+    "purpose": "service",
+    "offer": "A barbershop with a booking page",
+    "audience": "Local guys",
+    "style": "3d_family",
+    "seconds": 30,
+    "aspect": "9:16",
+    "quality": "pro_narrated",
+    "mode": "narrated",
+    "step": "storyboard",
+    "fee_charged": false,
+    "files_expire_at": "2026-12-14T12:00:00Z"
+   },
+   "shots": [
+    {
+     "id": "s1",
+     "ord": 0,
+     "description": "People wait in a long line outside the barbershop at sunrise.",
+     "line": "Every Saturday the line outside Jack's started before sunrise.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-1.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s2",
+     "ord": 1,
+     "description": "Neighbours chat in line while a child counts the people ahead.",
+     "line": "Nobody minded waiting, because the stories in line were half the fun.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-2.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s3",
+     "ord": 2,
+     "description": "Marcus the barber smiles and lifts the clippers.",
+     "line": "Marcus unlocked the door and fired up the clippers with a grin.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-3.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s4",
+     "ord": 3,
+     "description": "Tony reads his phone, eyebrows raised.",
+     "line": "Tony checked the booking page and froze.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-4.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s5",
+     "ord": 4,
+     "description": "Dre points a finger, sure of himself.",
+     "line": "Dre swore he had booked two people at two o'clock.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-5.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s6",
+     "ord": 5,
+     "description": "Dre explains with both hands up.",
+     "line": "Then the messages started flying in from every direction.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-6.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s7",
+     "ord": 6,
+     "description": "A boy sits in the chair while a friend trims his hair.",
+     "line": "Little Jay waited his turn with a very serious face.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-7.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s8",
+     "ord": 7,
+     "description": "A hand reaches for a glowing phone in a dark room.",
+     "line": "That night one phone lit up on the bedside table.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-8.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s9",
+     "ord": 8,
+     "description": "Dre looks surprised and delighted at the news.",
+     "line": "By morning everyone knew a clean booking page fixes it.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-9.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s10",
+     "ord": 9,
+     "description": "Dre shrugs, relieved, as the line moves.",
+     "line": "So Marcus put one link on the door and the line got shorter.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-10.jpg",
+     "status": "still_ready"
+    }
+   ]
+  },
+  "generate": {
+   "project": {
+    "id": "p1",
+    "title": "The barbershop on Maple Street where the line starts before sunrise and nobody minds waiting because the stories are free to hear",
+    "purpose": "service",
+    "offer": "A barbershop with a booking page",
+    "audience": "Local guys",
+    "style": "3d_family",
+    "seconds": 30,
+    "aspect": "9:16",
+    "quality": "pro_narrated",
+    "mode": "narrated",
+    "step": "generate",
+    "fee_charged": false,
+    "files_expire_at": "2026-12-14T12:00:00Z"
+   },
+   "shots": [
+    {
+     "id": "s1",
+     "ord": 0,
+     "description": "People wait in a long line outside the barbershop at sunrise.",
+     "line": "Every Saturday the line outside Jack's started before sunrise.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-1.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s2",
+     "ord": 1,
+     "description": "Neighbours chat in line while a child counts the people ahead.",
+     "line": "Nobody minded waiting, because the stories in line were half the fun.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-2.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s3",
+     "ord": 2,
+     "description": "Marcus the barber smiles and lifts the clippers.",
+     "line": "Marcus unlocked the door and fired up the clippers with a grin.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-3.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s4",
+     "ord": 3,
+     "description": "Tony reads his phone, eyebrows raised.",
+     "line": "Tony checked the booking page and froze.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-4.jpg",
+     "status": "ready",
+     "clip_url": "/examples/skit-3d-barbers.mp4"
+    },
+    {
+     "id": "s5",
+     "ord": 4,
+     "description": "Dre points a finger, sure of himself.",
+     "line": "Dre swore he had booked two people at two o'clock.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-5.jpg",
+     "status": "generating"
+    },
+    {
+     "id": "s6",
+     "ord": 5,
+     "description": "Dre explains with both hands up.",
+     "line": "Then the messages started flying in from every direction.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-6.jpg",
+     "status": "generating"
+    },
+    {
+     "id": "s7",
+     "ord": 6,
+     "description": "A boy sits in the chair while a friend trims his hair.",
+     "line": "Little Jay waited his turn with a very serious face.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-7.jpg",
+     "status": "generating"
+    },
+    {
+     "id": "s8",
+     "ord": 7,
+     "description": "A hand reaches for a glowing phone in a dark room.",
+     "line": "That night one phone lit up on the bedside table.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-8.jpg",
+     "status": "failed",
+     "error": "The clip did not finish."
+    },
+    {
+     "id": "s9",
+     "ord": 8,
+     "description": "Dre looks surprised and delighted at the news.",
+     "line": "By morning everyone knew a clean booking page fixes it.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-9.jpg",
+     "status": "still_ready"
+    },
+    {
+     "id": "s10",
+     "ord": 9,
+     "description": "Dre shrugs, relieved, as the line moves.",
+     "line": "So Marcus put one link on the door and the line got shorter.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-10.jpg",
+     "status": "still_ready"
+    }
+   ],
+   "jobs": [
+    {
+     "id": "j",
+     "kind": "clip",
+     "status": "running"
+    }
+   ]
+  },
+  "review": {
+   "project": {
+    "id": "p1",
+    "title": "The barbershop on Maple Street where the line starts before sunrise and nobody minds waiting because the stories are free to hear",
+    "purpose": "service",
+    "offer": "A barbershop with a booking page",
+    "audience": "Local guys",
+    "style": "3d_family",
+    "seconds": 30,
+    "aspect": "9:16",
+    "quality": "pro_narrated",
+    "mode": "narrated",
+    "step": "review",
+    "fee_charged": false,
+    "files_expire_at": "2026-12-14T12:00:00Z"
+   },
+   "shots": [
+    {
+     "id": "s1",
+     "ord": 0,
+     "description": "People wait in a long line outside the barbershop at sunrise.",
+     "line": "Every Saturday the line outside Jack's started before sunrise.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-1.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s2",
+     "ord": 1,
+     "description": "Neighbours chat in line while a child counts the people ahead.",
+     "line": "Nobody minded waiting, because the stories in line were half the fun.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-2.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s3",
+     "ord": 2,
+     "description": "Marcus the barber smiles and lifts the clippers.",
+     "line": "Marcus unlocked the door and fired up the clippers with a grin.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-3.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s4",
+     "ord": 3,
+     "description": "Tony reads his phone, eyebrows raised.",
+     "line": "Tony checked the booking page and froze.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-4.jpg",
+     "status": "ready",
+     "clip_url": "/examples/skit-3d-barbers.mp4"
+    },
+    {
+     "id": "s5",
+     "ord": 4,
+     "description": "Dre points a finger, sure of himself.",
+     "line": "Dre swore he had booked two people at two o'clock.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-5.jpg",
+     "status": "ready",
+     "clip_url": "/examples/skit-3d-barbers.mp4"
+    },
+    {
+     "id": "s6",
+     "ord": 5,
+     "description": "Dre explains with both hands up.",
+     "line": "Then the messages started flying in from every direction.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-6.jpg",
+     "status": "ready",
+     "clip_url": "/examples/skit-3d-barbers.mp4"
+    },
+    {
+     "id": "s7",
+     "ord": 6,
+     "description": "A boy sits in the chair while a friend trims his hair.",
+     "line": "Little Jay waited his turn with a very serious face.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-7.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-watch.mp4"
+    },
+    {
+     "id": "s8",
+     "ord": 7,
+     "description": "A hand reaches for a glowing phone in a dark room.",
+     "line": "That night one phone lit up on the bedside table.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-8.jpg",
+     "status": "ready",
+     "clip_url": "/examples/story-got-serious.mp4"
+    },
+    {
+     "id": "s9",
+     "ord": 8,
+     "description": "Dre looks surprised and delighted at the news.",
+     "line": "By morning everyone knew a clean booking page fixes it.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-9.jpg",
+     "status": "ready",
+     "clip_url": "/examples/skit-3d-barbers.mp4"
+    },
+    {
+     "id": "s10",
+     "ord": 9,
+     "description": "Dre shrugs, relieved, as the line moves.",
+     "line": "So Marcus put one link on the door and the line got shorter.",
+     "seconds": 3,
+     "quality": "pro_narrated",
+     "source": "generated",
+     "still_url": "/mock/still-10.jpg",
+     "status": "ready",
+     "clip_url": "/examples/skit-3d-barbers.mp4"
+    }
+   ],
+   "rerolls": {
+    "included": 5,
+    "used": 1,
+    "credits": 42
+   }
+  }
+ },
+ "script": {
+  "id": "sc",
+  "version": 1,
+  "scenes": [
+   {
+    "id": "s1",
+    "title": "The line",
+    "visual": "A long line outside the barbershop at sunrise",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Every Saturday the line outside Jack's started before sunrise."
+     }
+    ]
+   },
+   {
+    "id": "s2",
+    "title": "Waiting",
+    "visual": "Neighbours chatting in the line",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Nobody minded waiting, because the stories in line were half the fun."
+     }
+    ]
+   },
+   {
+    "id": "s3",
+    "title": "Opening",
+    "visual": "The barber lifts his clippers",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Marcus unlocked the door and fired up the clippers with a grin."
+     }
+    ]
+   },
+   {
+    "id": "s4",
+    "title": "The booking page",
+    "visual": "A barber reads his phone",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Tony checked the booking page and froze."
+     }
+    ]
+   },
+   {
+    "id": "s5",
+    "title": "Two o'clock",
+    "visual": "A young man points, sure of himself",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Dre swore he had booked two people at two o'clock."
+     }
+    ]
+   },
+   {
+    "id": "s6",
+    "title": "The messages",
+    "visual": "He explains with both hands up",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Then the messages started flying in from every direction."
+     }
+    ]
+   },
+   {
+    "id": "s7",
+    "title": "A long line of words",
+    "visual": "A wide shot of the shop front with the pole turning and a long line of waiting people",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "Every Saturday morning the line outside the shop started before the sun came up, and by the time the first customer sat down the whole street already knew his name."
+     }
+    ]
+   },
+   {
+    "id": "s8",
+    "title": "One link",
+    "visual": "A link on the shop door",
+    "lines": [
+     {
+      "speaker": "narrator",
+      "text": "So Marcus put one link on the door and the line got shorter."
+     }
+    ]
+   }
+  ],
+  "violations": [
+   {
+    "sceneId": "s7",
+    "rule": "line_length",
+    "message": "A line is longer than 22 words. Shorter lines are easier to follow."
+   }
+  ]
+ },
+ "projects": [
+  {
+   "id": "a",
+   "title": "The line outside the barbershop",
+   "style": "3d_family",
+   "thumbnail_url": "/mock/still-1.jpg",
+   "step": "review",
+   "updated_at": "2026-11-13"
+  },
+  {
+   "id": "b",
+   "title": "Barbers and the booking page",
+   "style": "3d_family",
+   "thumbnail_url": "/mock/still-5.jpg",
+   "step": "done",
+   "status": "finished",
+   "updated_at": "2026-11-12"
+  },
+  {
+   "id": "c",
+   "title": "Little Jay waits his turn",
+   "style": "3d_family",
+   "thumbnail_url": "/mock/still-7.jpg",
+   "step": "script",
+   "updated_at": "2026-11-11"
+  },
+  {
+   "id": "d",
+   "title": "A shop in clay",
+   "style": "clay",
+   "step": "brief",
+   "updated_at": "2026-11-10"
+  }
+ ]
+}

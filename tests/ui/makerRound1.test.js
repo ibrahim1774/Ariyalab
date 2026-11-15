@@ -97,7 +97,8 @@ describe('error copy by code', () => {
   const e = (status, code, extra = {}) => new StoryApiError({ status, code, ...extra });
   it('daily_limit', () => {
     const d = describeError(e(429, 'daily_limit'));
-    expect(d.message).toBe('You have written 3 scripts for this video today. Come back tomorrow, or pick a plan for more.');
+    expect(d.message).toBe('You have reached today\u2019s limit. Come back tomorrow, or pick a plan for more.');
+    expect(d.message).not.toMatch(/\b3\b/);
     expect(d.action).toEqual({ label: 'See plans', href: '/app/billing' });
   });
   it('chat_limit', () => {
@@ -337,5 +338,40 @@ describe('quote strip', () => {
     const row = container.querySelector('[class*="row"]');
     expect(within(row).getByRole('link', { name: 'Top up' })).toHaveAttribute('href', '/app/billing');
     expect(container.querySelector('details')).toHaveTextContent('Short by 220 credits');
+  });
+});
+
+describe('round 2', () => {
+  it('daily_limit uses the limit from the error body when there is one', () => {
+    const d = describeError(new StoryApiError({ status: 429, code: 'daily_limit', body: { limit: 5 } }));
+    expect(d.message).toBe('You have reached the limit of 5 for today. Come back tomorrow, or pick a plan for more.');
+  });
+
+  it('useMediaQuery answers from matchMedia on the very first render', async () => {
+    vi.stubGlobal('matchMedia', (q) => ({ matches: true, media: q, addEventListener() {}, removeEventListener() {} }));
+    const { default: useMediaQuery } = await import('../../components/maker/useMediaQuery');
+    const seen = [];
+    function Probe() {
+      seen.push(useMediaQuery('(max-width: 760px)'));
+      return null;
+    }
+    render(<Probe />);
+    expect(seen[0]).toBe(true);
+  });
+
+  it('the style note keeps its extra sentence in a part a phone can hide', () => {
+    render(<StepStoryboard project={project()} shots={[shot(1)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    const note = screen.getByTestId('style-note');
+    expect(note).toHaveTextContent('Style: 3D animated family film');
+    expect(note.querySelector('[class*="styleExtra"]')).toHaveTextContent('Every picture follows it.');
+  });
+
+  it('a cast card keeps "Describe a change" behind a toggle button', () => {
+    const cast = [{ id: 'c1', name: 'Maya', status: 'ready', chosen_index: 0, regens_used: 0, candidates: [{ url: '/a.png', key: 'a' }] }];
+    render(<StepCast project={project()} cast={cast} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    const toggle = screen.getByRole('button', { name: 'Change this character' });
+    expect(toggle).toHaveAttribute('aria-expanded', 'false');
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute('aria-expanded', 'true');
   });
 });
