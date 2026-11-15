@@ -45,6 +45,12 @@ export function describeError(err, { returnTo } = {}) {
   if (code === 'provider_failed') {
     return { ...out, title: 'That did not work', message: server || 'Something went wrong while making that. Please try again.', action: { label: 'Try again', retry: true } };
   }
+  if (code === 'retry_not_available') {
+    return { ...out, title: 'Nothing to try again', message: server || 'Describe a change and make new pictures instead.', refresh: true };
+  }
+  if (code === 'sheet_limit') {
+    return { ...out, title: 'Character sheet limit reached', message: server || 'Your pick is saved. Make new pictures to get a new character sheet.' };
+  }
   if (code === 'quote_changed') {
     return { ...out, title: 'The price changed', message: 'Check the new total below, then confirm again.' };
   }

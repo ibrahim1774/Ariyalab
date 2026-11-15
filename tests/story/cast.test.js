@@ -494,14 +494,31 @@ describe('pickCast', () => {
     await expect(pickCast({ userId: randomUUID(), projectId: project.id, castId: randomUUID(), candidateIndex: 0 })).rejects.toMatchObject({ status: 404 });
   });
 
-  it('stops queuing sheets after 6 for one character, but failed sheets do not count', async () => {
+  it('stops queuing sheets after 6 per round of pictures, keeps the pick, and a regeneration starts the count again', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
     for (let i = 0; i < 6; i += 1) {
       await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: i % 2 });
       await finishJobs(project.id);
     }
+    const count = (await jobsOf(project.id)).length;
     await expect(pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 2 })).rejects.toMatchObject({ status: 429, code: 'sheet_limit' });
+    expect(await castRow(id)).toMatchObject({ chosen_index: 2, sheet: {} }); // the pick was saved
+    expect(await jobsOf(project.id)).toHaveLength(count); // no sheet queued
+    await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'again' });
+    await finishJobs(project.id);
+    await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 0 });
+    await finishJobs(project.id);
+    expect((await castRow(id)).sheet).toMatchObject({ url: expect.any(String) });
+  });
+
+  it('failed sheets do not count towards the cap', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    for (let i = 0; i < 6; i += 1) {
+      await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: i % 2 });
+      await finishJobs(project.id);
+    }
     await storyDb().update('story_jobs', { project_id: project.id, kind: 'cast_image', status: 'done' }, { status: 'failed' });
     await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 2 });
   });
@@ -628,6 +645,13 @@ describe('regenerateCharacter', () => {
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'x'.repeat(501) })).rejects.toMatchObject({ status: 422 });
   });
 
+  it('does not screen the note for a free account (no classifier call)', async () => {
+    const { userId, project, cast } = await readyCast();
+    accounts.set({ paid: false });
+    // A note that moderation would block: the plan check must come first.
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'make her nude' })).rejects.toMatchObject({ status: 402, code: 'plan_required' });
+  });
+
   it('a free account gets 402 plan_required', async () => {
     const { userId, project, cast } = await readyCast();
     accounts.set({ paid: false });
@@ -725,14 +749,42 @@ describe('retry (free)', () => {
     expect(jobs.every((j) => j.payload.prompt.includes('a change'))).toBe(true);
   });
 
-  it('is free even when the failed round was a paid one, and never spends credits', async () => {
+  it('a retry of a failed PAID round holds that round\'s price again, settles per picture, and uses no free regeneration', async () => {
+    const { userId, project, id } = await failedCharacter({ paidRound: true });
+    const price = (await getPricing()).castRegen;
+    const before = await available(userId);
+    const used = (await castRow(id)).regens_used;
+    // The earlier note carried a failure token; drop it so this time the pictures come out.
+    const out = await regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true });
+    expect(out.charged).toBe(price);
+    expect((await getBalance(userId)).held).toBe(price);
+    const jobs = (await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.payload.round === 3);
+    expect(jobs.reduce((n, j) => n + (j.cost_credits || 0), 0)).toBe(price);
+    expect((await castRow(id)).regens_used).toBe(used);
+    await finishJobs(project.id); // the token is still in the note, so they fail again and everything is given back
+    expect((await getBalance(userId)).held).toBe(0);
+    expect(await available(userId)).toBe(before);
+  });
+
+  it('a retry of a paid round that now comes out is charged once for the pictures', async () => {
     const { userId, project, id } = await failedCharacter({ paidRound: true });
     const before = await available(userId);
+    // Take the failure token out of the stored note so the retry succeeds.
+    const old = (await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.payload.round === 2);
+    for (const j of old) await storyDb().update('story_jobs', { id: j.id }, { payload: { ...j.payload, note: 'a change' } });
     const out = await regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true });
-    expect(out.charged).toBe(0);
     await finishJobs(project.id);
-    expect(await available(userId)).toBe(before);
-    expect((await castRow(id)).regens_used).toBe(3);
+    expect((await castRow(id)).status).toBe('ready');
+    expect(before - (await available(userId))).toBe(out.charged);
+    expect(out.charged).toBe((await getPricing()).castRegen);
+  });
+
+  it('a paid retry without credits is a 402 and changes nothing', async () => {
+    const { userId, project, id } = await failedCharacter({ paidRound: true });
+    const { spendCredits } = await import('../../lib/credits.js');
+    await spendCredits({ userId, currency: 'video', amount: (await getBalance(userId)).available, reason: 'test', ref: randomUUID() });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toBeInstanceOf(InsufficientCreditsError);
+    expect(await castRow(id)).toMatchObject({ status: 'failed', round: 2 });
   });
 
   it('is not a free re-roll: it is refused when the last attempt did not fail', async () => {
@@ -779,6 +831,85 @@ describe('retry (free)', () => {
     const { userId, project, id } = await failedCharacter();
     accounts.set({ paid: false });
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toMatchObject({ status: 402 });
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+describe('holds are never left behind (K2, K5)', () => {
+  const price = 5;
+  async function paidReady() {
+    const ctx = await readyCast();
+    await storyDb().update('story_cast', { id: ctx.cast[0].id }, { regens_used: 2 });
+    return ctx;
+  }
+
+  it('releases the hold when claiming the round throws', async () => {
+    const { userId, project, cast } = await paidReady();
+    const db = storyDb();
+    const spy = vi.spyOn(db, 'update').mockImplementationOnce(async () => { throw new Error('database unavailable'); });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'x' })).rejects.toThrow('database unavailable');
+    spy.mockRestore();
+    expect((await getBalance(userId)).held).toBe(0);
+    expect(await castRow(cast[0].id)).toMatchObject({ status: 'ready', round: 1, regens_used: 2 });
+  });
+
+  it('releases the hold and restores the pictures when queuing the jobs throws, and fences the aborted round', async () => {
+    const { userId, project, cast } = await paidReady();
+    const db = storyDb();
+    const real = db.insert.bind(db);
+    const guard = vi.spyOn(db, 'insert').mockImplementation(async (table, rows) => {
+      if (table === 'story_jobs') throw new Error('queue unavailable');
+      return real(table, rows);
+    });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'x' })).rejects.toThrow('queue unavailable');
+    guard.mockRestore();
+    expect((await getBalance(userId)).held).toBe(0);
+    const row = await castRow(cast[0].id);
+    expect(row).toMatchObject({ status: 'ready', regens_used: 2, hold_id: null });
+    expect(row.candidates).toHaveLength(3);
+    expect(row.round).toBeGreaterThan(2); // a job of the aborted round (2) can no longer write
+  });
+
+  it('a start that died after holding gives the hold back when it is restarted', async () => {
+    const { userId, project, cast } = await paidReady();
+    const { holdCredits } = await import('../../lib/credits.js');
+    const holdId = randomUUID();
+    await holdCredits({ userId, currency: 'video', amount: price, projectId: project.id, holdId });
+    expect((await getBalance(userId)).held).toBe(price);
+    // The crash: the round was claimed (draft, hold recorded) and no job was queued.
+    await storyDb().update('story_cast', { id: cast[0].id }, { status: 'draft', round: 2, hold_id: holdId, candidates: [] });
+    await raw.exec('alter table public.story_cast disable trigger story_cast_touch');
+    await raw.query(`update public.story_cast set updated_at = now() - interval '5 minutes' where id = $1`, [cast[0].id]);
+    await raw.exec('alter table public.story_cast enable trigger story_cast_touch');
+    await generateCast({ userId, projectId: project.id });
+    expect((await getBalance(userId)).held).toBe(0);
+    expect(await castRow(cast[0].id)).toMatchObject({ status: 'pending', round: 3, hold_id: null });
+  });
+
+  it('does not restart a draft when one of its jobs has already left the queue (K4)', async () => {
+    const { userId, project } = await newProject();
+    await generateCast({ userId, projectId: project.id });
+    const [first] = await castRows(project.id);
+    await storyDb().update('story_cast', { id: first.id }, { status: 'draft' });
+    const [job] = (await jobsOf(project.id)).filter((j) => j.payload.castId === first.id);
+    await storyDb().update('story_jobs', { id: job.id }, { status: 'running' });
+    await raw.exec('alter table public.story_cast disable trigger story_cast_touch');
+    await raw.query(`update public.story_cast set updated_at = now() - interval '5 minutes' where id = $1`, [first.id]);
+    await raw.exec('alter table public.story_cast enable trigger story_cast_touch');
+    await generateCast({ userId, projectId: project.id });
+    expect((await castRow(first.id)).round).toBe(1);
+  });
+
+  it('a done job whose picture is not in yet keeps the round pending, so a retry cannot slip in (K4)', async () => {
+    const { userId, project } = await newProject();
+    await generateCast({ userId, projectId: project.id });
+    const [row] = await castRows(project.id);
+    const jobs = (await jobsOf(project.id)).filter((j) => j.payload.castId === row.id);
+    await storyDb().update('story_jobs', { id: jobs.map((j) => j.id) }, { status: 'done' });
+    await castImageHandler.onDone(jobs[0], { url: '/api/mock/storage/a.png', key: 'a.png' });
+    expect((await castRow(row.id)).status).toBe('pending');
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: row.id, retry: true })).rejects.toMatchObject({ status: 409 });
   });
 });
 

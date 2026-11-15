@@ -23,7 +23,8 @@
 
 alter table public.story_cast
   add column voice_note text,
-  add column round integer not null default 1 check (round >= 1);
+  add column round integer not null default 1 check (round >= 1),
+  add column hold_id uuid;  -- the credit hold taken for the current round (a paid regeneration or retry); null otherwise
 
 drop index public.story_cast_project_idx;
 create unique index story_cast_project_ord_idx on public.story_cast (project_id, ord);
@@ -34,7 +35,8 @@ create function public.story_cast_apply(
   p_slot integer,
   p_url text default null,
   p_key text default null,
-  p_prompt text default null
+  p_prompt text default null,
+  p_job uuid default null
 )
 returns text
 language plpgsql
@@ -66,9 +68,12 @@ begin
       ) as x(e);
   end if;
 
-  -- Jobs still working on this round. A job that is done but whose result is
-  -- not applied yet counts as finished: it applies itself a moment later.
-  select count(*) filter (where j.status in ('queued', 'running')),
+  -- Jobs still working on this round. Another job that is done but whose
+  -- picture is not in the list yet still counts as working: it applies itself
+  -- a moment later and recomputes. p_job is the caller's own job.
+  select count(*) filter (where j.status in ('queued', 'running')
+                             or (j.status = 'done' and j.applied_at is null and j.id is distinct from p_job
+                                 and not (merged @> jsonb_build_array(jsonb_build_object('slot', (j.payload ->> 'slot')::integer))))),
          count(*) filter (where j.status = 'blocked')
     into v_active, v_blocked
     from story_jobs j

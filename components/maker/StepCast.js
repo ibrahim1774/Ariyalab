@@ -26,6 +26,8 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const [error, setError] = useState(null);
   const pricing = usePricing();
   const left = Math.max(0, pricing.included.castRegenPerCharacter - (cast.regens_used || 0));
+  // A retry of a paid round holds that round's price again (the server works it out from the round's jobs).
+  const retryCost = (cast.regens_used || 0) > pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
 
   async function run(kind, fn) {
     setBusy(kind);
@@ -78,7 +80,13 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'}
             text={cast.status === 'blocked' ? blockedReason(cast, jobs) : 'Try again, or describe a change below.'}
           >
-            <Button variant="ghost" size="sm" onClick={retry} disabled={busy === 'retry'}>Try again</Button>
+            {cast.status === 'blocked' ? (
+              <Button variant="ghost" size="sm" onClick={() => setChange(true)}>Describe a change</Button>
+            ) : (
+              <Button variant="ghost" size="sm" onClick={retry} disabled={busy === 'retry'}>
+                {retryCost > 0 ? `Try again (${retryCost} credits)` : 'Try again'}
+              </Button>
+            )}
           </Tile>
         </div>
       )}

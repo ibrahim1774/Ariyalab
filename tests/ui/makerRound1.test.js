@@ -185,6 +185,26 @@ describe('script load failure', () => {
   });
 });
 
+describe('cast retry rules (round 1)', () => {
+  const props = (cast) => ({ project: project(), cast, jobs: [], refresh: vi.fn(), onNext: vi.fn(), returnTo: '/' });
+  it('a blocked character has no Try again; Describe a change opens the form', () => {
+    render(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'blocked', candidates: [] }])} />);
+    expect(screen.queryByRole('button', { name: /Try again/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Describe a change' }));
+    expect(screen.getByRole('button', { name: /Hide options/ })).toHaveAttribute('aria-expanded', 'true');
+  });
+  it('Try again shows the price after a paid round, and nothing after a free one', () => {
+    const { rerender } = render(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], regens_used: 3 }])} />);
+    expect(screen.getByRole('button', { name: 'Try again (5 credits)' })).toBeInTheDocument();
+    rerender(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], regens_used: 2 }])} />);
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
+  });
+  it('describeError has titles for retry_not_available and sheet_limit', () => {
+    expect(describeError(new StoryApiError({ status: 409, code: 'retry_not_available', serverMessage: 'x' }))).toMatchObject({ title: 'Nothing to try again', refresh: true });
+    expect(describeError(new StoryApiError({ status: 429, code: 'sheet_limit' }))).toMatchObject({ title: 'Character sheet limit reached' });
+  });
+});
+
 describe('retrying a failed picture is free', () => {
   it('uses retryCast, not cast-regen with an empty note', async () => {
     client.retryCast.mockResolvedValue({});
