@@ -28,7 +28,8 @@
 --   (20261114000150_grants.sql), which runs as its owner.
 --
 -- CHECK FIRST (Supabase SQL editor; keep the output):
---   select t.tgname, t.tgenabled, p.proname, pg_get_functiondef(p.oid) like '%stripe_customer_id%' as touches_column
+--   select t.tgname, t.tgenabled, (t.tgtype & 2) <> 0 as is_before, p.proname,
+--          pg_get_functiondef(p.oid) like '%stripe_customer_id%' as touches_column
 --     from pg_trigger t join pg_proc p on p.oid = t.tgfoid
 --    where t.tgrelid = 'public.profiles'::regclass and not t.tgisinternal;
 --   Every BEFORE trigger listed must not write stripe_customer_id

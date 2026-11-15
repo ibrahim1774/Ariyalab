@@ -711,3 +711,47 @@ describe('round 3: a hold already settled under any ref is never charged again (
     expect(await st(h)).toBe('settled');
   });
 });
+
+// ---------------------------------------------------------------- round 4
+
+describe('round 4: direct charges are tied to their hold; only a direct spend excuses a ref conflict (V1, V2)', () => {
+  const st = async (h) => (await db.query('select status from public.credit_legacy_holds where hold_id = $1', [h])).rows[0]?.status;
+  async function held(amount, route = 'image-to-video') {
+    const h = randomUUID();
+    await recordHold({ holdId: h, userId: user.id, currency: 'video', amount, route });
+    await holdCredits({ userId: user.id, currency: 'video', amount, projectId: null, holdId: h });
+    return h;
+  }
+
+  it('r3 case E: charged directly under the job ref, then retried under the hold-id ref: charged once', async () => {
+    await grant(100);
+    const e = await held(10);
+    await releaseHold({ holdId: e }); // the reconciler gave up on it
+    // The late success is charged directly (job ref k_e)...
+    await endHold({ hold: { holdId: e, amount: 10, route: 'image-to-video', userId: user.id, currency: 'video' }, jobId: 'k_e', failed: false });
+    expect((await getBalance(user.id)).available).toBe(90);
+    // ...and a retry that only knows the hold id must not charge again.
+    await db.query(`update public.credit_legacy_holds set status = 'settle_retry', job_id = null, created_at = now() - interval '20 minutes' where hold_id = $1`, [e]);
+    await reconcileLegacyHolds({ getKie: async () => null, renderStatus: async () => null });
+    expect(await getBalance(user.id)).toMatchObject({ available: 90, held: 0 });
+  });
+
+  it('r3 case F: the job ref was settled by ANOTHER hold: not treated as paid, kept for retry', async () => {
+    await grant(100);
+    const f1 = await held(5);
+    const f2 = await held(5);
+    expect(await endHold({ hold: { holdId: f1, amount: 5, route: 'image-to-video', userId: user.id }, jobId: 'k_f', failed: false })).toBe('settled');
+    expect(await endHold({ hold: { holdId: f2, amount: 5, route: 'image-to-video', userId: user.id }, jobId: 'k_f', failed: false })).toBe('retry');
+    expect(await getBalance(user.id)).toMatchObject({ held: 5, available: 90 });
+    expect(await st(f2)).toBe('settle_retry');
+  });
+
+  it('r3 case H: a partial settle under the same ref and hold is not taken as paid in full', async () => {
+    await grant(100);
+    const h = await held(5, 'x');
+    await settleHold({ holdId: h, amount: 3, reason: 'legacy_tool', ref: 'legacy:x:jh' });
+    expect(await endHold({ hold: { holdId: h, amount: 5, route: 'x', userId: user.id }, jobId: 'jh', failed: false })).toBe('retry');
+    expect(await getBalance(user.id)).toMatchObject({ held: 2, topup: 97, available: 95 });
+    expect(await st(h)).toBe('settle_retry');
+  });
+});

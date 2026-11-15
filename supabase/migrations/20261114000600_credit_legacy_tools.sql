@@ -1,6 +1,6 @@
 -- Ledger support for the old tools under billing_v2 and for the one-time
 -- legacy credit migration. Applies after 20261114000100 and 000150.
--- Creates three tables and nine functions; touches no shared table.
+-- Creates three tables and nineteen functions; touches no shared table.
 --
 --   credit_legacy_holds      one row per paid job of an old tool: which hold
 --                            pays for it, which provider job it waits on, and
@@ -100,6 +100,42 @@ security definer
 set search_path = public, pg_temp
 as $$
   select exists (select 1 from credit_ledger where hold_id = p_hold and op in ('settle', 'spend'));
+$$;
+
+-- Charges a successful job whose hold had already closed: a spend (plan
+-- first, then topup) whose ledger row names the hold, so credit_hold_charged
+-- sees it whatever ref a later retry uses. Idempotent on (reason, ref) for
+-- the same hold and amount.
+create function public.credit_charge_closed_hold(
+  p_hold uuid, p_user uuid, p_currency text, p_amount integer, p_reason text, p_ref text
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  a credit_accounts;
+  r credit_ledger;
+  v_available integer;
+  v_from_plan integer;
+begin
+  perform credit_check_args(p_amount, p_reason, p_ref);
+  a := credit_lock_account(p_user, p_currency);
+  r := credit_replay(p_user, p_currency, p_reason, p_ref, 'spend', p_amount, p_hold);
+  if r.id is not null then
+    return credit_to_json(a);
+  end if;
+  v_available := a.plan_balance + a.topup_balance - a.held;
+  if p_amount > v_available then
+    perform credit_raise_insufficient(p_amount, v_available);
+  end if;
+  v_from_plan := least(a.plan_balance, p_amount);
+  return credit_apply(
+    p_user, p_currency, -v_from_plan, -(p_amount - v_from_plan), 0,
+    p_reason, p_ref, null, 'spend', p_amount, p_hold
+  );
+end
 $$;
 
 -- A 'reserving' record whose ledger hold never happened.
@@ -375,6 +411,7 @@ begin
           'credit_legacy_hold_open', 'credit_legacy_hold_attach', 'credit_legacy_hold_mark',
           'credit_legacy_hold_touch', 'credit_legacy_hold_forget', 'credit_legacy_hold_ledger_state',
           'credit_unclaim_swap_use', 'credit_has_pending_renewal_since', 'credit_hold_charged',
+          'credit_charge_closed_hold',
           'credit_legacy_holds_due', 'credit_swap_use', 'credit_claim_swap_use', 'credit_record_swap',
           'credit_reset_plan', 'credit_has_plan_renewal_since', 'credit_migrate_legacy',
           'credit_legacy_migrated', 'credit_legacy_migration_of'
