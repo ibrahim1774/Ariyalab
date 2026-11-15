@@ -3,7 +3,14 @@
 -- The profiles table is SHARED with haelabs.live.
 -- ============================================================================
 --
--- WHAT IT CHANGES (additive: one function, one trigger, no grant changes)
+-- NOT APPLIED ANYWHERE YET. Earlier drafts of this file (a grant-based
+-- version, then a trigger named ariyalab_profiles_customer_guard) must not
+-- have been applied to any database; if the old-named trigger exists, the
+-- roll back below removes it too.
+--
+-- WHAT IT CHANGES (additive: three functions, one trigger, and EXECUTE on
+-- those three functions for anon and authenticated; no table grant, column
+-- grant or policy is added, changed or removed)
 --   A BEFORE INSERT OR UPDATE trigger on public.profiles
 --   (zz_ariyalab_profiles_customer_guard: named to run after any other BEFORE
 --   trigger, so a trigger that rewrites the row cannot slip a change past it)
@@ -16,13 +23,17 @@
 --
 --   Not affected: every other column; whole-row saves and upserts that send
 --   stripe_customer_id unchanged; inserts with it null; reads; RLS policies;
---   grants (none are added or removed); the service role; the table owner;
+--   table and column grants; the service role; the table owner;
 --   and this app's server-side link function credit_link_customer
 --   (20261114000150_grants.sql), which runs as its owner.
 --
 -- CHECK FIRST (Supabase SQL editor; keep the output):
---   select tgname, tgenabled from pg_trigger
---    where tgrelid = 'public.profiles'::regclass and not tgisinternal;
+--   select t.tgname, t.tgenabled, p.proname, pg_get_functiondef(p.oid) like '%stripe_customer_id%' as touches_column
+--     from pg_trigger t join pg_proc p on p.oid = t.tgfoid
+--    where t.tgrelid = 'public.profiles'::regclass and not t.tgisinternal;
+--   Every BEFORE trigger listed must not write stripe_customer_id
+--   (touches_column = true means read its definition before applying).
+--   This guard is named to sort last, so it sees the row they produce.
 --   select policyname, cmd, roles from pg_policies
 --    where schemaname = 'public' and tablename = 'profiles';
 --
@@ -43,8 +54,9 @@
 -- SET ROLE to it): if a change by `authenticated` would not be refused, the
 -- whole migration is rolled back.
 --
--- ROLL BACK:
+-- ROLL BACK (five lines; the second removes a trigger of an earlier draft, if any):
 --   drop trigger if exists zz_ariyalab_profiles_customer_guard on public.profiles;
+--   drop trigger if exists ariyalab_profiles_customer_guard on public.profiles;
 --   drop function if exists public.ariyalab_profiles_customer_guard();
 --   drop function if exists public.ariyalab_profiles_customer_check(text, text, text);
 --   drop function if exists public.ariyalab_profiles_customer_unchanged(uuid, text);

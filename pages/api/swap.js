@@ -109,8 +109,6 @@ export default async function handler(req, res) {
       return res.status(503).json({ error: 'Face swap is temporarily unavailable.' });
     }
     // billing_v2 only: a use claimed by a call whose job id is not recorded
-    // yet is a swap starting right now.
-    // billing_v2 only: a use claimed by a call whose job id is not recorded
     // yet is a swap starting right now, unless the claim is over 2 minutes
     // old (stale): then it counts as a failed attempt.
     if (use && !use.swapId && !use.stale) {

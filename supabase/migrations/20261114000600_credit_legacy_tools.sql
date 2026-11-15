@@ -91,6 +91,17 @@ as $$
    where hold_id = p_hold;
 $$;
 
+-- True when the ledger already spent anything from this hold (a settle under
+-- any ref): a success on a closed hold is then never charged again.
+create function public.credit_hold_charged(p_hold uuid)
+returns boolean
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (select 1 from credit_ledger where hold_id = p_hold and op in ('settle', 'spend'));
+$$;
+
 -- A 'reserving' record whose ledger hold never happened.
 create function public.credit_legacy_hold_forget(p_hold uuid)
 returns void
@@ -363,7 +374,7 @@ begin
         and p.proname = any (array[
           'credit_legacy_hold_open', 'credit_legacy_hold_attach', 'credit_legacy_hold_mark',
           'credit_legacy_hold_touch', 'credit_legacy_hold_forget', 'credit_legacy_hold_ledger_state',
-          'credit_unclaim_swap_use', 'credit_has_pending_renewal_since',
+          'credit_unclaim_swap_use', 'credit_has_pending_renewal_since', 'credit_hold_charged',
           'credit_legacy_holds_due', 'credit_swap_use', 'credit_claim_swap_use', 'credit_record_swap',
           'credit_reset_plan', 'credit_has_plan_renewal_since', 'credit_migrate_legacy',
           'credit_legacy_migrated', 'credit_legacy_migration_of'

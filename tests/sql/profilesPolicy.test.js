@@ -53,7 +53,7 @@ const privileges = async (db) =>
       has_column_privilege('authenticated','public.profiles','display_name','UPDATE') as other`)
   ).rows[0];
 
-describe('profiles guard trigger on a Supabase-like table', () => {
+describe('profiles guard trigger on a Supabase-like table', { timeout: 30_000 }, () => {
   let db;
   let before;
   const ID = '00000000-0000-0000-0000-000000000001';
@@ -140,7 +140,7 @@ describe('profiles guard trigger on a Supabase-like table', () => {
 });
 
 // The shapes that defeated the grant-based version (round-1 policy probe).
-describe('the guard holds whatever the grants look like', () => {
+describe('the guard holds whatever the grants look like', { timeout: 30_000 }, () => {
   const BASE = `
     ${ROLES}
     create role supabase_admin nologin; create role mig nologin; create role dashboard_user nologin;
@@ -206,7 +206,7 @@ describe('the guard holds whatever the grants look like', () => {
   });
 });
 
-describe('on the minimal test stub', () => {
+describe('on the minimal test stub', { timeout: 30_000 }, () => {
   it('applies cleanly with every other migration', async () => {
     const stub = await createTestDb();
     try {

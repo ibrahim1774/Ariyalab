@@ -41,8 +41,8 @@ const { getEntitlement, reserveCredits, refundCredits, settleReservation, decrem
   '../lib/entitlement'
 );
 const { verifyJobToken, signJobId } = await import('../lib/jobToken');
-const { reconcileLegacyHolds, recordHold, attachJob, endHold } = await import('../lib/legacyHolds');
-const { holdCredits, releaseHold } = await import('../lib/credits.js');
+const { reconcileLegacyHolds, recordHold, attachJob, endHold, markHeld } = await import('../lib/legacyHolds');
+const { holdCredits, releaseHold, settleHold, spendCredits } = await import('../lib/credits.js');
 const swap = (await import('../pages/api/swap')).default;
 const cronLegacyHolds = (await import('../pages/api/cron/legacy-holds')).default;
 const { KEY } = await import('../lib/metaKeys');
@@ -648,5 +648,66 @@ describe('round 2: a swap claim is undone when the job does not start (P4)', () 
       [user.id]
     );
     expect((await call(swap, { body })).statusCode).toBe(409);
+  });
+});
+
+// ---------------------------------------------------------------- round 3
+
+describe('round 3: a hold already settled under any ref is never charged again (Q1, Q2, Q3, Q4)', () => {
+  const st = async (h) => (await db.query('select status from public.credit_legacy_holds where hold_id = $1', [h])).rows[0]?.status;
+
+  it('r2 case C: the route settled (job ref), its answer and the job id were lost; the reconciler does not charge again', async () => {
+    await grant(100);
+    const c = randomUUID();
+    await recordHold({ holdId: c, userId: user.id, currency: 'video', amount: 10, route: 'character-frame', status: 'reserving' });
+    await holdCredits({ userId: user.id, currency: 'video', amount: 10, projectId: null, holdId: c });
+    await markHeld(c);
+    await settleHold({ holdId: c, amount: 10, reason: 'legacy_tool', ref: 'legacy:character-frame:pred_1' });
+    await db.query(`update public.credit_legacy_holds set status = 'settle_retry', created_at = now() - interval '20 minutes' where hold_id = $1`, [c]);
+    await reconcileLegacyHolds({ getKie: async () => null, renderStatus: async () => null });
+    expect(await getBalance(user.id)).toMatchObject({ available: 90, held: 0 });
+    expect(await st(c)).toBe('settled');
+  });
+
+  it('a hold error other than insufficient credits keeps the reserving record for the reconciler', async () => {
+    await grant(100);
+    const ent = await entitlementFor();
+    failOn.add('public.credit_hold(');
+    await expect(reserveCredits(ent, 10, { route: 'test' })).rejects.toThrow(/db down/);
+    const { rows } = await db.query(`select status from public.credit_legacy_holds where user_id = $1`, [user.id]);
+    expect(rows).toEqual([{ status: 'reserving' }]);
+  });
+
+  it('insufficient credits drops the reserving record', async () => {
+    const ent = await entitlementFor();
+    await expect(reserveCredits(ent, 10, { route: 'test' })).rejects.toMatchObject({ code: 'INSUFFICIENT' });
+    const { rows } = await db.query(`select count(*)::int as n from public.credit_legacy_holds where user_id = $1`, [user.id]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('a kie job past the 24 h cap is released without reading kie (a hanging read cannot stall the run)', async () => {
+    await grant(100);
+    const h = randomUUID();
+    await recordHold({ holdId: h, userId: user.id, currency: 'video', amount: 5, route: 'image-to-video' });
+    await holdCredits({ userId: user.id, currency: 'video', amount: 5, projectId: null, holdId: h });
+    await attachJob(h, { provider: 'kie', jobId: 'k_old' });
+    await db.query(`update public.credit_legacy_holds set created_at = now() - interval '25 hours' where hold_id = $1`, [h]);
+    // Never answers for this job (other tests' rows get an ordinary answer).
+    const getKie = vi.fn((id) => (id === 'k_old' ? new Promise(() => {}) : Promise.resolve(null)));
+    await reconcileLegacyHolds({ getKie });
+    expect(getKie).not.toHaveBeenCalledWith('k_old');
+    expect(await st(h)).toBe('released');
+  });
+
+  it('a settle whose job ref was already charged directly counts as settled and frees the hold (Q4)', async () => {
+    await grant(100);
+    await spendCredits({ userId: user.id, currency: 'video', amount: 10, reason: 'legacy_tool', ref: 'legacy:image-to-video:k_dup' });
+    const h = randomUUID();
+    await recordHold({ holdId: h, userId: user.id, currency: 'video', amount: 10, route: 'image-to-video' });
+    await holdCredits({ userId: user.id, currency: 'video', amount: 10, projectId: null, holdId: h });
+    const out = await endHold({ hold: { holdId: h, amount: 10, route: 'image-to-video', userId: user.id }, jobId: 'k_dup', failed: false });
+    expect(out).toBe('settled');
+    expect(await getBalance(user.id)).toMatchObject({ available: 90, held: 0 });
+    expect(await st(h)).toBe('settled');
   });
 });
