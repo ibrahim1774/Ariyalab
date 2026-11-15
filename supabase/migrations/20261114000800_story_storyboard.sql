@@ -4,8 +4,10 @@
 --
 -- story_projects.pending_shots / pending_basis / pending_at: a rebuild that
 -- would remove finished clips is not applied; its plan is kept here
--- ({ token, plan, count, checkRange }) with a hash of what it was planned
--- from and when, so the customer's confirm applies exactly that plan (within
+-- ({ token, plan, count, changed }: the confirm token, the list for
+-- story_shots_replace, the clips it removes, and whether scenes were
+-- re-planned) with a hash of what it was planned from (script version,
+-- length, cast, every shot's id, clip, description and line) and when, so the customer's confirm applies exactly that plan (within
 -- 10 minutes, while nothing it was based on has changed) without asking the
 -- model again.
 --
@@ -49,8 +51,8 @@
 --   otherwise { sceneId, sceneSig, description, line, seconds, quality,
 --   castIds }, which keeps the first unused row with the same (scene_id,
 --   description, line), or is inserted as a draft. Rows that match nothing are
---   deleted. Kept rows stay stale only while their clip no longer matches
---   their own description or still (clip_mismatch).
+--   deleted. Kept rows keep their stale flag; lib/story/storyboard.js clears
+--   it afterwards for rows planned from their scene as it is now.
 --   Raises 'shots_busy' while a still or clip job of the project is queued or
 --   running or a shot is waiting for one; 'rebuild_loses_clips:<n>' when more
 --   rows with a clip would be deleted than p_confirm (the number of clips the
@@ -209,8 +211,7 @@ begin
        set ord = kept_ord[k],
            cast_ids = case when kept_cast[k] is null then cast_ids
                            else array(select jsonb_array_elements_text(kept_cast[k])::uuid) end,
-           scene_sig = coalesce(kept_sig[k], scene_sig),
-           stale = stale and clip_url is not null and clip_mismatch
+           scene_sig = coalesce(kept_sig[k], scene_sig)
      where id = kept[k];
   end loop;
 

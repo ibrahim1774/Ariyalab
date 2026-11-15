@@ -1110,7 +1110,7 @@ describe('round 3', () => {
     const [a, b] = ctx.shots;
     await storyDb().update('story_shots', { id: a.id }, { stale: true });
     await storyDb().update('story_shots', { id: b.id }, { stale: true, scene_sig: 'changed-meanwhile' });
-    await _clearSettledStale(ctx.project.id, [['s1', sceneSig(SCENES[0])]]);
+    await _clearSettledStale(ctx.project.id);
     expect((await shotRow(a.id)).stale).toBe(false);
     expect((await shotRow(b.id)).stale).toBe(true);
   });
@@ -1148,5 +1148,55 @@ describe('round 3', () => {
     const msg = buildShotsMessage({ scenes: [{ ...SCENES[0], mention: true }, SCENES[1]], seconds: 12, cast: [], current: [] });
     const brief = JSON.parse(/<shot_brief>\n([\s\S]*?)\n<\/shot_brief>/.exec(msg)[1]);
     expect(brief.scenes.map((s) => s.mention)).toEqual([true, false]);
+  });
+});
+
+// ---------------------------------------------------------------- round 4
+
+describe('round 4', () => {
+  it('X1: a scene edited while the build asks the model stays stale after the build (real updateScene and markStale)', async () => {
+    const ctx = await builtProject();
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    registerMock('story_shots', async (args) => {
+      // The customer edits scene s1 while the model is planning s2.
+      await updateScene({ userId: ctx.userId, projectId: ctx.project.id, sceneId: 's1', patch: { visual: 'Maya counts the till at midnight.' } });
+      return storyShotsMock(args);
+    });
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    const rows = await shotRows(ctx.project.id);
+    const s1 = rows.filter((r) => r.scene_id === 's1');
+    expect(s1).toHaveLength(2);
+    expect(s1.every((r) => r.stale)).toBe(true);
+    const view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    expect(view.filter((r) => r.scene_id === 's1').every((r) => r.needs_rebuild)).toBe(true);
+  });
+
+  async function asked409() {
+    const ctx = await builtProject();
+    for (const s of ctx.shots.filter((x) => x.scene_id === 's2')) await storyDb().update('story_shots', { id: s.id }, { clip_url: `/clip/${s.id}.mp4`, still_url: '/s.png' });
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    const asked = [];
+    registerMock('story_shots', (args) => { asked.push(args); return storyShotsMock(args); });
+    const ask = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id }).catch((e) => e);
+    expect(ask.code).toBe('rebuild_loses_clips');
+    return { ...ctx, asked, token: ask.extra.token };
+  }
+
+  it('X2: a status change alone does not void the confirm', async () => {
+    const ctx = await asked409();
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { status: 'still_ready', still_url: '/x.png' });
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id, confirm: ctx.token });
+    expect(ctx.asked).toHaveLength(1);
+  });
+
+  it('X2: a new length or a changed cast voids the confirm', async () => {
+    const a = await asked409();
+    await storyDb().update('story_projects', { id: a.project.id }, { seconds: 24 });
+    expect(await buildShotList({ userId: a.userId, projectId: a.project.id, confirm: a.token }).catch((e) => e)).toMatchObject({ code: 'rebuild_loses_clips' });
+    expect(a.asked).toHaveLength(2);
+    const b = await asked409();
+    await storyDb().insert('story_cast', { project_id: b.project.id, ord: 9, name: 'Ana', description: 'Ana looks friendly.', status: 'ready' });
+    expect(await buildShotList({ userId: b.userId, projectId: b.project.id, confirm: b.token }).catch((e) => e)).toMatchObject({ code: 'rebuild_loses_clips' });
+    expect(b.asked).toHaveLength(2);
   });
 });
