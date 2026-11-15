@@ -384,12 +384,12 @@ describe('submit outcomes', () => {
   it("a 'config' error fails the job at once with an operator log line", async () => {
     const project = await newProject();
     const fails = [];
-    registerHandler('music', {
+    registerHandler('analyze', {
       sync: true,
       run: async () => { throw new ProviderError('config', 'GOOGLE_AI_API_KEY is not set. Add it to .env.local.'); },
       onFail: async (job, info) => fails.push(info),
     });
-    const job = await enqueue({ projectId: project.id, kind: 'music' });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze' });
     await tick({ projectId: project.id, now: T0 });
     expect(await jobRow(job.id)).toMatchObject({ status: 'failed', attempts: 1, error: 'Generation failed. Please try again.' });
     expect(fails).toEqual([{ blocked: false, error: 'Generation failed. Please try again.', final: true }]);
@@ -899,16 +899,16 @@ describe('mirror failures', () => {
     runner._configure({ syncMinSeconds: { default: 0, render: 0 } });
     let runs = 0;
     const done = [];
-    registerHandler('narration', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.voice, seconds: 30 }; }, onDone: async (j, r) => done.push(r) });
-    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    registerHandler('analyze', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.clip, seconds: 30 }; }, onDone: async (j, r) => done.push(r) });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze' });
     await tick({ projectId: project.id, now: T0, deadline: Date.now() + 3_000 });
     expect(mirror.calls).toHaveLength(0);
     const row = await jobRow(job.id);
-    expect(row).toMatchObject({ status: 'running', attempts: 1, mirror_tries: 0, provider_result: { url: MOCK_URLS.voice, seconds: 30 } });
+    expect(row).toMatchObject({ status: 'running', attempts: 1, mirror_tries: 0, provider_result: { url: MOCK_URLS.clip, seconds: 30 } });
     await sweep({ now: at(11 * MIN) }); // a kept result is not a stuck sync run: not re-run
     await tick({ projectId: project.id, now: at(11 * MIN) });
     expect(runs).toBe(1);
-    const key = `story/${project.id}/narration/${job.id}.mp3`;
+    const key = `story/${project.id}/analyze/${job.id}.mp4`;
     expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 1, provider_result: null });
     expect(done).toEqual([{ url: `/api/mock/storage/${key}`, key, seconds: 30 }]);
   });
@@ -916,12 +916,12 @@ describe('mirror failures', () => {
   it('a sync result whose copy fails is kept and copied again after a backoff, never run again; the tries are bounded (round 4 N5)', async () => {
     const project = await newProject();
     let runs = 0;
-    registerHandler('narration', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.voice }; } });
-    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    registerHandler('analyze', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.clip }; } });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze' });
     mirror.fail = 1;
     await tick({ projectId: project.id, now: T0 });
     let row = await jobRow(job.id);
-    expect(row).toMatchObject({ status: 'running', mirror_tries: 1, provider_result: { url: MOCK_URLS.voice } });
+    expect(row).toMatchObject({ status: 'running', mirror_tries: 1, provider_result: { url: MOCK_URLS.clip } });
     expect(row.locked_until.getTime()).toBe(at(30).getTime());
     await tick({ projectId: project.id, now: at(10) }); // inside the backoff
     expect(mirror.calls).toHaveLength(1);
@@ -929,7 +929,7 @@ describe('mirror failures', () => {
     expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 2 });
     expect(runs).toBe(1);
 
-    const other = await enqueue({ projectId: project.id, kind: 'narration' });
+    const other = await enqueue({ projectId: project.id, kind: 'analyze' });
     mirror.fail = 10;
     for (const t of [100, 200, 300, 500, 800]) await tick({ projectId: project.id, now: at(t) });
     expect(await jobRow(other.id)).toMatchObject({ status: 'failed', mirror_tries: 4 });
@@ -1104,12 +1104,12 @@ describe('applying results', () => {
     const project = await newProject();
     let t = T0;
     const clock = () => t;
-    registerHandler('narration', {
+    registerHandler('analyze', {
       sync: true,
-      run: async () => { t = at(90); return { url: MOCK_URLS.voice }; },
+      run: async () => { t = at(90); return { url: MOCK_URLS.clip }; },
       onDone: async () => { throw new Error('later'); },
     });
-    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze' });
     await tick({ projectId: project.id, now: clock });
     const row = await jobRow(job.id);
     expect(row.status).toBe('done');
@@ -1220,8 +1220,7 @@ describe('sweep', () => {
   it('a job with no handler is put back for 5 minutes, outside the submit budget, and fails after 5 rounds', async () => {
     const project = await newProject();
     const holdId = await withHold(project);
-    unregisterHandler('music'); // every kind has a handler by now; this test needs one without
-    const job = await enqueue({ projectId: project.id, kind: 'music', holdId, costCredits: 5 });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze', holdId, costCredits: 5 });
     const budget = { submits: 15 };
     await tick({ projectId: project.id, now: T0, budget });
     const row = await jobRow(job.id);
@@ -1254,10 +1253,10 @@ describe('sync and worker kinds', () => {
   it('mirrors a sync media result that has a provider url but no key', async () => {
     const project = await newProject();
     const done = [];
-    registerHandler('narration', { sync: true, run: async () => ({ url: MOCK_URLS.voice, seconds: 30 }), onDone: async (j, r) => done.push(r) });
-    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    registerHandler('analyze', { sync: true, run: async () => ({ url: MOCK_URLS.clip, seconds: 30 }), onDone: async (j, r) => done.push(r) });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze' });
     await tick({ projectId: project.id, now: T0 });
-    const key = `story/${project.id}/narration/${job.id}.mp3`;
+    const key = `story/${project.id}/analyze/${job.id}.mp4`;
     expect(done).toEqual([{ url: `/api/mock/storage/${key}`, key, seconds: 30 }]);
   });
 
@@ -1265,12 +1264,12 @@ describe('sync and worker kinds', () => {
     const project = await newProject();
     const fails = [];
     let runs = 0;
-    registerHandler('narration', {
+    registerHandler('analyze', {
       sync: true,
       run: async () => { runs += 1; throw new ProviderError('failed'); },
       onFail: async (job, info) => fails.push({ status: job.status, ...info }),
     });
-    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    const job = await enqueue({ projectId: project.id, kind: 'analyze' });
     expect(await tick({ projectId: project.id, now: T0 })).toMatchObject({ retried: 1, failed: 0 });
     expect((await jobRow(job.id)).run_after.getTime()).toBe(at(30).getTime());
     expect((await tick({ projectId: project.id, now: at(29) })).claimed).toBe(0);
@@ -1316,6 +1315,59 @@ describe('sync and worker kinds', () => {
     expect((await jobRow(job.id)).result.key).toBe(`story/${project.id}/render/${job.id}.mp4`);
     expect(await runWorkerJob('render', { now: T0 })).toEqual({ claimed: false });
     await expect(runWorkerJob('clip', { now: T0 })).rejects.toThrow(/worker kind/);
+  });
+});
+
+describe('audio worker kinds (narration, music)', () => {
+  const failing = (calls) => ({ sync: true, run: async () => { calls.push(1); throw new ProviderError('failed'); } });
+
+  it('are worker kinds: tick and the cron never run them inline, runWorkerJob does', async () => {
+    expect(runner.WORKER_KINDS).toEqual(expect.arrayContaining(['render', 'narration', 'music']));
+    const project = await newProject();
+    const ran = [];
+    for (const kind of ['narration', 'music']) registerHandler(kind, { sync: true, run: async (job) => { ran.push(job.kind); return { url: MOCK_URLS.voice, key: `story/${job.project_id}/${job.kind}/${job.id}.mp3` }; } });
+    const n = await enqueue({ projectId: project.id, kind: 'narration' });
+    const m = await enqueue({ projectId: project.id, kind: 'music' });
+    await tick({ projectId: project.id, now: T0 });
+    await runner.runCron({ now: T0, deadline: Date.now() + 45_000 });
+    expect(ran).toEqual([]);
+    expect((await jobRow(n.id)).status).toBe('queued');
+    expect(await runWorkerJob('narration', { now: T0 })).toMatchObject({ claimed: true, jobId: n.id, outcome: 'done' });
+    expect(await runWorkerJob('music', { now: T0 })).toMatchObject({ claimed: true, jobId: m.id, outcome: 'done' });
+    expect(ran).toEqual(['narration', 'music']);
+  });
+
+  it('a provider failure inside the run is final: no second paid call', async () => {
+    const project = await newProject();
+    const calls = [];
+    registerHandler('narration', failing(calls));
+    const job = await enqueue({ projectId: project.id, kind: 'narration' });
+    expect(await runWorkerJob('narration', { now: T0 })).toMatchObject({ claimed: true, outcome: 'failed' });
+    expect(await runWorkerJob('narration', { now: at(120) })).toEqual({ claimed: false });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a worker job past its time budget is ended final by the sweep, never re-queued', async () => {
+    const project = await newProject();
+    const calls = [];
+    registerHandler('music', { sync: true, run: async () => { calls.push(1); return new Promise(() => {}); } });
+    const job = await enqueue({ projectId: project.id, kind: 'music' });
+    const pending = runWorkerJob('music', { now: T0 });
+    await new Promise((r) => setTimeout(r, 50));
+    expect((await jobRow(job.id)).status).toBe('running');
+    await sweep({ now: at(runner.RUNNER_CONFIG.workerMaxSeconds.music - 10) });
+    expect((await jobRow(job.id)).status).toBe('running');
+    await sweep({ now: at(runner.RUNNER_CONFIG.workerMaxSeconds.music + 10) });
+    expect(await jobRow(job.id)).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(await runWorkerJob('music', { now: at(2000) })).toEqual({ claimed: false });
+    expect(calls).toHaveLength(1);
+    void pending;
+  });
+
+  it('keeps its own start-time budget', () => {
+    expect(runner.RUNNER_CONFIG.syncMinSeconds.narration).toBeGreaterThan(20);
+    expect(runner.RUNNER_CONFIG.workerMaxSeconds.narration).toBeLessThanOrEqual(10 * 60);
   });
 });
 

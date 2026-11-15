@@ -16,7 +16,7 @@ import { ModerationError } from '../../lib/moderation.js';
 import { ProviderError } from '../../lib/providers/errors.js';
 import { synthesize } from '../../lib/providers/tts.js';
 import { generateMusic as providerMusic } from '../../lib/providers/music.js';
-import { tick, _handlerCallScope } from '../../lib/story/runner.js';
+import { tick, runWorkerJob, runCron, _handlerCallScope } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
 import {
   MUSIC_SUFFIX, FREE_RETRIES, STALE_CLAIM_MS, narratorLines, narrationText, sliceNarration, defaultPlan,
@@ -81,8 +81,10 @@ afterAll(async () => {
   rmSync(fixtureDir, { recursive: true, force: true });
   await raw?.close();
 });
-beforeEach(() => {
+beforeEach(async () => {
   _resetPricingCache();
+  // runWorkerJob claims from any project: jobs left over from an earlier test must not run in this one.
+  await raw.query(`update story_jobs set status = 'failed', applied_at = now() where kind in ('narration', 'music') and status in ('queued', 'running')`);
   synthesize.mockClear();
   providerMusic.mockClear();
 });
@@ -125,6 +127,10 @@ let clock = T0;
 async function finishJobs(projectId) {
   clock += 3_600_000;
   for (let i = 0; i < 6; i += 1) await tick({ projectId, now: new Date(clock + i * 20_000) });
+  // Narration and music are worker kinds: tick never runs them, their worker route does.
+  for (const kind of ['narration', 'music']) {
+    for (let i = 0; i < 8; i += 1) if (!(await runWorkerJob(kind, { now: new Date(clock) })).claimed) break;
+  }
 }
 
 const audioOf = (ctx) => getAudio({ userId: ctx.userId, projectId: ctx.project.id });
@@ -169,6 +175,25 @@ describe('sliceNarration', () => {
     out.segments.slice(1).forEach((s, i) => expect(s.start).toBeCloseTo(out.segments[i].end, 3));
     expect(out.segments[0].start).toBeCloseTo(0, 1);
     expect(out.segments[3].end).toBeCloseTo(4.5, 1);
+  });
+
+  it('cuts at the N-1 longest silences when there are more pauses than lines (before the proportional fallback)', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'audio-pauses-'));
+    const file = path.join(dir, 'pauses.wav');
+    const tone = (f, d, l) => `sine=f=${f}:d=${d},aformat=sample_rates=44100:channel_layouts=mono[${l}]`;
+    const gap = (d, l) => `anullsrc=r=44100:cl=mono,atrim=0:${d}[${l}]`;
+    // tones 0-0.8, 1.1-1.9 | 2.8-4.0, 4.3-4.8 | 5.8-6.8 ; gaps 0.3, 0.9, 0.3, 1.0
+    const graph = [tone(440, 0.8, 'a'), gap(0.3, 'g1'), tone(450, 0.8, 'b'), gap(0.9, 'g2'), tone(550, 1.2, 'c'), gap(0.3, 'g3'), tone(560, 0.5, 'd'), gap(1.0, 'g4'), tone(660, 1.0, 'e'),
+      '[a][g1][b][g2][c][g3][d][g4][e]concat=n=9:v=0:a=1[o]'].join(';');
+    spawnSync(ffmpegInstaller.path, ['-hide_banner', '-loglevel', 'error', '-y', '-filter_complex', graph, '-map', '[o]', file]);
+    const out = await sliceNarration({ filePath: file, lines: lines('First line, with a pause in it.', 'Second line, also with one.', 'Third.') });
+    rmSync(dir, { recursive: true, force: true });
+    expect(out.method).toBe('longest_silences');
+    expect(out.segments).toHaveLength(3);
+    const [a, b, c] = out.segments;
+    expect([a.start, a.end]).toEqual([expect.closeTo(0, 1), expect.closeTo(1.9, 1)]);
+    expect([b.start, b.end]).toEqual([expect.closeTo(2.8, 1), expect.closeTo(4.8, 1)]);
+    expect([c.start, c.end]).toEqual([expect.closeTo(5.8, 1), expect.closeTo(6.8, 1)]);
   });
 
   it('uses 0.25 s and -35 dB: a 0.2 s gap is not a cut', async () => {
@@ -604,6 +629,132 @@ describe('music', () => {
     const ctx = await newProject();
     accounts.set({ paid: false });
     await expect(start(ctx, 'music')).rejects.toMatchObject({ status: 402, code: 'plan_required' });
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+describe('round 1: the audio worker', () => {
+  const res = () => makeRes();
+  const route = async (headers) => {
+    const { default: handler } = await import('../../pages/api/story/worker/audio.js');
+    const out = res();
+    await handler(makeReq({ method: 'POST', headers }), out);
+    return out;
+  };
+
+  it('narration and music never run inside the cron; the route runs them, and only with the secret', async () => {
+    vi.stubEnv('CRON_SECRET', 'worker-secret');
+    const ctx = await newProject({ funds: 20 });
+    await start(ctx, 'narration');
+    await start(ctx, 'music');
+    await runCron({ now: new Date(clock), deadline: Date.now() + 45_000 });
+    expect(synthesize).not.toHaveBeenCalled();
+    expect(providerMusic).not.toHaveBeenCalled();
+    expect((await route({}) ).statusCode).toBe(401);
+    expect((await route({ authorization: 'Bearer nope' })).statusCode).toBe(401);
+    expect(synthesize).not.toHaveBeenCalled();
+    const ok = await route({ authorization: 'Bearer worker-secret' });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body).toMatchObject({ ok: true, narration: 1, music: 1 });
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    expect((await audioOf(ctx)).narration.status).toBe('ready');
+    expect((await audioOf(ctx)).music.status).toBe('ready');
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('STORY_MOCK', '1');
+  });
+
+  it('a provider failure ends the job at once: one provider call, the hold released, no re-queue', async () => {
+    const ctx = await newProject({ funds: 100 });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { narrations_used: 3 });
+    globalThis.__audioFail = 'failed';
+    await start(ctx, 'narration');
+    await finishJobs(ctx.project.id);
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    expect((await jobs(ctx.project.id, 'narration'))[0]).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(await balance(ctx.userId)).toMatchObject({ available: 100, held: 0 });
+  });
+
+  it('the cron kicks the worker route when a job is waiting (and not in mock mode it would stay quiet)', async () => {
+    const { kickWorker, AUDIO_WORKER_PATH } = await import('../../lib/story/workers.js');
+    const sent = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => { sent.push([url, init.headers.Authorization]); return { ok: true }; }));
+    vi.stubEnv('APP_URL', 'https://app.example.test/');
+    vi.stubEnv('CRON_SECRET', 's3');
+    expect(await kickWorker(AUDIO_WORKER_PATH)).toBe(false); // mock mode
+    vi.stubEnv('STORY_MOCK', '');
+    const ctx = await newProject({ funds: 20 });
+    await start(ctx, 'music');
+    await runCron({ now: new Date(clock), deadline: Date.now() + 45_000 });
+    expect(sent).toContainEqual(['https://app.example.test/api/story/worker/audio', 'Bearer s3']);
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('STORY_MOCK', '1');
+  });
+});
+
+describe('round 1: sources, slicing failures, attention, blocked', () => {
+  it('A5: a retry after a source switch is a normal priced make, not a retry', async () => {
+    const ctx = await newProject({ funds: 100 });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { narrations_used: 3 });
+    const asset = await addAsset(ctx.userId);
+    await setAudioPlan({ userId: ctx.userId, projectId: ctx.project.id, plan: { voiceTrackAssetId: asset.id } });
+    await start(ctx, 'narration');
+    const [job] = await jobs(ctx.project.id, 'narration');
+    await storyDb().update('story_jobs', { id: job.id }, { status: 'failed', error: 'x', applied_at: new Date().toISOString() });
+    expect((await audioOf(ctx)).narration.retry_credits).toBe(0);
+    await setAudioPlan({ userId: ctx.userId, projectId: ctx.project.id, plan: { voiceTrackAssetId: null } });
+    expect((await audioOf(ctx)).narration.retry_credits).toBeNull();
+    const out = await start(ctx, 'narration', { retry: true });
+    expect(out.charged).toBe(5);
+    const last = (await jobs(ctx.project.id, 'narration')).at(-1);
+    expect(last.payload).toMatchObject({ kind: 'regen', source: 'generated' });
+    expect((await reload(ctx.project.id)).narrations_used).toBe(4);
+  });
+
+  it('A6: an own recording that cannot be cut is kept uncut, like a generated one', async () => {
+    const ctx = await newProject();
+    const asset = await addAsset(ctx.userId, { url: '/api/mock/storage/story/none/missing.mp3' });
+    await setAudioPlan({ userId: ctx.userId, projectId: ctx.project.id, plan: { voiceTrackAssetId: asset.id } });
+    await start(ctx, 'narration');
+    await finishJobs(ctx.project.id);
+    const row = await reload(ctx.project.id);
+    expect((await jobs(ctx.project.id, 'narration'))[0].status).toBe('done');
+    expect(row.narration_url).toBe(asset.url);
+    expect(row.narration_segments).toBeNull();
+    expect((await audioOf(ctx)).narration.status).toBe('ready');
+  });
+
+  it('A8: a job that was charged but could not be applied ("needs attention") shows as failed, never ready', async () => {
+    const ctx = await newProject();
+    await start(ctx, 'narration');
+    await finishJobs(ctx.project.id);
+    const [job] = await jobs(ctx.project.id, 'narration');
+    await storyDb().update('story_jobs', { id: job.id }, { error: 'Needs attention: the result was charged but could not be applied.' });
+    const view = (await audioOf(ctx)).narration;
+    expect(view.status).toBe('failed');
+    expect(view.error).toMatch(/needs attention/i);
+    expect(view.retry_credits).toBeNull();
+  });
+
+  it('A4: a blocked attempt stays blocked until the description (or script) changes, then the normal flow is back', async () => {
+    const ctx = await newProject();
+    await setAudioPlan({ userId: ctx.userId, projectId: ctx.project.id, plan: { music: { prompt: 'Calm piano' } } });
+    globalThis.__audioFail = 'blocked';
+    await start(ctx, 'music');
+    await finishJobs(ctx.project.id);
+    expect((await audioOf(ctx)).music).toMatchObject({ status: 'blocked', credits: 0 });
+    await setAudioPlan({ userId: ctx.userId, projectId: ctx.project.id, plan: { music: { prompt: 'Calm strings' } } });
+    expect((await audioOf(ctx)).music).toMatchObject({ status: 'none', error: null });
+
+    await start(ctx, 'narration');
+    await finishJobs(ctx.project.id);
+    expect((await audioOf(ctx)).narration.status).toBe('blocked');
+    const [row] = await storyDb().select('story_scripts', { project_id: ctx.project.id });
+    await storyDb().update('story_scripts', { id: row.id }, { scenes: SCENES.map((sc) => ({ ...sc, lines: sc.lines.map((l) => ({ ...l, text: `${l.text} Again` })) })) });
+    expect((await audioOf(ctx)).narration.status).toBe('none');
   });
 });
 

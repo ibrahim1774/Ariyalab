@@ -36,7 +36,7 @@ const scenarios = {
   empty: audio(),
   ready: audio(READY_N, READY_M),
   waiting: audio({ status: 'pending', used: 1, free_left: 2 }, { status: 'pending', used: 1, free_left: 2 }),
-  failed: audio({ status: 'failed', error: 'The voice could not be made. Try again.', retry_credits: 5, credits: 5, used: 4, free_left: 0, url: '/api/mock/fixtures/voice.mp3', segments: SEG, seconds: 15.6 }, { status: 'blocked', error: 'This music description was stopped by our content rules. Change it and try again.' }),
+  failed: audio({ status: 'failed', error: 'Something went wrong while making your voice. Please try again.', retry_credits: 5, credits: 5, used: 4, free_left: 0, url: '/api/mock/fixtures/voice.mp3', segments: SEG, seconds: 15.6 }, { status: 'blocked', credits: 5, free_left: 0, used: 3, error: 'This music description was stopped by our content rules. Change it and try again.' }),
 };
 const browser = await chromium.launch({ executablePath: exe, headless: true });
 const out = [];

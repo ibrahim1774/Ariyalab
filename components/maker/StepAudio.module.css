@@ -1,5 +1,5 @@
 /* Voice and sound step. Compact: two cards side by side on a wide screen, one column on a phone. */
-.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: stretch; }
 .grid > :last-child { grid-column: 1 / -1; }
 .card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; min-width: 0; }
 .title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; }

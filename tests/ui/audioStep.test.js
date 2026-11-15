@@ -213,6 +213,57 @@ describe('music', () => {
   });
 });
 
+describe('round 1', () => {
+  it('A3: a failed save of the description stops Make the music, keeps the text and unlocks the button', async () => {
+    client.saveAudioPlan.mockRejectedValue(Object.assign(new Error('x'), { status: 422, code: 'validation_failed', serverMessage: 'Keep the music description short.' }));
+    await open(view({ music: { credits: 5, free_left: 0 } }));
+    const box = screen.getByRole('textbox', { name: /What should it sound like/ });
+    fireEvent.change(box, { target: { value: 'A new description' } });
+    const make = screen.getByRole('button', { name: 'Make the music (5 credits)' });
+    fireEvent.click(make);
+    expect(await screen.findByText('Keep the music description short.')).toBeInTheDocument();
+    expect(client.makeMusic).not.toHaveBeenCalled();
+    expect(box).toHaveValue('A new description');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the music (5 credits)' })).toBeEnabled());
+    // The text is still unsaved, so a blur tries again rather than forgetting it.
+    client.saveAudioPlan.mockResolvedValue(view({ plan: { music: { type: 'generated', prompt: 'A new description', assetId: null } } }));
+    fireEvent.blur(box);
+    await waitFor(() => expect(client.saveAudioPlan).toHaveBeenCalledTimes(2));
+  });
+
+  it('A3: the button stays locked for the whole save and make (no early unlock)', async () => {
+    let finishSave;
+    client.saveAudioPlan.mockImplementation(() => new Promise((r) => { finishSave = () => r(view({ plan: { music: { type: 'generated', prompt: 'Calm', assetId: null } } })); }));
+    client.makeMusic.mockResolvedValue({ audio: view({ music: { status: 'pending' } }), charged: 0 });
+    await open(view());
+    fireEvent.change(screen.getByRole('textbox', { name: /What should it sound like/ }), { target: { value: 'Calm' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Make the music' }));
+    await waitFor(() => expect(client.saveAudioPlan).toHaveBeenCalled());
+    expect(screen.getByRole('button', { name: 'Make the music' })).toBeDisabled();
+    await act(async () => { finishSave(); });
+    await waitFor(() => expect(client.makeMusic).toHaveBeenCalledTimes(1));
+  });
+
+  it('A4: a blocked track offers the way to change the words AND a priced Make it again (not a retry)', async () => {
+    client.makeMusic.mockResolvedValue({ audio: view({ music: { status: 'pending' } }), charged: 5 });
+    await open(view({ music: { status: 'blocked', error: 'Stopped.', credits: 5, free_left: 0, retry_credits: null } }));
+    expect(screen.getByRole('button', { name: 'Change the description' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Make it again (5 credits)' }));
+    await waitFor(() => expect(client.makeMusic).toHaveBeenCalledWith('p1', { retry: false, expectedCredits: 5 }));
+  });
+
+  it('A8: a failed track with no retry offers Make it again with its price', async () => {
+    await open(view({ narration: { status: 'failed', error: 'Needs attention: the result was charged but could not be applied.', retry_credits: null, credits: 5, free_left: 0 } }));
+    expect(screen.queryByRole('button', { name: /Try again/ })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Make it again (5 credits)' })).toBeInTheDocument();
+  });
+
+  it('A9: the failed tile does not say its title twice', async () => {
+    await open(view({ narration: { status: 'failed', error: 'The voice could not be made', retry_credits: 0 } }));
+    expect(screen.getAllByText('The voice could not be made')).toHaveLength(1);
+  });
+});
+
 describe('captions', () => {
   it('previews the three styles, saves a pick, and switches them off together', async () => {
     client.saveAudioPlan.mockResolvedValue(view({ plan: { captions: { on: true, style: 'bold_pop' } } }));

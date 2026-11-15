@@ -42,16 +42,22 @@ function TrackBody({ track, kind, regen, ready, none, failedTitle, busy, onMake,
   }
   if (status === 'failed' || status === 'blocked') {
     const blocked = status === 'blocked';
+    const title = blocked ? 'Stopped by our content rules' : failedTitle;
+    const fallback = blocked ? 'Change your words and try again.' : 'Nothing was charged for this try.';
+    // The server's message goes in the body unless it only repeats the title.
+    const text = track.error && track.error.replace(/[.\s]+$/, '') !== title ? track.error : fallback;
+    const canRetry = !blocked && track.retry_credits !== null && track.retry_credits !== undefined;
     return (
       <>
-        <Tile icon={blocked ? 'block' : 'alert'} tone="error" title={blocked ? 'Stopped by our content rules' : failedTitle} text={track.error || (blocked ? 'Change your words and try again.' : 'Nothing was charged for this try.')} className={styles.state} />
+        <Tile icon={blocked ? 'block' : 'alert'} tone="error" title={title} text={text} className={styles.state} />
         {player && <p className={styles.earlier}>Your earlier version is still here.</p>}
         {player}
         <div className={styles.actions}>
-          {blocked ? (
-            <Button variant="ghost" arrow={false} onClick={onChange}>{kind === 'narration' ? 'Back to the script' : 'Change the description'}</Button>
+          {blocked && <Button variant="ghost" arrow={false} onClick={onChange}>{kind === 'narration' ? 'Back to the script' : 'Change the description'}</Button>}
+          {canRetry ? (
+            <Button arrow={false} onClick={onRetry} disabled={busy}>{priced('Try again', track.retry_credits)}</Button>
           ) : (
-            <Button arrow={false} onClick={onRetry} disabled={busy}>{priced('Try again', track.retry_credits || 0)}</Button>
+            <Button variant={blocked ? 'ghost' : 'primary'} arrow={false} onClick={onMake} disabled={busy}>{again}</Button>
           )}
         </div>
       </>
@@ -147,14 +153,26 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
   }
 
   const savePlan = (patch, kind = 'plan') => run(kind, () => saveAudioPlan(project.id, patch));
-  const commitPrompt = async () => {
-    const text = prompt.replace(/\s+/g, ' ').trim();
-    if (audio && text !== (audio.plan.music.prompt || '')) await savePlan({ music: { prompt: text } }, 'prompt');
+  const typed = () => prompt.replace(/\s+/g, ' ').trim();
+  // Saves the description when it changed. Throws when the save fails, and then the customer's text stays as it is.
+  async function persistPrompt() {
+    if (!audio || typed() === (audio.plan.music.prompt || '')) return null;
+    const next = await saveAudioPlan(project.id, { music: { prompt: typed() } });
     promptTouched.current = false;
-  };
+    return next;
+  }
+  const commitPrompt = () => run('prompt', persistPrompt);
   const makeTrack = (kind, retry) => run(kind, async () => {
-    if (kind === 'music') await commitPrompt();
-    const track = audio[kind];
+    // A description that cannot be saved stops the make: it would be charged for the old words.
+    let current = audio;
+    if (kind === 'music') {
+      const saved = await persistPrompt();
+      if (saved) {
+        setAudio(saved);
+        current = saved;
+      }
+    }
+    const track = current[kind];
     const price = retry ? track.retry_credits : track.credits;
     return (kind === 'music' ? makeMusic : makeNarration)(project.id, { retry, expectedCredits: Number.isInteger(price) ? price : undefined });
   });
