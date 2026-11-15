@@ -1,7 +1,7 @@
 import { createImagePrediction } from '../../lib/replicate';
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { signingConfigured, signJobId } from '../../lib/jobToken';
-import { getEntitlement, reserveCredits, refundCredits, settleReservation } from '../../lib/entitlement';
+import { getEntitlement, reserveCredits, refundCredits, settleReservation, attachReservation } from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { screenText, ModerationError, moderationErrorResponse } from '../../lib/moderation';
@@ -47,6 +47,7 @@ export default async function handler(req, res) {
   try {
     await reserveCredits(entitlement, COST, { route: 'ugc-image' });
   } catch (err) {
+    if (err.code === 'MIGRATED') return res.status(409).json({ error: err.message, code: 'MIGRATED' });
     if (err.code === 'INSUFFICIENT' || err.code === 'NO_PLAN') {
       return res.status(402).json({
         error: 'paywall',
@@ -63,6 +64,7 @@ export default async function handler(req, res) {
     // billing_v2: the provider took the job, so the hold is spent now (the
     // legacy path charged at reserve). A failed settle never fails the job.
     try {
+      await attachReservation(entitlement, { provider: 'replicate', jobId: prediction.id });
       await settleReservation(entitlement, prediction.id);
     } catch (settleErr) {
       console.error('[ugc-image] settle failed', settleErr);

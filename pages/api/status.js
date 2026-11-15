@@ -60,13 +60,15 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'predictionId is required.' });
   }
 
-  const isKie = vendor === 'kie';
   const session = await getUserFromRequest(req, res);
   if (!session) return res.status(401).json({ error: 'Authentication required.' });
 
   const token = verifyJobToken(session.user.id, signedId);
   if (!token) return res.status(404).json({ error: 'Job not found.' });
   const { predictionId, hold } = token;
+  // Only the kie routes (image-to-video, ugc-animate) sign a hold into the
+  // job id, so such a job is a kie job whatever `vendor` the client sent.
+  const isKie = vendor === 'kie' || Boolean(hold);
 
   // Idempotently settle the credit reservation we made when the job
   // was queued. Refund on vendor failure, drop tracking on success.

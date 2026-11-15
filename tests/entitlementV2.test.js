@@ -40,7 +40,12 @@ const { setPricingDb, _resetPricingCache } = await import('../lib/pricing.js');
 const { getEntitlement, reserveCredits, refundCredits, settleReservation, decrementCredits } = await import(
   '../lib/entitlement'
 );
-const { verifyJobToken } = await import('../lib/jobToken');
+const { verifyJobToken, signJobId } = await import('../lib/jobToken');
+const { reconcileLegacyHolds } = await import('../lib/legacyHolds');
+const swap = (await import('../pages/api/swap')).default;
+const cronLegacyHolds = (await import('../pages/api/cron/legacy-holds')).default;
+const { KEY } = await import('../lib/metaKeys');
+const { setMetadata } = await import('./helpers/apiMock');
 const { v2CostForGeneration, costForGeneration, FACE_SWAP_COST } = await import('../lib/cost');
 const imageToVideo = (await import('../pages/api/image-to-video')).default;
 const ugcAnimate = (await import('../pages/api/ugc-animate')).default;
@@ -49,9 +54,23 @@ const characterFrame = (await import('../pages/api/character-frame')).default;
 const status = (await import('../pages/api/status')).default;
 
 let db;
+// The credit functions go through this handle; `failOn` makes calls whose SQL
+// mentions that function fail once per listed name (a database blip).
+const failOn = new Set();
+const handle = {
+  query: (sql, params) => {
+    for (const name of failOn) {
+      if (sql.includes(name)) {
+        failOn.delete(name);
+        return Promise.reject(new Error(`db down (${name})`));
+      }
+    }
+    return db.query(sql, params);
+  },
+};
 beforeAll(async () => {
   db = await createTestDb();
-  setCreditsDb(db);
+  setCreditsDb(handle);
   setPricingDb(db);
 }, 60_000);
 afterAll(async () => {
@@ -76,6 +95,7 @@ beforeEach(async () => {
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
   await setV2(true);
+  failOn.clear();
   user = { id: randomUUID(), email: `u-${randomUUID()}@example.test` };
   signIn(user);
   setCredits(10_000); // legacy metadata: must never be read or written on the v2 path
@@ -162,13 +182,14 @@ describe('reserveCredits with billing_v2 on', () => {
 });
 
 describe('old tools charge v2 prices', () => {
-  it('per-second prices convert the rate with LEGACY_TO_V2, rounded up (100/s -> 21/s)', () => {
+  it('v2 price = the legacy TOTAL x LEGACY_TO_V2, rounded up (100 legacy credits per second -> 21)', () => {
     const top = { model: 'studio-pro', resolution: '1080p', audio: true };
     expect(costForGeneration({ ...top, seconds: 1 })).toBe(100);
     expect(v2CostForGeneration({ ...top, seconds: 1 })).toBe(21);
     expect(v2CostForGeneration({ ...top, seconds: 5 })).toBe(105);
-    // 15/s -> ceil(3.15) = 4/s, not ceil(75 * 0.21) = 16 for 5 s.
-    expect(v2CostForGeneration({ model: 'standard', resolution: '480p', audio: true, seconds: 5 })).toBe(20);
+    // 15/s for 5 s = 75 legacy -> ceil(15.75) = 16 (not 4/s x 5 = 20).
+    expect(v2CostForGeneration({ model: 'standard', resolution: '480p', audio: true, seconds: 5 })).toBe(16);
+    expect(v2CostForGeneration({ model: 'standard', resolution: '480p', seconds: 5 })).toBe(11);
   });
 
   it('image-to-video holds the v2 price and signs the hold into the job id', async () => {
@@ -209,9 +230,9 @@ describe('old tools charge v2 prices', () => {
     const scenes = [{ prompt: 'a', duration: 3 }, { prompt: 'b', duration: 4 }];
     const res = await call(ugcAnimate, { body: { scenes, resolution: '480p' } });
     expect(res.statusCode).toBe(200);
-    // studio-pro 480p silent = 40/s -> ceil(8.4) = 9/s, 7 s.
-    expect(res.body.cost).toBe(63);
-    expect(await getBalance(user.id)).toMatchObject({ held: 63 });
+    // studio-pro 480p silent = 40/s x 7 s = 280 legacy -> ceil(58.8) = 59.
+    expect(res.body.cost).toBe(59);
+    expect(await getBalance(user.id)).toMatchObject({ held: 59 });
   });
 
   it('character-frame charges FACE_SWAP_COST converted (100 -> 21) and settles at once', async () => {
@@ -301,5 +322,190 @@ describe('admin tier needs a confirmed email in ADMIN_EMAILS', () => {
     expect((await getEntitlement({ supabase, userId: user.id, user: boss })).isAdmin).toBeFalsy();
     const confirmed = { ...boss, email_confirmed_at: '2026-11-01T00:00:00Z' };
     expect((await getEntitlement({ supabase, userId: user.id, user: confirmed })).isAdmin).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+const holdRows = async () =>
+  (await db.query('select route, provider, job_id, status, amount from public.credit_legacy_holds where user_id = $1 order by created_at', [user.id])).rows;
+const age = (minutes) =>
+  db.query(`update public.credit_legacy_holds set created_at = now() - make_interval(mins => $2) where user_id = $1`, [user.id, minutes]);
+const imageToVideoBody = { imageUrl: 'https://x.test/a.jpg', duration: 5 };
+
+describe('round 1: every v2 hold is recorded server-side (I2)', () => {
+  it('an async kie job records its hold, provider and job id', async () => {
+    await grant(500);
+    const res = await call(imageToVideo, { body: imageToVideoBody });
+    expect(res.statusCode).toBe(200);
+    expect(await holdRows()).toEqual([
+      { route: 'image-to-video', provider: 'kie', job_id: 'seed-task-1', status: 'open', amount: res.body.cost },
+    ]);
+  });
+
+  it('a sync route settles before answering; a settle that fails is recorded for retry, not swallowed', async () => {
+    await grant(10);
+    failOn.add('credit_settle');
+    const res = await call(ugcImage, { body: { prompt: 'a cat on a sofa' } });
+    expect(res.statusCode).toBe(200);
+    expect(await holdRows()).toMatchObject([{ route: 'ugc-image', provider: 'replicate', job_id: 'image-pred-1', status: 'settle_retry' }]);
+    expect(await getBalance(user.id)).toMatchObject({ held: 1 });
+    const summary = await reconcileLegacyHolds({ olderThanMinutes: 0 });
+    expect(summary.settled).toBe(1);
+    expect(await holdRows()).toMatchObject([{ status: 'settled' }]);
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 9 });
+  });
+
+  it('a hold that cannot be recorded is released and the job is not started', async () => {
+    await grant(500);
+    failOn.add('credit_legacy_hold_open');
+    const res = await call(imageToVideo, { body: imageToVideoBody });
+    expect(res.statusCode).toBe(500);
+    expect(seedanceMocks.createSeedancePrediction).not.toHaveBeenCalled();
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 500 });
+  });
+
+  it('the reconciler ends a kie job nobody polled: settle on success (read-only status check)', async () => {
+    await grant(500);
+    const res = await call(imageToVideo, { body: imageToVideoBody });
+    await age(30);
+    kieMocks.getKiePrediction.mockImplementation(async () => ({
+      state: 'success',
+      resultJson: JSON.stringify({ resultUrls: ['https://cdn.test/out.mp4'] }),
+    }));
+    const summary = await reconcileLegacyHolds();
+    expect(summary).toMatchObject({ settled: 1 });
+    expect(kieMocks.getKiePrediction).toHaveBeenCalledWith('seed-task-1');
+    expect(seedanceMocks.createSeedancePrediction).toHaveBeenCalledTimes(1); // never re-submitted
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 500 - res.body.cost });
+    // The customer polls afterwards: still charged once.
+    await call(status, { method: 'GET', query: { predictionId: res.body.predictionId, vendor: 'kie' } });
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 500 - res.body.cost });
+  });
+
+  it('the reconciler releases a failed job, a job still unknown after the cap, and a job never submitted', async () => {
+    await grant(500);
+    await call(imageToVideo, { body: imageToVideoBody });
+    await age(30);
+    kieMocks.getKiePrediction.mockImplementation(async () => ({ state: 'fail', failMsg: 'blocked' }));
+    expect((await reconcileLegacyHolds()).released).toBe(1);
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 500 });
+
+    await call(imageToVideo, { body: imageToVideoBody });
+    kieMocks.getKiePrediction.mockImplementation(async () => ({ state: 'generating' }));
+    await db.query(`update public.credit_legacy_holds set created_at = now() - interval '30 minutes' where status = 'open' and user_id = $1`, [user.id]);
+    expect((await reconcileLegacyHolds()).released).toBe(0); // still running, inside the cap
+    await db.query(`update public.credit_legacy_holds set created_at = now() - interval '25 hours' where status = 'open' and user_id = $1`, [user.id]);
+    expect((await reconcileLegacyHolds()).released).toBe(1);
+
+    seedanceMocks.createSeedancePrediction.mockImplementationOnce(() => new Promise(() => {})); // the request dies mid-submit
+    call(imageToVideo, { body: imageToVideoBody });
+    await vi.waitFor(async () => expect((await holdRows()).filter((r) => r.status === 'open')).toHaveLength(1));
+    await db.query(`update public.credit_legacy_holds set created_at = now() - interval '20 minutes' where status = 'open' and user_id = $1`, [user.id]);
+    expect((await reconcileLegacyHolds()).released).toBe(1);
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 500 });
+  });
+
+  it('the cron route needs CRON_SECRET', async () => {
+    const denied = await call(cronLegacyHolds, { method: 'GET', headers: {} });
+    expect(denied.statusCode).toBe(401);
+    const ok = await call(cronLegacyHolds, { method: 'GET', headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } });
+    expect(ok.statusCode).toBe(200);
+    expect(ok.body.ok).toBe(true);
+  });
+});
+
+describe('round 1: /api/status', () => {
+  it('settles a hold-carrying job even when the client omits vendor=kie (F-I4)', async () => {
+    await grant(500);
+    const res = await call(imageToVideo, { body: imageToVideoBody });
+    kieMocks.getKiePrediction.mockImplementation(async () => ({ state: 'fail', failMsg: 'x' }));
+    await call(status, { method: 'GET', query: { predictionId: res.body.predictionId } });
+    expect(kieMocks.getKiePrediction).toHaveBeenCalledWith('seed-task-1');
+    expect(await getBalance(user.id)).toMatchObject({ held: 0, available: 500 });
+  });
+
+  it('a legacy job (no hold) that fails after the switch is refunded in the ledger, once (M2)', async () => {
+    setMetadata({ [KEY.pendingJobs]: 'old-task:100' });
+    kieMocks.getKiePrediction.mockImplementation(async () => ({ state: 'fail', failMsg: 'x' }));
+    const token = signJobId(user.id, 'old-task');
+    await call(status, { method: 'GET', query: { predictionId: token, vendor: 'kie' } });
+    await call(status, { method: 'GET', query: { predictionId: token, vendor: 'kie' } });
+    expect(await getBalance(user.id)).toMatchObject({ topup: 21, available: 21 });
+    expect(getMetadata()[KEY.pendingJobs]).toBe('old-task:100'); // nothing written to Stripe
+  });
+});
+
+describe('round 1: face-swap replay guard under billing_v2 (I3)', () => {
+  const HYBRID = 'https://replicate.delivery/hybrid.jpg';
+  const VIDEO = 'https://x.test/v.mp4';
+  async function frame() {
+    await grant(100);
+    const res = await call(characterFrame, {
+      body: { firstFrameUrl: 'https://x.test/f.jpg', referenceImageUrl: 'https://x.test/r.jpg', sourceVideoUrl: VIDEO, swapMode: 'face' },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.body.swapToken;
+  }
+  function stage(statuses = {}) {
+    let n = 0;
+    replicateMocks.createMotionTransferPrediction.mockImplementation(async () => ({ id: `swap-pred-${++n}`, status: 'starting' }));
+    replicateMocks.getPrediction.mockImplementation(async (id) =>
+      id === 'frame-pred-1' ? { status: 'succeeded', output: HYBRID } : { status: statuses[id] || 'processing' }
+    );
+  }
+
+  it('records uses per user in the database, never in Stripe, and stops at three', async () => {
+    const swapToken = await frame();
+    const before = { ...getMetadata() };
+    stage({ 'swap-pred-1': 'failed', 'swap-pred-2': 'failed', 'swap-pred-3': 'failed' });
+    const body = { imageUrl: HYBRID, videoUrl: VIDEO, swapToken };
+    for (let i = 0; i < 3; i += 1) expect((await call(swap, { body })).statusCode).toBe(200);
+    const fourth = await call(swap, { body });
+    expect(fourth.statusCode).toBe(402);
+    expect(fourth.body.code).toBe('SWAP_RETRY_LIMIT');
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledTimes(3);
+    const { rows } = await db.query('select frame_id, swap_id, count from public.credit_swap_uses where user_id = $1', [user.id]);
+    expect(rows).toEqual([{ frame_id: 'frame-pred-1', swap_id: 'swap-pred-3', count: 3 }]);
+    expect(getMetadata()).toEqual(before);
+  });
+
+  it('a running swap is handed back, not started again', async () => {
+    const swapToken = await frame();
+    stage();
+    const body = { imageUrl: HYBRID, videoUrl: VIDEO, swapToken };
+    const first = await call(swap, { body });
+    const again = await call(swap, { body });
+    expect(again.body.predictionId).toBe(first.body.predictionId);
+    expect(replicateMocks.createMotionTransferPrediction).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses the swap when the use cannot be recorded', async () => {
+    const swapToken = await frame();
+    stage();
+    failOn.add('credit_claim_swap_use');
+    const res = await call(swap, { body: { imageUrl: HYBRID, videoUrl: VIDEO, swapToken } });
+    expect(res.statusCode).toBe(503);
+    expect(replicateMocks.createMotionTransferPrediction).not.toHaveBeenCalled();
+  });
+});
+
+describe('round 1: migrated customers cannot spend on the legacy path (F-I5)', () => {
+  it('flag off again after --apply: the legacy route refuses with a clear message', async () => {
+    await setV2(false);
+    await db.query(
+      `insert into public.credit_legacy_migrations (customer_id, currency, user_id, plan, topup, parked)
+       values ('cus_test', 'video', $1, 100, 0, false) on conflict do nothing`,
+      [user.id]
+    );
+    try {
+      const res = await call(ugcImage, { body: { prompt: 'a cat' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ code: 'MIGRATED' });
+      expect(res.body.error).toMatch(/moved to the new system/);
+      expect(replicateMocks.createImagePrediction).not.toHaveBeenCalled();
+    } finally {
+      await db.query(`delete from public.credit_legacy_migrations where customer_id = 'cus_test'`);
+    }
   });
 });

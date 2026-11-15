@@ -1,7 +1,13 @@
 import { v4 as uuidv4 } from 'uuid';
 
 import { getUserFromRequest, getSupabaseAdmin } from '../../../lib/supabaseServer';
-import { getEntitlement, reserveCredits, refundCredits, settleReservation } from '../../../lib/entitlement';
+import {
+  getEntitlement,
+  reserveCredits,
+  refundCredits,
+  settleReservation,
+  attachReservation,
+} from '../../../lib/entitlement';
 import { validateEditPlan } from '../../../lib/editPlan';
 import { renderEditPlan } from '../../../lib/ffmpegRender';
 import { createJob, updateProgress, completeJob, failJob } from '../../../lib/renderJobs';
@@ -55,6 +61,7 @@ export default async function handler(req, res) {
     });
     await reserveCredits(entitlement, 1, { route: 'video-render' });
   } catch (err) {
+    if (err.code === 'MIGRATED') return res.status(409).json({ error: err.message, code: 'MIGRATED' });
     if (err.code === 'NO_PLAN' || err.code === 'INSUFFICIENT') {
       return res.status(402).json({
         error: err.code === 'NO_PLAN' ? 'No active plan.' : 'Insufficient credits.',
@@ -92,6 +99,10 @@ export default async function handler(req, res) {
   } catch (err) {
     console.warn('[video/render] supabase insert threw', err.message);
   }
+
+  // billing_v2: record the render this hold pays for, before answering, so
+  // the reconciler can end it if this function dies mid-render.
+  await attachReservation(entitlement, { provider: 'render', jobId: renderId });
 
   // Respond immediately so the client can start polling.
   res.status(200).json({ renderId });

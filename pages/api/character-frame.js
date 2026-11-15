@@ -1,6 +1,13 @@
 import { createCharacterFramePrediction } from '../../lib/replicate';
 import { getUserFromRequest } from '../../lib/supabaseServer';
-import { getEntitlement, reserveCredits, refundCredits, settleReservation, usesLedger } from '../../lib/entitlement';
+import {
+  getEntitlement,
+  reserveCredits,
+  refundCredits,
+  settleReservation,
+  attachReservation,
+  usesLedger,
+} from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { FACE_SWAP_COST, legacyCreditsToV2 } from '../../lib/cost';
@@ -70,6 +77,7 @@ export default async function handler(req, res) {
   try {
     await reserveCredits(entitlement, cost, { route: 'character-frame' });
   } catch (err) {
+    if (err.code === 'MIGRATED') return res.status(409).json({ error: err.message, code: 'MIGRATED' });
     if (err.code === 'INSUFFICIENT' || err.code === 'NO_PLAN') {
       return res.status(402).json({
         error: 'paywall',
@@ -93,6 +101,7 @@ export default async function handler(req, res) {
     // billing_v2: the provider took the job, so the hold is spent now (the
     // legacy path charged at reserve). A failed settle never fails the job.
     try {
+      await attachReservation(entitlement, { provider: 'replicate', jobId: prediction.id });
       await settleReservation(entitlement, prediction.id);
     } catch (settleErr) {
       console.error('[character-frame] settle failed', settleErr);

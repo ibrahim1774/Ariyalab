@@ -62,6 +62,9 @@ export const supabaseServerModule = {
       // no rows, so billing_v2 is off and the legacy path runs.
       select: async () => ({ data: [], error: null }),
     }),
+    // credit_* functions (lib/credits.js callCreditFunction): no customer has
+    // been moved by the legacy migration.
+    rpc: async () => ({ data: false, error: null }),
   }),
 };
 

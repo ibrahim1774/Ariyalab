@@ -11,6 +11,7 @@ import {
   refundCredits,
   trackPendingJob,
   usesLedger,
+  attachReservation,
   takeHoldForJob,
 } from '../../lib/entitlement';
 import { sendCapiEvent } from '../../lib/meta';
@@ -138,6 +139,7 @@ export default async function handler(req, res) {
   try {
     await reserveCredits(entitlement, cost, { route: 'ugc-animate' });
   } catch (err) {
+    if (err.code === 'MIGRATED') return res.status(409).json({ error: err.message, code: 'MIGRATED' });
     if (err.code === 'INSUFFICIENT' || err.code === 'NO_PLAN') {
       return res.status(402).json({
         error: 'paywall',
@@ -184,6 +186,8 @@ export default async function handler(req, res) {
     }
 
     trackPendingJob(entitlement, prediction.id, cost).catch(() => {});
+    // billing_v2: record which kie job this hold pays for (lib/legacyHolds.js).
+    await attachReservation(entitlement, { provider: 'kie', jobId: prediction.id });
     sendCapiEvent({
       eventName: 'Generate',
       eventId: nsEventId(`gen-${prediction.id}`),

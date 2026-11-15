@@ -5,7 +5,7 @@ import { createMotionTransferPrediction, getPrediction, normalizeStatus } from '
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { screenImage, ModerationError, moderationErrorResponse } from '../../lib/moderation';
 import { signingConfigured, verifySwapToken, signJobId } from '../../lib/jobToken';
-import { getEntitlement, getSwapUse, recordSwapUse } from '../../lib/entitlement';
+import { getEntitlement, getSwapUse, claimSwapUse, recordSwapUse } from '../../lib/entitlement';
 
 // One character-frame charge covers at most this many motion-transfer
 // jobs, and a new one only starts after the previous one failed.
@@ -108,6 +108,11 @@ export default async function handler(req, res) {
       console.error('[swap] use record lookup failed', err);
       return res.status(503).json({ error: 'Face swap is temporarily unavailable.' });
     }
+    // billing_v2 only: a use claimed by a call whose job id is not recorded
+    // yet is a swap starting right now.
+    if (use && !use.swapId) {
+      return res.status(409).json({ error: 'This swap is starting. Try again in a few seconds.' });
+    }
     if (use && !(await previousSwapFailed(use.swapId))) {
       return res.status(200).json({
         jobId,
@@ -132,6 +137,20 @@ export default async function handler(req, res) {
       if (err instanceof ModerationError) return moderationErrorResponse(res, err);
       console.error('[swap] moderation threw', err);
       return res.status(500).json({ error: 'Moderation check failed.' });
+    }
+
+    // Take this use before the job starts (billing_v2: a compare-and-set in
+    // the database, so two calls cannot both start use N; refused when it
+    // cannot be recorded). Legacy: recorded after the job starts, as before.
+    let claimed;
+    try {
+      claimed = await claimSwapUse(entitlement, paid.framePredictionId, use?.count || 0, MAX_SWAPS_PER_FRAME);
+    } catch (err) {
+      console.error('[swap] could not record the swap use; refusing', err);
+      return res.status(503).json({ error: 'Face swap is temporarily unavailable.' });
+    }
+    if (claimed == null) {
+      return res.status(409).json({ error: 'This swap is starting. Try again in a few seconds.' });
     }
 
     // Mode comes from the token (chosen before the charge), never the body.
@@ -162,7 +181,7 @@ export default async function handler(req, res) {
     const normalized = normalizeStatus(prediction);
 
     try {
-      await recordSwapUse(entitlement, paid.framePredictionId, prediction.id, (use?.count || 0) + 1);
+      await recordSwapUse(entitlement, paid.framePredictionId, prediction.id, claimed);
     } catch (err) {
       // The job is already running; don't fail the response over it.
       console.error('[swap] could not record swap use', err);
