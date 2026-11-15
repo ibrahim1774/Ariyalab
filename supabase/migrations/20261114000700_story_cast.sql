@@ -53,8 +53,6 @@ declare
   v_blocked integer;
   v_status text;
   v_chosen integer;
-  v_jobs integer;
-  v_cost integer;
 begin
   select * into c from story_cast where id = p_cast for update;
   if not found or c.round <> p_round then
@@ -79,26 +77,14 @@ begin
   select count(*) filter (where j.status in ('queued', 'running')
                              or (j.status = 'done' and j.applied_at is null and j.id is distinct from p_job
                                  and not (merged @> jsonb_build_array(jsonb_build_object('slot', (j.payload ->> 'slot')::integer))))),
-         count(*) filter (where j.status = 'blocked'),
-         count(*),
-         coalesce(sum(j.cost_credits), 0)
-    into v_active, v_blocked, v_jobs, v_cost
+         count(*) filter (where j.status = 'blocked')
+    into v_active, v_blocked
     from story_jobs j
    where j.project_id = c.project_id
      and j.kind = 'cast_image'
      and j.payload ->> 'castId' = c.id::text
      and j.payload ->> 'stage' = 'candidate'
      and (j.payload ->> 'round')::integer = p_round;
-
-  -- A start that died after holding credits but before queuing every job: the
-  -- share of the jobs that never existed is given back (the same ref every time).
-  if c.hold_id is not null and v_jobs < 3 and c.hold_credits - v_cost > 0 then
-    begin
-      perform public.credit_release(c.hold_id, c.hold_credits - v_cost, 'cast:' || c.id::text || ':' || p_round::text || ':unqueued');
-    exception when others then
-      null;
-    end;
-  end if;
 
   if v_active > 0 then
     v_status := 'pending';
