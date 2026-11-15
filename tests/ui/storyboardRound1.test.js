@@ -112,3 +112,19 @@ describe('client', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('round 2 screen rules', () => {
+  it('T3: the Rebuild button shows only when a rebuild would do something', () => {
+    const { rerender } = render(<StepStoryboard project={{ ...project, seconds: 6 }} shots={[shot(1, { stale: true, clip_mismatch: true, needs_rebuild: false, still_url: '/a.png' }), shot(2, { still_url: '/b.png' })]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.queryByRole('button', { name: 'Rebuild storyboard' })).toBeNull();
+    rerender(<StepStoryboard project={{ ...project, seconds: 6 }} shots={[shot(1, { needs_rebuild: true, still_url: '/a.png' }), shot(2, { still_url: '/b.png' })]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByRole('button', { name: 'Rebuild storyboard' })).toBeInTheDocument();
+    rerender(<StepStoryboard project={{ ...project, seconds: 6 }} shots={[shot(1, { stale: true, clip_mismatch: false, still_url: '/a.png' }), shot(2, { still_url: '/b.png' })]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByRole('button', { name: 'Rebuild storyboard' })).toBeInTheDocument();
+  });
+
+  it('T5: the batch button leaves out blocked shots', () => {
+    render(<StepStoryboard project={project} shots={[shot(1, { status: 'blocked' }), shot(2), shot(3)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByRole('button', { name: 'Make pictures for 2 shots' })).toBeInTheDocument();
+  });
+});

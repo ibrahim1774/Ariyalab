@@ -45,13 +45,16 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
   };
 
   const missing = missingStills(shots);
-  const anyStale = shots.some((s) => s.stale);
+  // Only when a rebuild would do something: a scene changed (needs_rebuild), or a shot is stale for its scene
+  // alone (a rebuild clears that). A clip that no longer matches its own shot needs a new clip, not a rebuild.
+  const anyStale = shots.some((s) => s.needs_rebuild || (s.stale && !s.clip_mismatch));
   // Removing scenes keeps the other shots as they are, so the total can drift from the length picked.
   const totalSeconds = shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0);
   const target = Number(project.seconds) || 0;
   const offLength = shots.length > 0 && target > 0 && (totalSeconds < Math.ceil(target * 0.9) || totalSeconds > Math.floor(target * 1.1));
   const making = shots.some((s) => s.status === 'still_pending');
-  const needPictures = shots.filter((s) => (s.source || 'generated') !== 'footage' && !s.still_url && s.status !== 'still_pending');
+  // Blocked shots need a new description first, so the batch leaves them out.
+  const needPictures = shots.filter((s) => (s.source || 'generated') !== 'footage' && !s.still_url && s.status !== 'still_pending' && s.status !== 'blocked');
   // Pictures are free the first time; a shot that already had one (or replaces one) costs a re-roll. The server says which.
   const picturesCost = needPictures.reduce((n, s) => n + (Number(s.still_credits) || 0), 0);
 

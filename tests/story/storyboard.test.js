@@ -299,9 +299,11 @@ describe('buildShotList', () => {
 // ---------------------------------------------------------------- markStale
 
 describe('markStale', () => {
-  it('flags only the shots of the given scenes', async () => {
+  it('flags only the shots of the given scenes whose scene changed', async () => {
     const { project } = await builtProject();
-    await markStale({ projectId: project.id, sceneIds: ['s1', 's3'] });
+    const changed = SCENES.map((sc) => (sc.id === 'two' ? sc : { ...sc, title: sc.id === 's2' ? sc.title : `${sc.title} again` }));
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 2, scenes: changed, source: 'edit' });
+    await markStale({ projectId: project.id, sceneIds: ['s1', 's2', 's3'] });
     const rows = await shotRows(project.id);
     expect(rows.map((s) => [s.scene_id, s.stale])).toEqual([['s1', true], ['s1', true], ['s2', false], ['s2', false], ['s3', true], ['s3', true]]);
     expect(await markStale({ projectId: project.id, sceneIds: [] })).toEqual([]);
@@ -706,7 +708,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
     await expect(generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] })).rejects.toThrow('ledger down');
     errors.mockRestore();
     const row = await shotRow(shots[0].id);
-    expect(row).toMatchObject({ status: 'still_ready', still_round: shots[0].still_round, still_hold_id: null, stale: false });
+    expect(row).toMatchObject({ status: 'still_ready', still_round: shots[0].still_round + 1, still_hold_id: null, stale: false });
     expect(await stillJobs(project.id)).toHaveLength(6);
   });
 
@@ -718,7 +720,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
     await expect(generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] })).rejects.toThrow('queue down');
     errors.mockRestore();
     const row = await shotRow(shots[0].id);
-    expect(row).toMatchObject({ status: 'ready', stale: false, still_round: shots[0].still_round, still_hold_id: null });
+    expect(row).toMatchObject({ status: 'ready', stale: false, clip_mismatch: false, still_round: shots[0].still_round + 1, still_hold_id: null });
     expect((await balance(userId)).held).toBe(0);
   });
 
@@ -758,7 +760,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
       await run(ctx);
       expect((await balance(ctx.userId)).held).toBe(name === 'generateStills' ? 2 : 0);
       const row = await shotRow(ctx.shot.id);
-      expect(row).toMatchObject({ status: 'still_ready', still_round: ctx.shot.still_round, still_hold_id: null });
+      expect(row).toMatchObject({ status: 'still_ready', still_round: ctx.shot.still_round + 1, still_hold_id: null });
     });
   }
 
@@ -929,5 +931,102 @@ describe('round 1 follow-up', () => {
     const freeRetries = [1, 2, 3].map(() => ({ status: 'failed', payload: { round: 1, kind: 'retry', credits: 0 } }));
     expect(stillAttemptCost({ shot: { still_round: 5 }, jobs: [...freeRetries, failedFree], retry: true, pricing: { stillReroll: 2 } })).toEqual({ credits: 2, kind: 'retry' });
     expect(stillAttemptCost({ shot: { still_round: 5 }, jobs: [freeRetries[0], failedFree], retry: true, pricing: { stillReroll: 2 } })).toEqual({ credits: 0, kind: 'retry' });
+  });
+});
+
+// ---------------------------------------------------------------- round 2
+
+describe('round 2', () => {
+  it('T1: GET shots recovers a claim left by a crash and releases its hold', async () => {
+    const ctx = await stilledProject();
+    const shot = ctx.shots[0];
+    const holdId = randomUUID();
+    await holdCredits({ userId: ctx.userId, currency: 'video', amount: 2, projectId: ctx.project.id, holdId });
+    await storyDb().update('story_shots', { id: shot.id }, {
+      status: 'still_pending', still_round: shot.still_round + 1, still_hold_id: holdId,
+      still_claimed_at: new Date().toISOString(), still_prev: { status: 'still_ready', stale: false, error: null },
+    });
+    await age('story_shots', shot.id, 'still_claimed_at', STALE_CLAIM_MS + 1000);
+    const { shots } = await listShots({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(shots[0].status).toBe('still_ready');
+    expect((await balance(ctx.userId)).held).toBe(0);
+  });
+
+  it('T2: rounds only move forward, so a late orphan job of an aborted start never lands', async () => {
+    const ctx = await stilledProject();
+    const id = ctx.shots[0].id;
+    const start = ctx.shots[0].still_round;
+    _setStoryboardDeps({ enqueue: async (args) => { await enqueue(args); throw new Error('lost the answer'); } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] })).rejects.toThrow('lost the answer');
+    errors.mockRestore();
+    _setStoryboardDeps();
+    expect((await shotRow(id)).still_round).toBe(start + 1);
+    const orphan = (await stillJobs(ctx.project.id)).at(-1);
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] });
+    const fresh = (await stillJobs(ctx.project.id)).at(-1);
+    expect(fresh.payload.round).toBe(start + 2);
+    await finishJobs(ctx.project.id);
+    const row = await shotRow(id);
+    expect(row.still_key).toContain(fresh.id);
+    expect(row.still_key).not.toContain(orphan.id);
+    const bal = await balance(ctx.userId);
+    expect(bal.held).toBe(0);
+    expect(bal.available).toBe(1000 - 2);
+  });
+
+  it('T3: a title edit re-plans the scene, keeps verbatim shots and their clips, and asks nothing about clips (T6)', async () => {
+    const ctx = await builtProject();
+    for (const s of ctx.shots.filter((x) => x.scene_id === 's2')) await storyDb().update('story_shots', { id: s.id }, { clip_url: `/clip/${s.id}.mp4`, status: 'ready', still_url: '/s.png' });
+    await updateScene({ userId: ctx.userId, projectId: ctx.project.id, sceneId: 's2', patch: { title: 'The coffee visit' } });
+    let view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    expect(view.filter((s) => s.scene_id === 's2').every((s) => s.stale && s.needs_rebuild)).toBe(true);
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    const s2 = view.filter((s) => s.scene_id === 's2');
+    expect(s2.map((s) => s.id).sort()).toEqual(ctx.shots.filter((x) => x.scene_id === 's2').map((x) => x.id).sort());
+    expect(s2.every((s) => s.clip_url && !s.stale && !s.needs_rebuild)).toBe(true);
+  });
+
+  it('T3: an edit and its undo (A to B to A) leave nothing stale and nothing to rebuild', async () => {
+    const ctx = await builtProject();
+    const before = SCENES[1].visual;
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    expect((await shotRows(ctx.project.id)).filter((s) => s.scene_id === 's2').every((s) => s.stale)).toBe(true);
+    await editScene(ctx, 's2', before);
+    const view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    expect(view.every((s) => !s.stale && !s.needs_rebuild)).toBe(true);
+  });
+
+  it('T3: an edited description on a clipped shot stays stale through a rebuild and does not ask for one', async () => {
+    const ctx = await stilledProject();
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { clip_url: '/clip/a.mp4', status: 'ready' });
+    await updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id, patch: { description: 'A new angle.' } });
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    const [first] = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    expect(first).toMatchObject({ stale: true, clip_mismatch: true, needs_rebuild: false });
+  });
+
+  it('T3: a new scene with no shots yet asks for a rebuild', async () => {
+    const ctx = await builtProject();
+    await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: [...SCENES, { id: 's4', title: 'Later', visual: 'The shop at noon.', lines: [] }], source: 'edit' });
+    const view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    expect(view.some((s) => s.needs_rebuild)).toBe(true);
+  });
+
+  it('T4: a build that asked the model counts even when it ends blocked', async () => {
+    registerMock('story_shots', () => ({ shots: SCENES.map((sc) => ({ sceneId: sc.id, description: 'They have sex in the shop.', line: 'x', seconds: 6, cast: [] })) }));
+    const ctx = await newProject();
+    await expect(buildShotList({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toMatchObject({ code: 'shots_blocked' });
+    const usage = await storyDb().select('story_usage', { user_id: ctx.userId });
+    expect(usage.filter((u) => u.action.startsWith('shots_build')).reduce((n, u) => n + u.count, 0)).toBe(1);
+  });
+
+  it('T5: making pictures for every shot leaves out blocked shots', async () => {
+    const ctx = await builtProject();
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { status: 'blocked', error: 'Blocked.' });
+    const out = await generateStills({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(out.queued).not.toContain(ctx.shots[0].id);
+    expect(out.queued).toHaveLength(5);
   });
 });

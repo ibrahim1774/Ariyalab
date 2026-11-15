@@ -18,8 +18,17 @@
 --                    replace shots of a scene which already had a still (or
 --                    already had paid-only shots), so rebuilding a scene does
 --                    not hand out new free stills.
--- scene_sig        : the scene (visual and lines) the row was planned from; a
---                    rebuild keeps every row of a scene whose sig is unchanged.
+-- scene_sig        : the scene (title, visual, lines, mention) the row was
+--                    planned from; a rebuild keeps every row of a scene whose
+--                    sig is unchanged, and markStale uses the same sig.
+-- still_base_round : the still_round of the last description change. A failed
+--                    still job from before it cannot be retried.
+-- clip_mismatch    : the clip no longer matches the shot's own description or
+--                    still (a description edit, or a new still, on a shot with
+--                    a clip). Such a shot stays stale through rebuilds; making
+--                    a new clip (Task 16) clears it with stale.
+-- still_round never moves backwards: a start that is put back keeps its round,
+-- so a job of the aborted start can never land on a later attempt.
 --
 -- story_shot_claim(project, shot, round, status, description, hold, now)
 --   starts a still attempt under the project row lock (so it cannot interleave
@@ -32,8 +41,8 @@
 --   otherwise { sceneId, sceneSig, description, line, seconds, quality,
 --   castIds }, which keeps the first unused row with the same (scene_id,
 --   description, line), or is inserted as a draft. Rows that match nothing are
---   deleted. Kept rows lose stale when they have no clip (nothing left to
---   update).
+--   deleted. Kept rows stay stale only while their clip no longer matches
+--   their own description or still (clip_mismatch).
 --   Raises 'shots_busy' while a still or clip job of the project is queued or
 --   running or a shot is waiting for one; 'rebuild_loses_clips:<n>' when rows
 --   with a clip would be deleted and confirm is false; 'shots_changed' when a
@@ -47,7 +56,9 @@ alter table public.story_shots
   add column still_prev jsonb,
   add column still_delivered boolean not null default false,
   add column free_still boolean not null default true,
-  add column scene_sig text;
+  add column scene_sig text,
+  add column still_base_round integer not null default 0 check (still_base_round >= 0),
+  add column clip_mismatch boolean not null default false;
 
 create function public.story_shot_claim(
   p_project uuid,
@@ -74,8 +85,9 @@ begin
            still_round = p_round + 1,
            still_hold_id = p_hold,
            still_claimed_at = p_now,
-           still_prev = jsonb_build_object('status', status, 'stale', stale, 'error', error),
+           still_prev = jsonb_build_object('status', status, 'stale', stale, 'error', error, 'clip_mismatch', clip_mismatch),
            stale = case when clip_url is not null then true else stale end,
+           clip_mismatch = case when clip_url is not null then true else clip_mismatch end,
            error = null
      where id = p_shot
        and project_id = p_project
@@ -186,7 +198,7 @@ begin
            cast_ids = case when kept_cast[k] is null then cast_ids
                            else array(select jsonb_array_elements_text(kept_cast[k])::uuid) end,
            scene_sig = coalesce(kept_sig[k], scene_sig),
-           stale = stale and clip_url is not null
+           stale = stale and clip_url is not null and clip_mismatch
      where id = kept[k];
   end loop;
 
