@@ -67,7 +67,7 @@ const { setCreditsDb, grantCredits, holdCredits, settleHold, getBalance } = awai
 const runner = await import('../../lib/story/runner.js');
 globalThis.__runnerScope = runner._handlerCallScope;
 const {
-  enqueue, tick, sweep, handleProviderCallback, registerHandler, _resetHandlers, registeredKinds,
+  enqueue, tick, sweep, handleProviderCallback, registerHandler, unregisterHandler, _resetHandlers, registeredKinds,
   activeJobs, callbackUrl, callbackSignature, runWorkerJob, runCron, RUNNER_CONFIG, JOB_KINDS, settleJob,
 } = runner;
 const { mockStoragePath } = await import('../../lib/providers/storage.js');
@@ -1220,6 +1220,7 @@ describe('sweep', () => {
   it('a job with no handler is put back for 5 minutes, outside the submit budget, and fails after 5 rounds', async () => {
     const project = await newProject();
     const holdId = await withHold(project);
+    unregisterHandler('music'); // every kind has a handler by now; this test needs one without
     const job = await enqueue({ projectId: project.id, kind: 'music', holdId, costCredits: 5 });
     const budget = { submits: 15 };
     await tick({ projectId: project.id, now: T0, budget });

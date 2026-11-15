@@ -12,6 +12,9 @@ const PATHS = {
   user: 'M12 12a4 4 0 100-8 4 4 0 000 8zm-8 9a8 8 0 0116 0',
   spark: 'M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z',
   text: 'M5 6h14M5 11h14M5 16h9',
+  mic: 'M12 3a3 3 0 00-3 3v5a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4M9 21h6',
+  music: 'M9 18V6l10-2v12M9 18a3 3 0 11-6 0 3 3 0 016 0zm10-2a3 3 0 11-6 0 3 3 0 016 0z',
+  captions: 'M4 6h16v12H4V6zm3 4h4m-4 4h2m5-4h2m-3 4h4',
 };
 
 export function Icon({ name = 'image', size = 22 }) {

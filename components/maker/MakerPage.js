@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
-import Button from '../ui/Button';
 import ErrorNotice from './ErrorNotice';
 import { signInHref } from './errors';
 import MakerLayout from './MakerLayout';
 import { MakerNavProvider } from './MakerNav';
 import { PricingProvider } from './PricingContext';
 import QuoteBar from './QuoteBar';
+import StepAudio from './StepAudio';
 import StepCast from './StepCast';
 import StepGenerate from './StepGenerate';
 import StepLength from './StepLength';
@@ -17,7 +17,7 @@ import StepScript from './StepScript';
 import StepStart from './StepStart';
 import StepStoryboard from './StepStoryboard';
 import StepStyle from './StepStyle';
-import { FinishSlot, ReferenceBreakdownSlot, VoiceSoundSlot } from './slots';
+import { FinishSlot, ReferenceBreakdownSlot } from './slots';
 import { furthestId, nextId, staleIds, stepsFor } from './steps';
 import useProject from './useProject';
 import styles from './Steps.module.css';
@@ -88,14 +88,7 @@ function MakerPageInner({ id, returnTo }) {
     case 'script': body = <StepScript {...common} />; break;
     case 'cast': body = <StepCast {...common} cast={cast} jobs={jobs} />; break;
     case 'storyboard': body = <StepStoryboard {...common} shots={shots} />; break;
-    case 'audio':
-      body = (
-        <div className={styles.step}>
-          <VoiceSoundSlot project={project} />
-          <div className={styles.actions}><Button onClick={next}>Continue to generate</Button></div>
-        </div>
-      );
-      break;
+    case 'audio': body = <StepAudio {...common} />; break;
     case 'generate': body = <StepGenerate {...common} shots={shots} />; break;
     case 'review': body = <StepReview {...common} shots={shots} status={data} />; break;
     case 'finish': body = <FinishSlot project={project} />; break;

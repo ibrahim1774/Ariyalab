@@ -1,0 +1,64 @@
+/* Voice and sound step. Compact: two cards side by side on a wide screen, one column on a phone. */
+.grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; align-items: start; }
+.grid > :last-child { grid-column: 1 / -1; }
+.card { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; min-width: 0; }
+.title { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; }
+.titleIcon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-deep); }
+
+.state { min-height: 96px; height: auto; padding: 14px; border-radius: 14px; }
+.wait { height: 124px; border-radius: 14px; overflow: hidden; }
+.picker { display: flex; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.player { width: 100%; height: 40px; }
+.earlier, .notice { margin: 0; font-size: 13px; color: var(--text-dim); }
+.notice { padding: 8px 12px; border-radius: 12px; background: rgba(183, 121, 31, 0.1); color: #7A4F0F; font-size: 14px; }
+
+.voices { display: flex; flex-wrap: wrap; gap: 8px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.voices legend { width: 100%; padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 600; }
+.voices:disabled { opacity: 0.55; }
+.voice, .segmented label { position: relative; display: inline-flex; align-items: baseline; gap: 6px; padding: 8px 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface); font-size: 14px; cursor: pointer; transition: border-color 0.15s var(--ease), background 0.15s var(--ease); }
+.voice small { color: var(--text-dim); font-size: 12px; }
+.voice:hover, .segmented label:hover { border-color: var(--accent); }
+.voice input, .segmented input, .captionStyle input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.voice:focus-within, .segmented label:focus-within, .captionStyle:focus-within, .switch:focus-within { box-shadow: var(--focus-ring); }
+.voiceOn, .segOn, .captionOn { border-color: var(--accent); background: var(--accent-tint); }
+
+.lines summary { cursor: pointer; font-size: 14px; color: var(--text-dim); padding: 4px 0; }
+.lines ol { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 4px; max-height: 168px; overflow: auto; }
+.lines li { display: flex; gap: 10px; font-size: 14px; }
+.lines time { flex: none; width: 36px; color: var(--accent-deep); font-variant-numeric: tabular-nums; }
+.lines span { min-width: 0; overflow-wrap: anywhere; }
+
+.segmented { display: flex; flex-wrap: wrap; gap: 8px; }
+.moods { display: flex; flex-wrap: wrap; gap: 6px; }
+.moods button { padding: 6px 12px; border: 1px dashed var(--border-strong); border-radius: var(--radius-pill); background: transparent; color: var(--text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+.moods button:hover { border-color: var(--accent); color: var(--text); }
+.moods button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+.switch { position: relative; display: inline-flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; width: fit-content; border-radius: 10px; }
+.switch input { width: 20px; height: 20px; accent-color: var(--accent); }
+.captionStyles { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.captionStyle { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 10px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); cursor: pointer; }
+.captionStyle:has(input:disabled) { opacity: 0.5; cursor: not-allowed; }
+.captionStyle small { color: var(--text-dim); font-size: 12px; }
+.sample { display: grid; place-items: center; min-height: 64px; padding: 8px; border-radius: 10px; background: #2b2724; color: #fff; text-align: center; font-size: 17px; line-height: 1.25; }
+[data-caption='serif_accent'] .sample { font-family: Georgia, 'Times New Roman', serif; }
+[data-caption='serif_accent'] .sample em { font-style: italic; color: #f4b183; }
+[data-caption='bold_pop'] .sample { font-family: Impact, 'Arial Black', sans-serif; font-weight: 900; font-size: 16px; letter-spacing: 0.02em; }
+[data-caption='bold_pop'] .sample mark { background: #f08a4b; color: #fff; padding: 0 4px; border-radius: 4px; }
+[data-caption='clean'] .sample { font-weight: 500; }
+
+@media (max-width: 900px) {
+  .grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .card { padding: 12px; }
+  .voice, .segmented label, .moods button { min-height: 44px; align-items: center; }
+  .actions button, .actions a, .picker > button { min-height: 44px; }
+  .lines summary { min-height: 44px; display: flex; align-items: center; }
+  .switch { min-height: 44px; }
+  .captionStyles { grid-template-columns: minmax(0, 1fr); }
+  .captionStyle { flex-direction: row; align-items: center; min-height: 44px; }
+  .sample { flex: 1; min-height: 44px; font-size: 15px; }
+  .captionStyle small { width: 90px; }
+}
