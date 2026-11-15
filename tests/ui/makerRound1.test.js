@@ -199,9 +199,37 @@ describe('cast retry rules (round 1)', () => {
     rerender(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], regens_used: 2 }])} />);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });
+  it('uses the prices the server sends, and sends them back as the expected price', async () => {
+    client.retryCast.mockResolvedValue({});
+    client.regenCast.mockResolvedValue({});
+    render(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], regens_used: 0, retry_credits: 7, regen_credits: 3 }])} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Try again (7 credits)' }));
+    await waitFor(() => expect(client.retryCast).toHaveBeenCalledWith('p1', 'c1', 7));
+    fireEvent.change(screen.getByPlaceholderText(/A bit older/), { target: { value: 'older' } });
+    expect(screen.getByRole('button', { name: 'Regenerate (3 credits)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Regenerate (3 credits)' }));
+    await waitFor(() => expect(client.regenCast).toHaveBeenCalledWith('p1', 'c1', 'older', 3));
+  });
+  it('a changed price (409 quote_changed) refreshes the screen', async () => {
+    client.retryCast.mockRejectedValue(new StoryApiError({ status: 409, code: 'quote_changed' }));
+    const refresh = vi.fn();
+    render(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], retry_credits: 5 }])} refresh={refresh} />);
+    fireEvent.click(screen.getByRole('button', { name: /Try again/ }));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+  it('the client sends expected_credits only when it has a price', async () => {
+    const actual = await vi.importActual('../../lib/story/client');
+    const fn = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));
+    vi.stubGlobal('fetch', fn);
+    await actual.retryCast('p1', 'c1', 5);
+    await actual.regenCast('p1', 'c1', 'n', 0);
+    await actual.regenCast('p1', 'c1', 'n');
+    const bodies = fn.mock.calls.map(([, init]) => JSON.parse(init.body));
+    expect(bodies).toEqual([{ castId: 'c1', retry: true, expected_credits: 5 }, { castId: 'c1', note: 'n', expected_credits: 0 }, { castId: 'c1', note: 'n' }]);
+  });
   it('describeError has titles for retry_not_available and sheet_limit', () => {
     expect(describeError(new StoryApiError({ status: 409, code: 'retry_not_available', serverMessage: 'x' }))).toMatchObject({ title: 'Nothing to try again', refresh: true });
-    expect(describeError(new StoryApiError({ status: 429, code: 'sheet_limit' }))).toMatchObject({ title: 'Character sheet limit reached' });
+    expect(describeError(new StoryApiError({ status: 429, code: 'sheet_limit' }))).toMatchObject({ title: 'Character sheet limit reached', refresh: true });
   });
 });
 

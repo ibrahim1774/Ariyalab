@@ -26,8 +26,9 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const [error, setError] = useState(null);
   const pricing = usePricing();
   const left = Math.max(0, pricing.included.castRegenPerCharacter - (cast.regens_used || 0));
-  // A retry of a paid round holds that round's price again (the server works it out from the round's jobs).
-  const retryCost = (cast.regens_used || 0) > pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
+  // The prices come from the server (the same code that charges). The old derivation only stands in for a row without them.
+  const regenCost = Number.isInteger(cast.regen_credits) ? cast.regen_credits : (cast.regens_used || 0) >= pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
+  const retryCost = Number.isInteger(cast.retry_credits) ? cast.retry_credits : (cast.regens_used || 0) > pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
 
   async function run(kind, fn) {
     setBusy(kind);
@@ -37,6 +38,8 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       await refresh?.();
     } catch (err) {
       setError(err);
+      // A changed price or a state that moved on: show the current one.
+      if (err?.status === 409) await refresh?.();
     } finally {
       setBusy('');
     }
@@ -45,11 +48,12 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const regenerate = (e) => {
     e?.preventDefault();
     return run('regen', async () => {
-      await regenCast(projectId, cast.id, note.trim());
+      if (Number.isInteger(cast.regen_credits)) await regenCast(projectId, cast.id, note.trim(), cast.regen_credits);
+      else await regenCast(projectId, cast.id, note.trim());
       setNote('');
     });
   };
-  const retry = () => run('retry', () => retryCast(projectId, cast.id));
+  const retry = () => run('retry', () => (Number.isInteger(cast.retry_credits) ? retryCast(projectId, cast.id, cast.retry_credits) : retryCast(projectId, cast.id)));
   const pending = cast.status === 'pending';
   const candidates = cast.candidates || [];
 
@@ -127,7 +131,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
           </label>
           <div className={styles.actions}>
             <Button type="submit" variant="ghost" size="sm" disabled={busy === 'regen' || !note.trim()}>
-              {busy === 'regen' ? 'Making new pictures…' : 'Regenerate'}
+              {busy === 'regen' ? 'Making new pictures…' : regenCost > 0 ? `Regenerate (${regenCost} credits)` : 'Regenerate'}
             </Button>
             <AssetPickerSlot label="Use my own image" />
           </div>

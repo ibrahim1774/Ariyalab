@@ -24,7 +24,10 @@
 alter table public.story_cast
   add column voice_note text,
   add column round integer not null default 1 check (round >= 1),
-  add column hold_id uuid;  -- the credit hold taken for the current round (a paid regeneration or retry); null otherwise
+  add column hold_id uuid,                              -- the credit hold of the round being started (a paid regeneration or retry)
+  add column hold_credits integer not null default 0,   -- the amount of that hold the round's jobs must carry between them
+  add column round_credits integer not null default 0,  -- the price of the current round (0 when free); a retry of a failed round costs this again
+  add column candidates_round integer;                  -- the round the current candidates came from (cast sheets are counted per this round)
 
 drop index public.story_cast_project_idx;
 create unique index story_cast_project_ord_idx on public.story_cast (project_id, ord);
@@ -50,6 +53,8 @@ declare
   v_blocked integer;
   v_status text;
   v_chosen integer;
+  v_jobs integer;
+  v_cost integer;
 begin
   select * into c from story_cast where id = p_cast for update;
   if not found or c.round <> p_round then
@@ -74,14 +79,26 @@ begin
   select count(*) filter (where j.status in ('queued', 'running')
                              or (j.status = 'done' and j.applied_at is null and j.id is distinct from p_job
                                  and not (merged @> jsonb_build_array(jsonb_build_object('slot', (j.payload ->> 'slot')::integer))))),
-         count(*) filter (where j.status = 'blocked')
-    into v_active, v_blocked
+         count(*) filter (where j.status = 'blocked'),
+         count(*),
+         coalesce(sum(j.cost_credits), 0)
+    into v_active, v_blocked, v_jobs, v_cost
     from story_jobs j
    where j.project_id = c.project_id
      and j.kind = 'cast_image'
      and j.payload ->> 'castId' = c.id::text
      and j.payload ->> 'stage' = 'candidate'
      and (j.payload ->> 'round')::integer = p_round;
+
+  -- A start that died after holding credits but before queuing every job: the
+  -- share of the jobs that never existed is given back (the same ref every time).
+  if c.hold_id is not null and v_jobs < 3 and c.hold_credits - v_cost > 0 then
+    begin
+      perform public.credit_release(c.hold_id, c.hold_credits - v_cost, 'cast:' || c.id::text || ':' || p_round::text || ':unqueued');
+    exception when others then
+      null;
+    end;
+  end if;
 
   if v_active > 0 then
     v_status := 'pending';
@@ -105,7 +122,8 @@ begin
   update story_cast
      set candidates = merged,
          status = v_status,
-         chosen_index = v_chosen
+         chosen_index = v_chosen,
+         candidates_round = case when p_url is not null and p_key is not null then p_round else c.candidates_round end
    where id = c.id;
   return v_status;
 end

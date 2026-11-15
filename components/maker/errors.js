@@ -49,7 +49,7 @@ export function describeError(err, { returnTo } = {}) {
     return { ...out, title: 'Nothing to try again', message: server || 'Describe a change and make new pictures instead.', refresh: true };
   }
   if (code === 'sheet_limit') {
-    return { ...out, title: 'Character sheet limit reached', message: server || 'Your pick is saved. Make new pictures to get a new character sheet.' };
+    return { ...out, title: 'Character sheet limit reached', message: server || 'Your pick is saved. Make new pictures to get a new character sheet.', refresh: true };
   }
   if (code === 'rebuild_loses_clips') {
     const n = Number(err?.body?.count);
@@ -57,7 +57,7 @@ export function describeError(err, { returnTo } = {}) {
     return { ...out, title: 'Finished clips would be replaced', message: `This rebuild replaces ${what}. Confirm to rebuild anyway.` };
   }
   if (code === 'quote_changed') {
-    return { ...out, title: 'The price changed', message: 'Check the new total below, then confirm again.' };
+    return { ...out, title: 'The price changed', message: server || 'Check the new total below, then confirm again.', refresh: true };
   }
 
   if (status === 401) {

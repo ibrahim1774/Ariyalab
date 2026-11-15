@@ -19,7 +19,8 @@ import {
 } from '../../lib/story/prompts/cast.js';
 import { generateCast, regenerateCharacter, pickCast, CAST_MAX } from '../../lib/story/cast.js';
 import { castImageHandler } from '../../lib/story/castJobs.js';
-import { tick } from '../../lib/story/runner.js';
+import { tick, enqueue } from '../../lib/story/runner.js';
+import { castView } from '../../lib/story/cast.js';
 
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -71,6 +72,7 @@ const castRow = async (id) => (await storyDb().select('story_cast', { id }))[0];
 const jobsOf = async (projectId) => (await storyDb().select('story_jobs', { project_id: projectId, kind: 'cast_image' }, { order: ['created_at', 'id'] }));
 const available = async (userId) => (await getBalance(userId)).available;
 const feeEntries = async (userId) => (await raw.query(`select * from credit_ledger where user_id = $1 and op = 'spend'`, [userId])).rows;
+const forgetSheets = (projectId) => raw.query(`update story_jobs set result = null where project_id = $1 and kind = 'cast_image' and payload->>'stage' = 'sheet'`, [projectId]);
 const projectRow = async (id) => (await storyDb().select('story_projects', { id }))[0];
 
 const T0 = Date.parse('2026-11-14T12:00:00.000Z');
@@ -500,6 +502,7 @@ describe('pickCast', () => {
     for (let i = 0; i < 6; i += 1) {
       await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: i % 2 });
       await finishJobs(project.id);
+      await forgetSheets(project.id); // so going back to a picture makes a new sheet
     }
     const count = (await jobsOf(project.id)).length;
     await expect(pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 2 })).rejects.toMatchObject({ status: 429, code: 'sheet_limit' });
@@ -518,6 +521,7 @@ describe('pickCast', () => {
     for (let i = 0; i < 6; i += 1) {
       await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: i % 2 });
       await finishJobs(project.id);
+      await forgetSheets(project.id); // so going back to a picture makes a new sheet
     }
     await storyDb().update('story_jobs', { project_id: project.id, kind: 'cast_image', status: 'done' }, { status: 'failed' });
     await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 2 });
@@ -667,7 +671,7 @@ describe('regenerateCharacter', () => {
     await spendCredits({ userId, currency: 'video', amount: have - 2, reason: 'test', ref: randomUUID() });
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'x' })).rejects.toBeInstanceOf(InsufficientCreditsError);
     const row = await castRow(cast[0].id);
-    expect(row).toMatchObject({ status: 'ready', regens_used: 2, round: 1 });
+    expect(row).toMatchObject({ status: 'ready', regens_used: 2 });
     expect(row.candidates).toHaveLength(3);
     expect((await getBalance(userId)).held).toBe(0);
   });
@@ -784,7 +788,7 @@ describe('retry (free)', () => {
     const { spendCredits } = await import('../../lib/credits.js');
     await spendCredits({ userId, currency: 'video', amount: (await getBalance(userId)).available, reason: 'test', ref: randomUUID() });
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toBeInstanceOf(InsufficientCreditsError);
-    expect(await castRow(id)).toMatchObject({ status: 'failed', round: 2 });
+    expect(await castRow(id)).toMatchObject({ status: 'failed', round_credits: 5 });
   });
 
   it('is not a free re-roll: it is refused when the last attempt did not fail', async () => {
@@ -851,7 +855,7 @@ describe('holds are never left behind (K2, K5)', () => {
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'x' })).rejects.toThrow('database unavailable');
     spy.mockRestore();
     expect((await getBalance(userId)).held).toBe(0);
-    expect(await castRow(cast[0].id)).toMatchObject({ status: 'ready', round: 1, regens_used: 2 });
+    expect(await castRow(cast[0].id)).toMatchObject({ status: 'ready', regens_used: 2 });
   });
 
   it('releases the hold and restores the pictures when queuing the jobs throws, and fences the aborted round', async () => {
@@ -869,22 +873,6 @@ describe('holds are never left behind (K2, K5)', () => {
     expect(row).toMatchObject({ status: 'ready', regens_used: 2, hold_id: null });
     expect(row.candidates).toHaveLength(3);
     expect(row.round).toBeGreaterThan(2); // a job of the aborted round (2) can no longer write
-  });
-
-  it('a start that died after holding gives the hold back when it is restarted', async () => {
-    const { userId, project, cast } = await paidReady();
-    const { holdCredits } = await import('../../lib/credits.js');
-    const holdId = randomUUID();
-    await holdCredits({ userId, currency: 'video', amount: price, projectId: project.id, holdId });
-    expect((await getBalance(userId)).held).toBe(price);
-    // The crash: the round was claimed (draft, hold recorded) and no job was queued.
-    await storyDb().update('story_cast', { id: cast[0].id }, { status: 'draft', round: 2, hold_id: holdId, candidates: [] });
-    await raw.exec('alter table public.story_cast disable trigger story_cast_touch');
-    await raw.query(`update public.story_cast set updated_at = now() - interval '5 minutes' where id = $1`, [cast[0].id]);
-    await raw.exec('alter table public.story_cast enable trigger story_cast_touch');
-    await generateCast({ userId, projectId: project.id });
-    expect((await getBalance(userId)).held).toBe(0);
-    expect(await castRow(cast[0].id)).toMatchObject({ status: 'pending', round: 3, hold_id: null });
   });
 
   it('does not restart a draft when one of its jobs has already left the queue (K4)', async () => {
@@ -910,6 +898,173 @@ describe('holds are never left behind (K2, K5)', () => {
     await castImageHandler.onDone(jobs[0], { url: '/api/mock/storage/a.png', key: 'a.png' });
     expect((await castRow(row.id)).status).toBe('pending');
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: row.id, retry: true })).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+// ---------------------------------------------------------------- round 2
+
+describe('prices on the row and held credits (L1 to L7)', () => {
+  const PRICE = 5;
+  const agedDraft = async (id) => {
+    await raw.exec('alter table public.story_cast disable trigger story_cast_touch');
+    try {
+      await raw.query(`update public.story_cast set updated_at = now() - interval '5 minutes' where id = $1`, [id]);
+    } finally {
+      await raw.exec('alter table public.story_cast enable trigger story_cast_touch');
+    }
+  };
+  async function failedPaidRound() {
+    const ctx = await readyCast();
+    const id = ctx.cast[0].id;
+    await storyDb().update('story_cast', { id }, { regens_used: 2 });
+    await regenerateCharacter({ userId: ctx.userId, projectId: ctx.project.id, castId: id, note: 'x [[mock:fail]]' });
+    await finishJobs(ctx.project.id);
+    expect(await castRow(id)).toMatchObject({ status: 'failed', round_credits: PRICE });
+    return { ...ctx, id };
+  }
+  /** A paid regeneration whose request died: claimed, held (or not), `queued` of its jobs made, draft and old. */
+  async function deadPaidStart({ held = true, queued = 2 } = {}) {
+    const ctx = await readyCast();
+    const id = ctx.cast[0].id;
+    const { holdCredits } = await import('../../lib/credits.js');
+    const holdId = randomUUID();
+    if (held) await holdCredits({ userId: ctx.userId, currency: 'video', amount: PRICE, projectId: ctx.project.id, holdId });
+    await storyDb().update('story_cast', { id }, {
+      status: 'draft', round: 2, regens_used: 3, hold_id: holdId, hold_credits: PRICE, round_credits: PRICE, candidates: [], candidates_round: null,
+    });
+    const shares = [2, 2, 1];
+    for (let slot = 0; slot < queued; slot += 1) {
+      await enqueue({
+        projectId: ctx.project.id, kind: 'cast_image', holdId, costCredits: shares[slot],
+        payload: { stage: 'candidate', castId: id, round: 2, slot, note: 'older', aspect: '3:4', prompt: 'p' },
+      });
+    }
+    await agedDraft(id);
+    return { ...ctx, id, holdId };
+  }
+
+  it('L1: a retry whose queuing throws leaves the round priced, so the next retry holds the price again', async () => {
+    const { userId, project, id } = await failedPaidRound();
+    const db = storyDb();
+    const real = db.insert.bind(db);
+    const guard = vi.spyOn(db, 'insert').mockImplementation(async (table, rows) => {
+      if (table === 'story_jobs') throw new Error('queue unavailable');
+      return real(table, rows);
+    });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toThrow('queue unavailable');
+    guard.mockRestore();
+    expect((await getBalance(userId)).held).toBe(0);
+    expect(await castRow(id)).toMatchObject({ status: 'failed', round_credits: PRICE });
+    const out = await regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true });
+    expect(out.charged).toBe(PRICE);
+    expect((await getBalance(userId)).held).toBe(PRICE);
+  });
+
+  it('L1: a rolled back regeneration does not reset the sheet count', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    for (let i = 0; i < 6; i += 1) {
+      await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: i % 2 });
+      await finishJobs(project.id);
+      await forgetSheets(project.id); // so going back to a picture makes a new sheet
+    }
+    await storyDb().update('story_cast', { id }, { regens_used: 2 });
+    const db = storyDb();
+    const real = db.insert.bind(db);
+    const guard = vi.spyOn(db, 'insert').mockImplementation(async (table, rows) => {
+      if (table === 'story_jobs') throw new Error('queue unavailable');
+      return real(table, rows);
+    });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'x' })).rejects.toThrow();
+    guard.mockRestore();
+    await expect(pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 2 })).rejects.toMatchObject({ code: 'sheet_limit' });
+  });
+
+  it('L2: a restarted paid start carries its hold forward: nothing released, nothing held twice, shares add up', async () => {
+    const { userId, project, id, holdId } = await deadPaidStart();
+    const before = await available(userId);
+    expect((await getBalance(userId)).held).toBe(PRICE);
+    await generateCast({ userId, projectId: project.id });
+    expect((await getBalance(userId)).held).toBe(PRICE);
+    const row = await castRow(id);
+    expect(row).toMatchObject({ status: 'pending', round: 3, round_credits: PRICE });
+    const jobs = (await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.payload.round === 3);
+    expect(jobs).toHaveLength(3);
+    expect(jobs.every((j) => j.hold_id === holdId)).toBe(true);
+    expect(jobs.reduce((n, j) => n + j.cost_credits, 0)).toBe(PRICE);
+    expect((await jobsOf(project.id)).filter((j) => j.payload.round === 2 && j.payload.castId === id)).toHaveLength(0);
+    await finishJobs(project.id);
+    expect((await getBalance(userId)).held).toBe(0);
+    expect(await available(userId)).toBe(before); // `before` already had the 5 held; it is now spent, once
+  });
+
+  it('L3: a claimed round whose hold never happened is re-held when it can be, with the same hold id', async () => {
+    const { userId, project, id, holdId } = await deadPaidStart({ held: false, queued: 0 });
+    await generateCast({ userId, projectId: project.id });
+    expect((await getBalance(userId)).held).toBe(PRICE);
+    const jobs = (await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.payload.round === 3);
+    expect(jobs.every((j) => j.hold_id === holdId)).toBe(true);
+  });
+
+  it('L3: ... and when the credits are gone it is reset to failed with nothing to release, still priced for a retry', async () => {
+    const { userId, project, id } = await deadPaidStart({ held: false, queued: 1 });
+    const { spendCredits } = await import('../../lib/credits.js');
+    await spendCredits({ userId, currency: 'video', amount: (await getBalance(userId)).available, reason: 'test', ref: randomUUID() });
+    await generateCast({ userId, projectId: project.id });
+    expect(await castRow(id)).toMatchObject({ status: 'failed', round_credits: PRICE, hold_id: null });
+    expect((await getBalance(userId)).held).toBe(0);
+    expect((await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.status === 'queued')).toHaveLength(0);
+    const view = await castView(await castRow(id));
+    expect(view.retry_credits).toBe(PRICE);
+  });
+
+  it('L6: a start that died with part of its jobs unqueued gives back the share of the jobs that never existed', async () => {
+    const { userId, project, id } = await deadPaidStart({ queued: 2 });
+    const before = await available(userId);
+    // The two queued jobs run (the draft is never restarted: they left the queue).
+    await storyDb().update('story_jobs', { project_id: project.id, kind: 'cast_image', status: 'queued' }, { status: 'done' });
+    const jobs = (await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.payload.round === 2);
+    for (const j of jobs) await castImageHandler.onDone(j, { url: `/api/mock/storage/${j.payload.slot}.png`, key: `k${j.payload.slot}.png` });
+    expect((await castRow(id)).status).toBe('ready');
+    expect((await getBalance(userId)).held).toBe(0); // 4 settled, the 1 of the missing job released
+    expect((await available(userId)) - before).toBe(1); // 4 spent, 5 held then freed
+  });
+
+  it('L4: the cast view carries the retry and regeneration prices', async () => {
+    const { userId, project } = await newProject();
+    const { cast } = await generateCast({ userId, projectId: project.id });
+    expect(cast.every((c) => c.retry_credits === 0 && c.regen_credits === 0)).toBe(true);
+    const { id } = await failedPaidRound();
+    const view = await castView(await castRow(id));
+    expect(view).toMatchObject({ retry_credits: PRICE, regen_credits: PRICE });
+    const res = await (await import('../../lib/story/actions.js')).getAction('cast', 'GET').handler({ projectId: (await castRow(id)).project_id });
+    expect(res.cast.find((c) => c.id === id)).toMatchObject({ retry_credits: PRICE });
+  });
+
+  it('L4: expected_credits that no longer matches is 409 quote_changed and changes nothing', async () => {
+    const { userId, project, id } = await failedPaidRound();
+    const before = await castRow(id);
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true, expectedCredits: 0 })).rejects.toMatchObject({ status: 409, code: 'quote_changed' });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'x', expectedCredits: 0 })).rejects.toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(await castRow(id)).toMatchObject({ round: before.round, status: 'failed' });
+    expect((await getBalance(userId)).held).toBe(0);
+    const out = await regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true, expectedCredits: PRICE });
+    expect(out.charged).toBe(PRICE);
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'x', expectedCredits: -1 })).rejects.toMatchObject({ status: 422 });
+  });
+
+  it('L7: picking back to an earlier picture reuses its finished sheet', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 0 });
+    await finishJobs(project.id);
+    const first = (await castRow(id)).sheet;
+    await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 1 });
+    await finishJobs(project.id);
+    const count = (await jobsOf(project.id)).length;
+    await pickCast({ userId, projectId: project.id, castId: id, candidateIndex: 0 });
+    expect(await jobsOf(project.id)).toHaveLength(count);
+    expect((await castRow(id)).sheet).toMatchObject({ url: first.url, key: first.key, from_key: cast[0].candidates[0].key });
   });
 });
 
