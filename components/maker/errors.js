@@ -6,12 +6,16 @@ export function signInHref(returnTo) {
   return `/sign-in?returnTo=${encodeURIComponent(path)}`;
 }
 
-const LIMIT_NOUN = { script_write: ['script', 'scripts'], project_create: ['new video', 'new videos'], reference_analysis: ['video analysis', 'video analyses'] };
+// Account-wide daily caps. script_write is counted per video, so it has its own wording.
+const LIMIT_NOUN = { project_create: ['new video', 'new videos'], reference_analysis: ['video analysis', 'video analyses'] };
 
 /** Says what the daily limit counts when the server tells us the limit and the action. */
 function dailyLimitMessage(body) {
   const n = Number(body?.limit);
   if (!Number.isFinite(n)) return 'You have reached today\u2019s limit. Come back tomorrow, or pick a plan for more.';
+  if (body?.action === 'script_write') {
+    return `You have rewritten this video\u2019s script ${n} ${n === 1 ? 'time' : 'times'} today. Edit the scenes directly, come back tomorrow, or pick a plan for more.`;
+  }
   const [one, many] = LIMIT_NOUN[body?.action] || ['try', 'tries'];
   return `You have used your ${n} ${n === 1 ? one : many} for today. Come back tomorrow, or pick a plan for more.`;
 }

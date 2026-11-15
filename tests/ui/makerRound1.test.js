@@ -344,7 +344,6 @@ describe('quote strip', () => {
 describe('round 2', () => {
   it('daily_limit says what it counts, from the error body', () => {
     const e = (body) => describeError(new StoryApiError({ status: 429, code: 'daily_limit', body }));
-    expect(e({ limit: 5, action: 'script_write' }).message).toBe('You have used your 5 scripts for today. Come back tomorrow, or pick a plan for more.');
     expect(e({ limit: 3, action: 'project_create' }).message).toBe('You have used your 3 new videos for today. Come back tomorrow, or pick a plan for more.');
     expect(e({ limit: 1, action: 'reference_analysis' }).message).toBe('You have used your 1 video analysis for today. Come back tomorrow, or pick a plan for more.');
     expect(e({ limit: 5 }).message).toBe('You have used your 5 tries for today. Come back tomorrow, or pick a plan for more.');
@@ -387,5 +386,38 @@ describe('round 2', () => {
     expect(toggle).toHaveAttribute('aria-expanded', 'false');
     fireEvent.click(toggle);
     expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  });
+});
+
+describe('round 4', () => {
+  it('daily_limit words script_write as per video, other actions as account-wide', () => {
+    const e = (body) => describeError(new StoryApiError({ status: 429, code: 'daily_limit', body }));
+    expect(e({ limit: 3, action: 'script_write' }).message).toBe(
+      'You have rewritten this video\u2019s script 3 times today. Edit the scenes directly, come back tomorrow, or pick a plan for more.'
+    );
+    expect(e({ limit: 1, action: 'script_write' }).message).toMatch(/this video\u2019s script 1 time today/);
+    expect(e({ limit: 3, action: 'project_create' }).message).toBe('You have used your 3 new videos for today. Come back tomorrow, or pick a plan for more.');
+  });
+
+  it('QuoteBar marks its sub-label as updating while the quote is older than the shots', async () => {
+    client.getQuote.mockResolvedValueOnce({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro narrated shots', credits: 420 }] });
+    const shots = Array.from({ length: 10 }, (_, i) => shot(i + 1, { seconds: 3 }));
+    const { rerender } = render(<QuoteBar project={project()} shots={shots} />);
+    await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('510 credits'));
+    expect(screen.getByText('10 shots, 30 seconds, Pro narrated')).toBeInTheDocument();
+
+    let resolve;
+    client.getQuote.mockReturnValueOnce(new Promise((r) => { resolve = r; }));
+    const edited = shots.map((s, i) => (i === 0 ? { ...s, quality: 'standard' } : s));
+    rerender(<QuoteBar project={project()} shots={edited} />);
+    await flush();
+    // The old total is still shown, so the label must not describe the new shots.
+    expect(screen.getByTestId('quote-total')).toHaveTextContent('510 credits');
+    expect(screen.queryByText('10 shots, 30 seconds, Mixed quality')).not.toBeInTheDocument();
+    expect(screen.getByTestId('quote-sub')).toHaveTextContent('Updating the quote');
+
+    await act(async () => resolve({ total: 498, lines: [{ label: 'Project fee', credits: 90 }] }));
+    await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('498 credits'));
+    expect(screen.getByTestId('quote-sub')).toHaveTextContent('10 shots, 30 seconds, Mixed quality');
   });
 });

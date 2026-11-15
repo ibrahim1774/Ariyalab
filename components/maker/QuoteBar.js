@@ -29,8 +29,9 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
       return undefined;
     }
     let alive = true;
+    // Each quote remembers the shots it was made for, so a later shot edit can tell it is out of date.
     getQuote(projectId)
-      .then((q) => alive && setQuote(q && typeof q.total === 'number' ? q : null))
+      .then((q) => alive && setQuote(q && typeof q.total === 'number' ? { ...q, shotSignature } : null))
       .catch(() => alive && setQuote(null));
     return () => {
       alive = false;
@@ -57,10 +58,13 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
   const short = comparable && available < total ? total - available : 0;
 
   const lines = quote?.lines || [];
-  // With a server quote the label describes what was quoted (the shots), not the brief.
+  // With a server quote the label describes what was quoted (the shots), not the brief. While a
+  // re-quote for edited shots is on its way the total is the old one, so the label says it is updating.
+  const quoteIsStale = Boolean(quote) && quote.shotSignature !== shotSignature;
   const qualities = [...new Set(shots.map((s) => s.quality))];
-  const subLabel =
-    quote && shots.length > 0
+  const subLabel = quoteIsStale
+    ? 'Updating the quote\u2026'
+    : quote && shots.length > 0
       ? `${shots.length} ${shots.length === 1 ? 'shot' : 'shots'}, ${shots.reduce((n, s) => n + (s.seconds || 0), 0)} seconds, ${qualities.length === 1 ? QUALITY_LABELS[qualities[0]] || qualities[0] : 'Mixed quality'}`
       : `${QUALITY_LABELS[project.quality] || project.quality}, ${project.seconds} seconds`;
   return (
@@ -69,7 +73,7 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
         <div className={styles.cost}>
           <span className={styles.label}>{quote ? 'Quote for this video' : 'Estimated cost'}</span>
           <strong className={styles.total} data-testid="quote-total">{count(total)} credits</strong>
-          <span className={styles.meta}>
+          <span className={styles.meta} data-testid="quote-sub" aria-busy={quoteIsStale || undefined}>
             {subLabel}
           </span>
         </div>

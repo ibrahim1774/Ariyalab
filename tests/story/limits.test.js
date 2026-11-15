@@ -266,3 +266,21 @@ describe('fix round 2: receipts', () => {
     expect((await usage(userId))[0].count).toBe(2);
   });
 });
+
+describe('task 17 round 4: the daily limit body names the limit', () => {
+  it('sends limit and action with a daily_limit, account-wide and per video', async () => {
+    free();
+    const userId = randomUUID();
+    for (let i = 0; i < 3; i += 1) await createProject({ userId, input });
+    const res = makeRes();
+    sendError(res, await createProject({ userId, input }).catch((e) => e));
+    expect(res.statusCode).toBe(429);
+    expect(res.body).toMatchObject({ error: 'daily_limit', action: 'project_create', limit: 3 });
+
+    const projectId = randomUUID();
+    for (let i = 0; i < 3; i += 1) await assertAllowed({ userId, action: 'script_write', projectId });
+    const res2 = makeRes();
+    sendError(res2, await assertAllowed({ userId, action: 'script_write', projectId }).catch((e) => e));
+    expect(res2.body).toMatchObject({ error: 'daily_limit', action: 'script_write', limit: 3 });
+  });
+});
