@@ -30,18 +30,21 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
     }
   }
 
-  // Builds or rebuilds the shot list; a rebuild that would replace finished clips asks first.
-  const rebuild = () => run('shots', async () => {
+  // Builds or rebuilds the shot list. A rebuild that would replace finished clips asks first: the server keeps the
+  // plan it showed and hands back a token, and "Rebuild anyway" sends that token so exactly that plan is applied.
+  // If anything changed meanwhile the server asks again with a new token.
+  const rebuild = (confirm) => run('shots', async () => {
     try {
-      await buildShots(project.id);
+      await (confirm ? buildShots(project.id, { confirm }) : buildShots(project.id));
     } catch (err) {
       if (err?.code !== 'rebuild_loses_clips') throw err;
-      setClipsToReplace(Number(err.body?.count) || 0);
+      setClipsToReplace({ count: Number(err.body?.count) || 0, token: err.body?.token || null });
     }
   });
   const confirmRebuild = () => {
+    const token = clipsToReplace?.token;
     setClipsToReplace(null);
-    run('shots', () => buildShots(project.id, { confirm: true }));
+    rebuild(token);
   };
 
   const missing = missingStills(shots);
@@ -69,7 +72,7 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
       {shots.length === 0 ? (
         <EmptyState icon="film" title="Your shots will appear here once the cast is picked" text="We split your script into shots and show each one as a picture.">
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
-          <Button onClick={rebuild} disabled={busy === 'shots'}>
+          <Button onClick={() => rebuild()} disabled={busy === 'shots'}>
             {busy === 'shots' ? 'Building…' : 'Build my storyboard'}
           </Button>
         </EmptyState>
@@ -82,7 +85,7 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
               </Button>
             )}
             {anyStale && (
-              <Button variant="ghost" onClick={rebuild} disabled={busy === 'shots'}>{busy === 'shots' ? 'Rebuilding…' : 'Rebuild storyboard'}</Button>
+              <Button variant="ghost" onClick={() => rebuild()} disabled={busy === 'shots'}>{busy === 'shots' ? 'Rebuilding…' : 'Rebuild storyboard'}</Button>
             )}
             <p className={styles.srOnly} role="status" aria-live="polite">{making ? 'Pictures are being made' : ''}</p>
             {making && <span className={styles.hint}>Pictures are being made. This page updates by itself.</span>}
@@ -116,7 +119,7 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
           </>
         )}
       >
-        <p>This rebuild replaces {clipsToReplace} finished {clipsToReplace === 1 ? 'clip' : 'clips'}. Rebuild anyway?</p>
+        <p>This rebuild replaces {clipsToReplace?.count} finished {clipsToReplace?.count === 1 ? 'clip' : 'clips'}. Rebuild anyway?</p>
       </Modal>
     </div>
   );

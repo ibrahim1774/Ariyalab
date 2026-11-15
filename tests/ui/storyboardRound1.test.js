@@ -79,7 +79,7 @@ describe('rebuild confirm and length note (round 1 follow-up)', () => {
   it('a rebuild that would replace clips asks first, then re-sends with confirm', async () => {
     const { describeError } = await import('../../components/maker/errors');
     client.buildShots
-      .mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'rebuild_loses_clips', message: 'x', body: { error: 'rebuild_loses_clips', count: 2 } }))
+      .mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'rebuild_loses_clips', message: 'x', body: { error: 'rebuild_loses_clips', count: 2, token: 'tok-1' } }))
       .mockResolvedValueOnce({ shots: [] });
     const refresh = vi.fn();
     render(<StepStoryboard project={project} shots={[shot(1, { stale: true, clip_url: '/c.mp4' })]} refresh={refresh} onNext={vi.fn()} returnTo="/" />);
@@ -87,7 +87,7 @@ describe('rebuild confirm and length note (round 1 follow-up)', () => {
     expect(await screen.findByText('This rebuild replaces 2 finished clips. Rebuild anyway?')).toBeInTheDocument();
     expect(client.buildShots).toHaveBeenLastCalledWith('p1');
     fireEvent.click(screen.getByRole('button', { name: 'Rebuild anyway' }));
-    await vi.waitFor(() => expect(client.buildShots).toHaveBeenLastCalledWith('p1', { confirm: true }));
+    await vi.waitFor(() => expect(client.buildShots).toHaveBeenLastCalledWith('p1', { confirm: 'tok-1' }));
     await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(describeError(new StoryApiError({ status: 409, code: 'rebuild_loses_clips' })).title).toBe('Finished clips would be replaced');
   });
@@ -106,9 +106,9 @@ describe('client', () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ shots: [] }) }));
     vi.stubGlobal('fetch', fetchMock);
     await actual.buildShots('p1');
-    await actual.buildShots('p1', { confirm: true });
+    await actual.buildShots('p1', { confirm: 'tok-1' });
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({});
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ confirm: true });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ confirm: 'tok-1' });
     vi.unstubAllGlobals();
   });
 });

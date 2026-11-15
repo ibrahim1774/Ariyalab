@@ -1,5 +1,13 @@
 -- Task 15 (storyboard). Applies after 20261114000700_story_cast.sql. Touches
--- only public.story_shots (a story_ table) and adds two functions.
+-- public.story_shots and public.story_projects (story_ tables) and adds two
+-- functions.
+--
+-- story_projects.pending_shots / pending_basis / pending_at: a rebuild that
+-- would remove finished clips is not applied; its plan is kept here
+-- ({ token, plan, count, checkRange }) with a hash of what it was planned
+-- from and when, so the customer's confirm applies exactly that plan (within
+-- 10 minutes, while nothing it was based on has changed) without asking the
+-- model again.
 --
 -- still_round      : which still attempt the row is waiting for. Starting a
 --                    still (first, re-roll or retry) and changing the
@@ -24,8 +32,8 @@
 -- still_base_round : the still_round of the last description change. A failed
 --                    still job from before it cannot be retried.
 -- clip_mismatch    : the clip no longer matches the shot's own description or
---                    still (a description edit, or a new still, on a shot with
---                    a clip). Such a shot stays stale through rebuilds; making
+--                    still (a description edit, or a new still that landed, on
+--                    a shot with a clip). Such a shot stays stale through rebuilds; making
 --                    a new clip (Task 16) clears it with stale.
 -- still_round never moves backwards: a start that is put back keeps its round,
 -- so a job of the aborted start can never land on a later attempt.
@@ -44,8 +52,9 @@
 --   deleted. Kept rows stay stale only while their clip no longer matches
 --   their own description or still (clip_mismatch).
 --   Raises 'shots_busy' while a still or clip job of the project is queued or
---   running or a shot is waiting for one; 'rebuild_loses_clips:<n>' when rows
---   with a clip would be deleted and confirm is false; 'shots_changed' when a
+--   running or a shot is waiting for one; 'rebuild_loses_clips:<n>' when more
+--   rows with a clip would be deleted than p_confirm (the number of clips the
+--   customer agreed to lose, 0 by default); 'shots_changed' when a
 --   kept id is not the project's or the seconds no longer add up to min..max;
 --   'not_found' for no project. Returns the project's shots, by ord.
 
@@ -59,6 +68,11 @@ alter table public.story_shots
   add column scene_sig text,
   add column still_base_round integer not null default 0 check (still_base_round >= 0),
   add column clip_mismatch boolean not null default false;
+
+alter table public.story_projects
+  add column pending_shots jsonb,
+  add column pending_basis text,
+  add column pending_at timestamptz;
 
 create function public.story_shot_claim(
   p_project uuid,
@@ -86,8 +100,6 @@ begin
            still_hold_id = p_hold,
            still_claimed_at = p_now,
            still_prev = jsonb_build_object('status', status, 'stale', stale, 'error', error, 'clip_mismatch', clip_mismatch),
-           stale = case when clip_url is not null then true else stale end,
-           clip_mismatch = case when clip_url is not null then true else clip_mismatch end,
            error = null
      where id = p_shot
        and project_id = p_project
@@ -101,7 +113,7 @@ $$;
 create function public.story_shots_replace(
   p_project uuid,
   p_shots jsonb,
-  p_confirm boolean default false,
+  p_confirm integer default 0,
   p_min integer default null,
   p_max integer default null
 )
@@ -186,7 +198,7 @@ begin
 
   select count(*) into v_lost from story_shots
    where project_id = p_project and id <> all (kept) and clip_url is not null;
-  if v_lost > 0 and not coalesce(p_confirm, false) then
+  if v_lost > coalesce(p_confirm, 0) then
     raise exception 'rebuild_loses_clips:%', v_lost;
   end if;
 
