@@ -2577,6 +2577,37 @@ describe('task 6 round 2: migrated customers are granted in the ledger whatever 
     expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
   });
 
+  it('a refund or dispute on a migrated customer is taken back from the ledger with the flag off', async () => {
+    const { grantForCheckoutSession, clawbackForPayment } = await import('../../lib/grants.js');
+    const user = newUser();
+    const customer = newCustomer();
+    await link(user.id, customer);
+    await migrate(customer, user.id);
+    const session = topupSession({ customer, buyer: user });
+    await grantForCheckoutSession(session, { userId: user.id });
+    expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S);
+
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, customer, amount: 1500, amount_refunded: 750, payment_intent: session.payment_intent, invoice: null };
+    S.state.charges.set(charge.id, charge);
+    const refunded = await clawbackForPayment({ charge });
+    expect(refunded.skipped).toBeUndefined();
+    expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S - Math.ceil(V2_TOPUP_S / 2));
+
+    const dispute = { id: `dp_${randomUUID().slice(0, 8)}`, charge: charge.id, amount: 750 };
+    S.state.disputes.set(dispute.id, dispute);
+    await clawbackForPayment({ dispute });
+    expect((await getBalance(user.id)).available).toBe(0);
+  });
+
+  it('a refund on a customer that was not migrated is still skipped with the flag off', async () => {
+    const { clawbackForPayment } = await import('../../lib/grants.js');
+    const customer = newCustomer();
+    const session = topupSession({ customer, buyer: newUser() });
+    const charge = { id: `ch_${randomUUID().slice(0, 8)}`, customer, amount: 1500, amount_refunded: 1500, payment_intent: session.payment_intent, invoice: null };
+    S.state.charges.set(charge.id, charge);
+    expect(await clawbackForPayment({ charge })).toEqual({ skipped: 'legacy' });
+  });
+
   it('a customer that was not migrated still takes the legacy path', async () => {
     const { grantForCheckoutSession } = await import('../../lib/grants.js');
     const user = newUser();
