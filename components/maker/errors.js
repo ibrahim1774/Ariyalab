@@ -51,6 +51,11 @@ export function describeError(err, { returnTo } = {}) {
   if (code === 'sheet_limit') {
     return { ...out, title: 'Character sheet limit reached', message: server || 'Your pick is saved. Make new pictures to get a new character sheet.' };
   }
+  if (code === 'rebuild_loses_clips') {
+    const n = Number(err?.body?.count);
+    const what = Number.isFinite(n) && n > 0 ? `${n} finished ${n === 1 ? 'clip' : 'clips'}` : 'finished clips';
+    return { ...out, title: 'Finished clips would be replaced', message: `This rebuild replaces ${what}. Confirm to rebuild anyway.` };
+  }
   if (code === 'quote_changed') {
     return { ...out, title: 'The price changed', message: 'Check the new total below, then confirm again.' };
   }

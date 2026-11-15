@@ -72,3 +72,43 @@ describe('storyboard batch button', () => {
     expect(screen.getByRole('button', { name: 'Make pictures for 2 shots' })).toBeInTheDocument();
   });
 });
+
+describe('rebuild confirm and length note (round 1 follow-up)', () => {
+  const { StoryApiError } = client;
+
+  it('a rebuild that would replace clips asks first, then re-sends with confirm', async () => {
+    const { describeError } = await import('../../components/maker/errors');
+    client.buildShots
+      .mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'rebuild_loses_clips', message: 'x', body: { error: 'rebuild_loses_clips', count: 2 } }))
+      .mockResolvedValueOnce({ shots: [] });
+    const refresh = vi.fn();
+    render(<StepStoryboard project={project} shots={[shot(1, { stale: true, clip_url: '/c.mp4' })]} refresh={refresh} onNext={vi.fn()} returnTo="/" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild storyboard' }));
+    expect(await screen.findByText('This rebuild replaces 2 finished clips. Rebuild anyway?')).toBeInTheDocument();
+    expect(client.buildShots).toHaveBeenLastCalledWith('p1');
+    fireEvent.click(screen.getByRole('button', { name: 'Rebuild anyway' }));
+    await vi.waitFor(() => expect(client.buildShots).toHaveBeenLastCalledWith('p1', { confirm: true }));
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(describeError(new StoryApiError({ status: 409, code: 'rebuild_loses_clips' })).title).toBe('Finished clips would be replaced');
+  });
+
+  it('shows a one-line note when the shots no longer add up to the length', () => {
+    const { rerender } = render(<StepStoryboard project={{ ...project, seconds: 30 }} shots={[1, 2, 3, 4, 5, 6, 7, 8].map((i) => shot(i))} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByText('Your video is now 24 s, shorter than the 30 s you picked')).toBeInTheDocument();
+    rerender(<StepStoryboard project={{ ...project, seconds: 24 }} shots={[1, 2, 3, 4, 5, 6, 7, 8].map((i) => shot(i))} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.queryByText(/Your video is now/)).toBeNull();
+  });
+});
+
+describe('client', () => {
+  it('buildShots sends confirm only when asked', async () => {
+    const actual = await vi.importActual('../../lib/story/client');
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ shots: [] }) }));
+    vi.stubGlobal('fetch', fetchMock);
+    await actual.buildShots('p1');
+    await actual.buildShots('p1', { confirm: true });
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({});
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ confirm: true });
+    vi.unstubAllGlobals();
+  });
+});

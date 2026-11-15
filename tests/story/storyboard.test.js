@@ -889,3 +889,45 @@ describe('round 1: prices and caps (S3, S6, S8, S9, S5)', () => {
     expect(bal.available).toBe(1000);
   });
 });
+
+// ---------------------------------------------------------------- round 1 follow-up
+
+describe('round 1 follow-up', () => {
+  it('a rebuild after removing a scene returns a length note when the video falls outside 10% of the length', async () => {
+    const ctx = await builtProject();
+    const first = await listShots({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(first.length_note).toBeUndefined();
+    await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: SCENES.slice(0, 2), source: 'edit' });
+    const out = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(out.shots).toHaveLength(4);
+    expect(out.length_note).toEqual({ totalSeconds: 12, targetSeconds: 18 });
+  });
+
+  it('no length note when the total is within 10%', async () => {
+    const ctx = await newProject();
+    const out = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(out.length_note).toBeUndefined();
+  });
+
+  it(`free retries of free attempts stop after ${FREE_FIRST_TRIES}; then a retry costs stillReroll`, async () => {
+    const ctx = await builtProject();
+    const id = ctx.shots[0].id;
+    await makeNextStillFail(id);
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] });
+    await finishJobs(ctx.project.id);
+    for (let i = 0; i < FREE_FIRST_TRIES; i += 1) {
+      const out = await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id], retry: true });
+      expect(out.charged).toBe(0);
+      await finishJobs(ctx.project.id);
+    }
+    expect((await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots[0].retry_credits).toBe(2);
+    expect((await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id], retry: true })).charged).toBe(2);
+  });
+
+  it('stillAttemptCost: a retry of a free attempt after 3 free retries costs stillReroll; a paid retry keeps its price', () => {
+    const failedFree = { status: 'failed', payload: { round: 5, kind: 'retry', credits: 0 } };
+    const freeRetries = [1, 2, 3].map(() => ({ status: 'failed', payload: { round: 1, kind: 'retry', credits: 0 } }));
+    expect(stillAttemptCost({ shot: { still_round: 5 }, jobs: [...freeRetries, failedFree], retry: true, pricing: { stillReroll: 2 } })).toEqual({ credits: 2, kind: 'retry' });
+    expect(stillAttemptCost({ shot: { still_round: 5 }, jobs: [freeRetries[0], failedFree], retry: true, pricing: { stillReroll: 2 } })).toEqual({ credits: 0, kind: 'retry' });
+  });
+});

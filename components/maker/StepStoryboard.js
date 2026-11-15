@@ -1,6 +1,7 @@
 import { useState } from 'react';
 
 import Button from '../ui/Button';
+import Modal from '../ui/Modal';
 import { buildShots, makeStills } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
@@ -13,6 +14,8 @@ import styles from './Steps.module.css';
 export default function StepStoryboard({ project, shots = [], refresh, onNext, returnTo }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
+  // Finished clips a rebuild would replace (the server asked to confirm), or null.
+  const [clipsToReplace, setClipsToReplace] = useState(null);
 
   async function run(kind, fn) {
     setBusy(kind);
@@ -27,7 +30,26 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
     }
   }
 
+  // Builds or rebuilds the shot list; a rebuild that would replace finished clips asks first.
+  const rebuild = () => run('shots', async () => {
+    try {
+      await buildShots(project.id);
+    } catch (err) {
+      if (err?.code !== 'rebuild_loses_clips') throw err;
+      setClipsToReplace(Number(err.body?.count) || 0);
+    }
+  });
+  const confirmRebuild = () => {
+    setClipsToReplace(null);
+    run('shots', () => buildShots(project.id, { confirm: true }));
+  };
+
   const missing = missingStills(shots);
+  const anyStale = shots.some((s) => s.stale);
+  // Removing scenes keeps the other shots as they are, so the total can drift from the length picked.
+  const totalSeconds = shots.reduce((n, s) => n + (Number(s.seconds) || 0), 0);
+  const target = Number(project.seconds) || 0;
+  const offLength = shots.length > 0 && target > 0 && (totalSeconds < Math.ceil(target * 0.9) || totalSeconds > Math.floor(target * 1.1));
   const making = shots.some((s) => s.status === 'still_pending');
   const needPictures = shots.filter((s) => (s.source || 'generated') !== 'footage' && !s.still_url && s.status !== 'still_pending');
   // Pictures are free the first time; a shot that already had one (or replaces one) costs a re-roll. The server says which.
@@ -44,7 +66,7 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
       {shots.length === 0 ? (
         <EmptyState icon="film" title="Your shots will appear here once the cast is picked" text="We split your script into shots and show each one as a picture.">
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
-          <Button onClick={() => run('shots', () => buildShots(project.id))} disabled={busy === 'shots'}>
+          <Button onClick={rebuild} disabled={busy === 'shots'}>
             {busy === 'shots' ? 'Building…' : 'Build my storyboard'}
           </Button>
         </EmptyState>
@@ -56,9 +78,17 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
                 {busy === 'stills' ? 'Starting…' : `Make pictures for ${needPictures.length} shot${needPictures.length === 1 ? '' : 's'}${picturesCost > 0 ? `, ${picturesCost} credits` : ''}`}
               </Button>
             )}
+            {anyStale && (
+              <Button variant="ghost" onClick={rebuild} disabled={busy === 'shots'}>{busy === 'shots' ? 'Rebuilding…' : 'Rebuild storyboard'}</Button>
+            )}
             <p className={styles.srOnly} role="status" aria-live="polite">{making ? 'Pictures are being made' : ''}</p>
             {making && <span className={styles.hint}>Pictures are being made. This page updates by itself.</span>}
           </div>
+          {offLength && (
+            <p className={styles.hint} data-testid="length-note">
+              Your video is now {totalSeconds} s, {totalSeconds < target ? 'shorter' : 'longer'} than the {target} s you picked
+            </p>
+          )}
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
           <div className={styles.shotGrid}>
             {shots.map((shot) => (
@@ -72,6 +102,19 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
           </StepFooter>
         </>
       )}
+      <Modal
+        open={clipsToReplace !== null}
+        onClose={() => setClipsToReplace(null)}
+        title="Rebuild the storyboard?"
+        footer={(
+          <>
+            <Button variant="ghost" arrow={false} onClick={() => setClipsToReplace(null)}>Cancel</Button>
+            <Button arrow={false} onClick={confirmRebuild}>Rebuild anyway</Button>
+          </>
+        )}
+      >
+        <p>This rebuild replaces {clipsToReplace} finished {clipsToReplace === 1 ? 'clip' : 'clips'}. Rebuild anyway?</p>
+      </Modal>
     </div>
   );
 }
