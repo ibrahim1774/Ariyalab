@@ -49,15 +49,24 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   }, [shot.description]);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
-  const locked = BUSY.has(shot.status) || Boolean(busy);
+  const locked = BUSY.has(shot.status) || shot.status === 'still_pending' || Boolean(busy);
   const choices = qualityChoices(project);
   const failed = shot.status === 'failed' || shot.status === 'blocked';
   const waiting = shot.status === 'still_pending' || BUSY.has(shot.status);
   const retryNode =
     retry ??
     (editable && failed ? (
-      <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('still', () => retryStill(project.id, shot.id))}>Try again</Button>
+      // A blocked picture would be blocked again: the customer changes the description instead.
+      shot.status === 'blocked' ? (
+        <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => setEditing(true)}>Edit description</Button>
+      ) : (
+        <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('still', () => retryStill(project.id, shot.id))}>
+          {shot.retry_credits > 0 ? `Try again (${shot.retry_credits} credits)` : 'Try again'}
+        </Button>
+      )
     ) : null);
+  // The server says what a new picture for this shot costs; the price list is the fallback.
+  const remakeCost = typeof shot.still_credits === 'number' ? shot.still_credits : pricing.stillReroll;
   const clipReady = !editable && shot.status === 'ready' && shot.clip_url;
   let media;
   if (clipReady) {
@@ -151,7 +160,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
           <div className={`${styles.actions} ${more ? styles.actionsOpen : ''}`}>
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} title="Make a new picture for this shot"
               onClick={() => run('still', () => makeStills(project.id, [shot.id]))}>
-              {busy === 'still' ? 'Making…' : `Make it again, ${pricing.stillReroll} credits`}
+              {busy === 'still' ? 'Making…' : remakeCost > 0 ? `Make it again, ${remakeCost} credits` : 'Make it again'}
             </Button>
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>
             <label className={styles.quality}>

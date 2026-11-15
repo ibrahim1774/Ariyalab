@@ -30,6 +30,8 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
   const missing = missingStills(shots);
   const making = shots.some((s) => s.status === 'still_pending');
   const needPictures = shots.filter((s) => (s.source || 'generated') !== 'footage' && !s.still_url && s.status !== 'still_pending');
+  // Pictures are free the first time; a shot that already had one (or replaces one) costs a re-roll. The server says which.
+  const picturesCost = needPictures.reduce((n, s) => n + (Number(s.still_credits) || 0), 0);
 
   return (
     <div className={styles.step}>
@@ -51,7 +53,7 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
           <div className={styles.toolbar}>
             {needPictures.length > 0 && (
               <Button onClick={() => run('stills', () => makeStills(project.id, needPictures.map((s) => s.id)))} disabled={busy === 'stills'}>
-                {busy === 'stills' ? 'Starting…' : `Make pictures for ${needPictures.length} shot${needPictures.length === 1 ? '' : 's'}`}
+                {busy === 'stills' ? 'Starting…' : `Make pictures for ${needPictures.length} shot${needPictures.length === 1 ? '' : 's'}${picturesCost > 0 ? `, ${picturesCost} credits` : ''}`}
               </Button>
             )}
             <p className={styles.srOnly} role="status" aria-live="polite">{making ? 'Pictures are being made' : ''}</p>

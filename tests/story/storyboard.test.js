@@ -15,7 +15,10 @@ import { storyShotsMock } from '../../lib/story/mocks.js';
 import { buildShotsSystem, buildShotsMessage, stillPrompt, SHOTS_SCHEMA, MAX_CAST_REFS } from '../../lib/story/prompts/shot.js';
 import {
   buildShotList, generateStills, updateShot, markStale, listShots, fitSeconds, stillAttemptCost,
+  _setStoryboardDeps, FREE_FIRST_TRIES, STALE_CLAIM_MS,
 } from '../../lib/story/storyboard.js';
+import { holdCredits } from '../../lib/credits.js';
+import { enqueue } from '../../lib/story/runner.js';
 import { stillHandler } from '../../lib/story/stillJobs.js';
 import { tick, _handlerCallScope } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
@@ -46,6 +49,7 @@ beforeEach(() => {
   _resetPricingCache();
 });
 afterEach(async () => {
+  _setStoryboardDeps();
   registerMock('story_shots', storyShotsMock);
   globalThis.__shotTestSession = null;
   await raw.query(`delete from pricing_config where key = 'stillReroll'`).catch(() => {});
@@ -252,7 +256,8 @@ describe('buildShotList', () => {
     expect(afterEdit.filter((s) => s.scene_id === 's2').every((s) => s.stale)).toBe(true);
     expect(afterEdit.filter((s) => s.scene_id !== 's2').every((s) => !s.stale)).toBe(true);
 
-    await buildShotList({ userId, projectId: project.id });
+    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject({ status: 409, code: 'rebuild_loses_clips', extra: { count: 2 } });
+    await buildShotList({ userId, projectId: project.id, confirm: true });
     const after = await shotRows(project.id);
     const kept = shots.filter((s) => s.scene_id !== 's2');
     for (const old of kept) {
@@ -353,7 +358,7 @@ describe('generateStills', () => {
     const jobs = await stillJobs(project.id);
     expect(jobs).toHaveLength(5);
     expect(jobs.some((j) => j.shot_id === shots[1].id)).toBe(false);
-    expect(out.skipped).toContainEqual({ shotId: shots[1].id, reason: 'footage' });
+    expect(out.refused).toContainEqual({ shotId: shots[1].id, reason: 'footage' });
     const only = await generateStills({ userId, projectId: project.id, shotIds: [shots[1].id] });
     expect(only.queued).toEqual([]);
     expect(await stillJobs(project.id)).toHaveLength(5);
@@ -683,5 +688,204 @@ describe('actions', () => {
   it('has a route file for the shot list with a longer maxDuration', async () => {
     const route = await import('../../pages/api/story/projects/[id]/shots.js');
     expect(route.config.maxDuration).toBeGreaterThanOrEqual(60);
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+const editScene = (ctx, sceneId, visual) => updateScene({ userId: ctx.userId, projectId: ctx.project.id, sceneId, patch: { visual } });
+const age = async (table, id, column, ms) => {
+  await raw.query(`update public.${table} set ${column} = now() - ($2 || ' milliseconds')::interval where id = $1`, [id, String(ms)]);
+};
+
+describe('round 1: holds are never left behind (S1, S7)', () => {
+  it('a hold that throws after the claim puts the shot back as it was', async () => {
+    const { userId, project, shots } = await stilledProject();
+    _setStoryboardDeps({ holdCredits: async () => { throw new Error('ledger down'); } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] })).rejects.toThrow('ledger down');
+    errors.mockRestore();
+    const row = await shotRow(shots[0].id);
+    expect(row).toMatchObject({ status: 'still_ready', still_round: shots[0].still_round, still_hold_id: null, stale: false });
+    expect(await stillJobs(project.id)).toHaveLength(6);
+  });
+
+  it('an enqueue that throws releases the hold and restores status and stale', async () => {
+    const { userId, project, shots } = await stilledProject();
+    await storyDb().update('story_shots', { id: shots[0].id }, { clip_url: '/clip/a.mp4', status: 'ready' });
+    _setStoryboardDeps({ enqueue: async () => { throw new Error('queue down'); } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await expect(generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] })).rejects.toThrow('queue down');
+    errors.mockRestore();
+    const row = await shotRow(shots[0].id);
+    expect(row).toMatchObject({ status: 'ready', stale: false, still_round: shots[0].still_round, still_hold_id: null });
+    expect((await balance(userId)).held).toBe(0);
+  });
+
+  it('a batch where one enqueue fails returns the shots that were queued and refuses the other', async () => {
+    const { userId, project, shots } = await builtProject();
+    let n = 0;
+    _setStoryboardDeps({ enqueue: async (args) => { n += 1; if (n === 2) throw new Error('queue down'); return enqueue(args); } });
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id, shots[1].id] });
+    errors.mockRestore();
+    expect(out.queued).toEqual([shots[0].id]);
+    expect(out.refused).toEqual([{ shotId: shots[1].id, reason: 'failed' }]);
+    expect((await shotRow(shots[1].id)).status).toBe('draft');
+  });
+
+  async function crashedAfterHold() {
+    const ctx = await stilledProject();
+    const shot = ctx.shots[0];
+    const holdId = randomUUID();
+    await holdCredits({ userId: ctx.userId, currency: 'video', amount: 2, projectId: ctx.project.id, holdId });
+    await storyDb().update('story_shots', { id: shot.id }, {
+      status: 'still_pending', still_round: shot.still_round + 1, still_hold_id: holdId,
+      still_claimed_at: new Date().toISOString(), still_prev: { status: 'still_ready', stale: false, error: null },
+    });
+    return { ...ctx, shot };
+  }
+
+  for (const [name, run] of [
+    ['generateStills', (c) => generateStills({ userId: c.userId, projectId: c.project.id, shotIds: [c.shots[1].id] })],
+    ['updateShot', (c) => updateShot({ userId: c.userId, projectId: c.project.id, shotId: c.shots[1].id, patch: { quality: 'economy' } })],
+    ['buildShotList', (c) => buildShotList({ userId: c.userId, projectId: c.project.id })],
+  ]) {
+    it(`a claim left by a crash (hold made, no job) is released and reset by ${name}`, async () => {
+      const ctx = await crashedAfterHold();
+      expect((await balance(ctx.userId)).held).toBe(2);
+      await age('story_shots', ctx.shot.id, 'still_claimed_at', STALE_CLAIM_MS + 1000);
+      await run(ctx);
+      expect((await balance(ctx.userId)).held).toBe(name === 'generateStills' ? 2 : 0);
+      const row = await shotRow(ctx.shot.id);
+      expect(row).toMatchObject({ status: 'still_ready', still_round: ctx.shot.still_round, still_hold_id: null });
+    });
+  }
+
+  it('a fresh claim, or one whose job exists, is left alone', async () => {
+    const ctx = await crashedAfterHold();
+    await expect(generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shot.id] })).rejects.toMatchObject({ status: 409 });
+    expect((await shotRow(ctx.shot.id)).status).toBe('still_pending');
+    const b = await stilledProject();
+    await generateStills({ userId: b.userId, projectId: b.project.id, shotIds: [b.shots[0].id] });
+    await age('story_shots', b.shots[0].id, 'still_claimed_at', STALE_CLAIM_MS + 1000);
+    await updateShot({ userId: b.userId, projectId: b.project.id, shotId: b.shots[1].id, patch: { quality: 'economy' } });
+    expect((await shotRow(b.shots[0].id)).status).toBe('still_pending');
+    expect((await balance(b.userId)).held).toBe(2);
+  });
+});
+
+describe('round 1: rebuilds (S2, S10)', () => {
+  it('only changed scenes go to the model; unchanged scenes keep their shots without asking', async () => {
+    const ctx = await builtProject();
+    const asked = [];
+    registerMock('story_shots', (args) => { asked.push(args); return storyShotsMock(args); });
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(asked).toHaveLength(1);
+    const brief = JSON.parse(/<shot_brief>\n([\s\S]*?)\n<\/shot_brief>/.exec(asked[0].messages[0].content)[1]);
+    expect(brief.scenes.map((s) => s.id)).toEqual(['s2']);
+    const after = await shotRows(ctx.project.id);
+    for (const old of ctx.shots.filter((s) => s.scene_id !== 's2')) expect(after.some((s) => s.id === old.id)).toBe(true);
+  });
+
+  it('a rebuild with nothing changed asks nothing and counts nothing', async () => {
+    const ctx = await builtProject();
+    const builds = async () => (await storyDb().select('story_usage', { user_id: ctx.userId })).filter((u) => u.action.startsWith('shots_build')).reduce((n, u) => n + u.count, 0);
+    expect(await builds()).toBe(1);
+    const asked = [];
+    registerMock('story_shots', (args) => { asked.push(args); return storyShotsMock(args); });
+    const { shots } = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(asked).toHaveLength(0);
+    expect(shots.map((s) => s.id)).toEqual(ctx.shots.map((s) => s.id));
+    expect(await builds()).toBe(1);
+  });
+
+  it('replacement shots of a scene that already had pictures are paid; a first build is free', async () => {
+    const ctx = await stilledProject();
+    const first = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
+    expect(first.every((s) => s.still_credits === 2)).toBe(true);
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    const { shots } = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    const s2 = shots.filter((s) => s.scene_id === 's2');
+    expect(s2.every((s) => !s.still_url && s.still_credits === 2)).toBe(true);
+    await editScene(ctx, 's2', 'Leo walks in dry this time.');
+    const again = (await buildShotList({ userId: ctx.userId, projectId: ctx.project.id })).shots.filter((s) => s.scene_id === 's2');
+    expect(again.every((s) => s.still_credits === 2)).toBe(true);
+    const out = await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [again[0].id] });
+    expect(out.charged).toBe(2);
+    const fresh = await builtProject();
+    expect((await listShots({ userId: fresh.userId, projectId: fresh.project.id })).shots.every((s) => s.still_credits === 0)).toBe(true);
+  });
+
+  it('at most 10 shot-list builds per project per day, then 429 daily_limit', async () => {
+    const ctx = await builtProject(); // build 1
+    for (let i = 2; i <= 10; i += 1) {
+      await editScene(ctx, 's1', `Maya sweeps the shop, take ${i}.`);
+      await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    }
+    await editScene(ctx, 's1', 'Maya sweeps the shop, take 11.');
+    await expect(buildShotList({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toMatchObject({ status: 429, code: 'daily_limit', extra: { limit: 10 } });
+  });
+
+  it('the swap refuses a list whose seconds do not add up under the lock', async () => {
+    const ctx = await newProject();
+    await expect(storyDb().rpc('story_shots_replace', {
+      p_project: ctx.project.id, p_shots: [{ sceneId: 's1', description: 'x', line: null, seconds: 3, quality: 'standard', castIds: [] }], p_confirm: false, p_min: 16, p_max: 19,
+    })).rejects.toThrow(/shots_changed/);
+    expect(await shotRows(ctx.project.id)).toEqual([]);
+  });
+});
+
+describe('round 1: prices and caps (S3, S6, S8, S9, S5)', () => {
+  it('still_credits is null for footage', async () => {
+    const ctx = await builtProject();
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { source: 'footage' });
+    const { shots } = await listShots({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(shots[0].still_credits).toBeNull();
+    expect(shots[1].still_credits).toBe(0);
+  });
+
+  it('a batch queues the free shots and refuses the paid one it cannot pay for (200, no 402)', async () => {
+    const ctx = await builtProject({ funds: 1 });
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { still_delivered: true });
+    const out = await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[0].id, ctx.shots[1].id] });
+    expect(out.queued).toEqual([ctx.shots[1].id]);
+    expect(out.refused).toEqual([{ shotId: ctx.shots[0].id, reason: 'insufficient_credits' }]);
+    expect((await shotRow(ctx.shots[0].id)).status).toBe('draft');
+  });
+
+  it('updateShot answers 409 for a busy shot before screening the text', async () => {
+    const ctx = await builtProject();
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[0].id] });
+    await expect(updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id, patch: { description: 'They have sex here.' } })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it(`free makes after failed first stills stop after ${FREE_FIRST_TRIES}; then a make costs stillReroll`, async () => {
+    const ctx = await builtProject();
+    const id = ctx.shots[0].id;
+    await makeNextStillFail(id);
+    for (let i = 0; i < FREE_FIRST_TRIES; i += 1) {
+      const out = await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] });
+      expect(out.charged).toBe(0);
+      await finishJobs(ctx.project.id);
+      expect((await shotRow(id)).status).toBe('failed');
+    }
+    const view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots[0];
+    expect(view.still_credits).toBe(2);
+    expect(view.retry_credits).toBe(0);
+    expect((await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] })).charged).toBe(2);
+  });
+
+  it('onDone for a shot that is gone releases the hold instead of settling', async () => {
+    const ctx = await stilledProject();
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[0].id] });
+    const job = (await stillJobs(ctx.project.id)).at(-1);
+    expect((await balance(ctx.userId)).held).toBe(2);
+    await storyDb().remove('story_shots', { id: ctx.shots[0].id });
+    await stillHandler.onDone(job, { url: '/x.png', key: 'x' });
+    const bal = await balance(ctx.userId);
+    expect(bal.held).toBe(0);
+    expect(bal.available).toBe(1000);
   });
 });
