@@ -3,7 +3,9 @@ import { useState } from 'react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import ErrorNotice from './ErrorNotice';
-import { StartFromVideoSlot } from './slots';
+import { useMakerNav } from './MakerNav';
+import StepReference from './StepReference';
+import { Tile } from './Tiles';
 import styles from './Steps.module.css';
 
 export function titleFromIdea(idea) {
@@ -15,8 +17,12 @@ export function titleFromIdea(idea) {
 /**
  * Step 1. Without a project (/app/new) it takes the idea and calls onCreate({ title, offer }); the project
  * is only created when the customer submits. With a project it renames it.
+ * The second door, "Start from a video" (StepReference): on /app/new, onCreateForVideo() makes the project once
+ * the video checks out and onOpenProject(id) opens it; on a project without a reference it starts the analysis
+ * for that project and refreshes it.
  */
-export default function StepStart({ project, onCreate, save, onNext, returnTo }) {
+export default function StepStart({ project, onCreate, onCreateForVideo, onOpenProject, save, onNext, refresh, returnTo }) {
+  const { goTo } = useMakerNav();
   const [idea, setIdea] = useState('');
   const [title, setTitle] = useState(project?.title || '');
   const [busy, setBusy] = useState(false);
@@ -76,7 +82,17 @@ export default function StepStart({ project, onCreate, save, onNext, returnTo })
           </div>
         </form>
       </Card>
-      {!project && <StartFromVideoSlot />}
+      {project?.reference_id ? (
+        <Tile icon="film" title="Started from a video" text="Its breakdown waits for you after the length step." className={styles.referenceNote}>
+          {goTo && <button type="button" className={styles.errorAction} onClick={() => goTo('breakdown')}>See the breakdown</button>}
+        </Tile>
+      ) : (
+        <StepReference
+          ensureProject={project ? async () => project.id : onCreateForVideo}
+          onStarted={project ? async () => { await refresh?.(); } : async (id) => { await onOpenProject?.(id); }}
+          returnTo={returnTo}
+        />
+      )}
     </div>
   );
 }

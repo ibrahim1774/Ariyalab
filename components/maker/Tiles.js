@@ -15,6 +15,9 @@ const PATHS = {
   mic: 'M12 3a3 3 0 00-3 3v5a3 3 0 006 0V6a3 3 0 00-3-3zM6 11a6 6 0 0012 0M12 17v4M9 21h6',
   music: 'M9 18V6l10-2v12M9 18a3 3 0 11-6 0 3 3 0 016 0zm10-2a3 3 0 11-6 0 3 3 0 016 0z',
   captions: 'M4 6h16v12H4V6zm3 4h4m-4 4h2m5-4h2m-3 4h4',
+  upload: 'M12 16V4m0 0l-5 5m5-5l5 5M4 16v4h16v-4',
+  link: 'M10 14a4 4 0 005.7 0l3-3a4 4 0 00-5.7-5.7l-1 1M14 10a4 4 0 00-5.7 0l-3 3a4 4 0 005.7 5.7l1-1',
+  clock: 'M12 3a9 9 0 100 18 9 9 0 000-18zm0 4v5l3 2',
 };
 
 export function Icon({ name = 'image', size = 22 }) {

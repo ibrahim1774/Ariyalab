@@ -201,3 +201,6 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
   .errorNotice a { display: inline-flex; align-items: center; min-height: 44px; }
 }
 @media (max-width: 760px) { .clip { max-height: 200px; } }
+
+/* Start step: the note shown once a project was started from a video (Task 22). */
+.referenceNote { min-height: 0; height: auto; padding: 14px 16px; border-radius: 16px; align-items: flex-start; text-align: left; }

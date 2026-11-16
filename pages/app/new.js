@@ -13,12 +13,21 @@ export default function NewVideoPage() {
     const project = await createProject(input);
     await router.replace(`/app/p/${project.id}`);
   }
+  // Starting from a video: the project is made only after the video passed the browser's checks, then the upload
+  // and the analysis use it, and only then the project opens.
+  async function onCreateForVideo() {
+    const project = await createProject({ title: 'Video from a reference' });
+    return project.id;
+  }
+  async function onOpenProject(id) {
+    await router.replace(`/app/p/${id}`);
+  }
   const steps = stepsFor(null).map((s) => ({ id: s.id, label: s.label, locked: s.id !== 'start' }));
   return (
     <>
       <Head><title>New video | Ariya Lab</title></Head>
       <MakerLayout title="New video" steps={steps} currentId="start">
-        <StepStart onCreate={onCreate} returnTo="/app/new" />
+        <StepStart onCreate={onCreate} onCreateForVideo={onCreateForVideo} onOpenProject={onOpenProject} returnTo="/app/new" />
       </MakerLayout>
     </>
   );
