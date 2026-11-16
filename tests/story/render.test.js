@@ -17,13 +17,18 @@ import { transcribe } from '../../lib/providers/stt.js';
 import { runWorkerJob, sweep, _resetHandlers } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
 import { setAudioPlan } from '../../lib/story/audio.js';
-import { startRender, renderTargetSize } from '../../lib/story/render.js';
+import { startRender, renderTargetSize, _configureRender } from '../../lib/story/render.js';
+import { captionFilterAvailable } from '../../lib/story/captions.js';
 import { run as runChecks, scriptWordsOf, wordCoverage } from '../../lib/story/checks.js';
 import { getProjectStatus } from '../../lib/story/status.js';
 
 vi.mock('../../lib/providers/stt.js', async (importOriginal) => {
   const real = await importOriginal();
   return { ...real, transcribe: vi.fn(real.transcribe) };
+});
+vi.mock('../../lib/story/captions.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, captionFilterAvailable: vi.fn(real.captionFilterAvailable) };
 });
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -119,6 +124,7 @@ beforeEach(async () => {
 });
 afterEach(() => {
   globalThis.__renderTestSession = null;
+  _configureRender();
 });
 
 const SCENES = [
@@ -301,6 +307,37 @@ describe('render', () => {
     // Nothing was rendered or stored for it.
     expect(existsSync(mockStoragePath(`story/${ctx.project.id}/render`))).toBe(false);
   });
+
+  it('keeps the upload\'s time: the transcription gets only what is left before the deadline, less the upload reserve', async () => {
+    const ctx = await newProject();
+    await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    const deadline = Date.now() + 150_000;
+    const out = await runWorkerJob('render', { deadline });
+    expect(out).toMatchObject({ claimed: true, outcome: 'done' });
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    const { timeoutMs } = transcribe.mock.calls[0][0];
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(150_000 - 40_000);
+  }, 240_000);
+
+  it('with too little time left, the words are not checked and the mix is not made again', async () => {
+    const ctx = await newProject({ music: false });
+    _configureRender({ uploadReserveMs: 1_000_000 });
+    const row = await renderOnce(ctx);
+    expect(transcribe).not.toHaveBeenCalled();
+    expect(row.status).toBe('done');
+    expect(row.warnings.map((w) => w.code)).toContain('words_unchecked');
+    expect(row.settings.checks.retried).toBe(false);
+  }, 240_000);
+
+  it('says so when captions were asked for and could not be burned', async () => {
+    const ctx = await newProject();
+    captionFilterAvailable.mockResolvedValueOnce(false);
+    const row = await renderOnce(ctx);
+    expect(row.status).toBe('done');
+    expect(row.settings.captions.format).toBe('none');
+    expect(row.warnings.map((w) => w.code)).toContain('captions_missing');
+  }, 240_000);
 
   it('POST /render starts it through the action route, and /status shows the render', async () => {
     const ctx = await newProject();
