@@ -64,7 +64,7 @@ export default function SignUpPage() {
   return (
     <>
       <Head>
-        <title>{isClaimFlow ? 'Finish setup' : 'Sign up'} — Ariya Lab</title>
+        <title>{`${isClaimFlow ? 'Finish setup' : 'Sign up'} — Ariya Lab`}</title>
       </Head>
       <main
         style={{

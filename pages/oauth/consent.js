@@ -41,7 +41,7 @@ export default function OAuthConsentPage({ error = null, details = null, email =
   return (
     <>
       <Head>
-        <title>{error ? 'Connection error' : 'Allow access'} · Ariya Lab</title>
+        <title>{`${error ? 'Connection error' : 'Allow access'} · Ariya Lab`}</title>
         <meta name="robots" content="noindex" />
         <meta name="referrer" content="same-origin" />
       </Head>
