@@ -77,7 +77,9 @@ export function missingStills(shots = []) {
 const GEN_SHOT_SECONDS = 3;
 
 export const shotCredits = (shot, pricing = DEFAULTS) =>
-  pricing.perSecond[shot.quality] != null ? pricing.perSecond[shot.quality] * Math.max(3, Math.ceil(shot.seconds || 3)) : 0;
+  pricing.perSecond[shot.quality] != null
+    ? pricing.perSecond[shot.quality] * Math.max(pricing.minSeconds?.[shot.quality] ?? 3, Math.ceil(shot.seconds || 3))
+    : 0;
 
 /** Estimate before a real quote exists: the project fee plus the per second rate over whole 3 second shots. */
 export function estimateCredits(project, pricing = DEFAULTS) {
@@ -95,7 +97,8 @@ export function rerollInfo(status, shot, pricing = DEFAULTS) {
   const included = status?.rerolls?.included ?? Math.floor(shots.length * pricing.freeRerollShare);
   const used = status?.rerolls?.used ?? status?.project?.rerolls_used ?? 0;
   const left = Math.max(0, included - used);
-  const credits = status?.rerolls?.credits ?? shotCredits(shot, pricing);
+  // The server's price for this shot (clip_price) wins; the rest only stand in while it is missing.
+  const credits = Number.isInteger(shot?.clip_price) ? shot.clip_price : status?.rerolls?.credits ?? shotCredits(shot, pricing);
   return { left, credits, text: `${left} ${left === 1 ? 'try' : 'tries'} included, then ${credits} credits` };
 }
 

@@ -12,8 +12,12 @@ import styles from './Steps.module.css';
 
 const IN_FLIGHT = new Set(['queued', 'generating']);
 
-/** Shots that can be started now: generated ones that are not already running or finished. */
-export const startable = (shots) => shots.filter((s) => isGenerated(s) && s.still_url && !IN_FLIGHT.has(s.status) && s.status !== 'ready');
+/**
+ * Shots that can be started now: generated ones that are not already running or finished. The server's clip_credits
+ * (null when a shot has nothing to generate) wins when present; a ready clip that went stale counts again.
+ */
+export const startable = (shots) => shots.filter((s) => isGenerated(s) && s.still_url && !IN_FLIGHT.has(s.status) && s.status !== 'still_pending'
+  && (s.clip_credits !== undefined ? s.clip_credits !== null : s.status !== 'ready' || s.stale));
 
 export default function StepGenerate({ project, shots = [], refresh, onNext, goTo, returnTo }) {
   const [confirmIds, setConfirmIds] = useState(null);

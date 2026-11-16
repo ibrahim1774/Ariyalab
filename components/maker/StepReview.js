@@ -17,13 +17,16 @@ function ClipActions({ shot, project, status, refresh, returnTo }) {
   const [error, setError] = useState(null);
   const pricing = usePricing();
   const info = rerollInfo(status, shot, pricing);
+  const price = Number.isInteger(shot.reroll_credits) ? shot.reroll_credits : null;
   const inFlight = shot.status === 'queued' || shot.status === 'generating';
 
   async function reroll() {
     setBusy(true);
     setError(null);
     try {
-      await rerollShot(project.id, shot.id);
+      // The price on the button (the server's reroll_credits): a different price is a 409, never a charge.
+      if (Number.isInteger(shot.reroll_credits)) await rerollShot(project.id, shot.id, shot.reroll_credits);
+      else await rerollShot(project.id, shot.id);
       await refresh?.();
     } catch (err) {
       setError(err);
@@ -37,7 +40,7 @@ function ClipActions({ shot, project, status, refresh, returnTo }) {
       {shot.status === 'ready' && (
         <>
           <Button variant="ghost" size="sm" arrow={false} onClick={reroll} disabled={busy || inFlight}>
-            {busy ? 'Making it again…' : 'Make it again'}
+            {busy ? 'Making it again…' : price ? `Make it again (${price} credits)` : 'Make it again'}
           </Button>
           <span className={styles.hint} data-testid="reroll-info">{info.text}</span>
         </>

@@ -69,7 +69,8 @@ describe('getPricing', () => {
     expect(p.projectFee).toBe(100);
     expect(p.perSecond).toEqual({ economy: 9, standard: 11, pro_narrated: 14, pro_talking: 21 });
     expect(p.billing_v2).toBeUndefined();
-    expect(await quoteShot({ quality: 'economy', seconds: 3 })).toBe(27);
+    // economy clips are at least 4 seconds (DEFAULTS.minSeconds), so a 3 second shot is priced as 4.
+    expect(await quoteShot({ quality: 'economy', seconds: 3 })).toBe(36);
   });
   it('caches for 60 seconds and can be reset', async () => {
     vi.useFakeTimers();

@@ -56,6 +56,12 @@ export function describeError(err, { returnTo } = {}) {
     const what = Number.isFinite(n) && n > 0 ? `${n} finished ${n === 1 ? 'clip' : 'clips'}` : 'finished clips';
     return { ...out, title: 'Finished clips would be replaced', message: `This rebuild replaces ${what}. Confirm to rebuild anyway.` };
   }
+  if (code === 'needs_rebuild') {
+    return { ...out, title: 'Rebuild the storyboard first', message: server || 'Your script changed since the storyboard was made.', action: { label: 'Go to the storyboard', step: 'storyboard' } };
+  }
+  if (code === 'already_ready' || code === 'reroll_not_available') {
+    return { ...out, title: 'This shot cannot be made that way', message: server || 'Reload to see where this shot is.', refresh: true };
+  }
   if (code === 'quote_changed') {
     return { ...out, title: 'The price changed', message: server || 'Check the new total below, then confirm again.', refresh: true };
   }

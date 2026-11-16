@@ -79,6 +79,9 @@ beforeAll(async () => {
   setStoryDb(raw);
   setCreditsDb(raw);
   setPricingDb(raw);
+  // Load lib/story/handlers.js through the runner now, so a test's own registerHandler is not replaced by the real
+  // handler when the first tick loads them (clip has a real handler since Task 16).
+  await sweep({ deadline: Date.now() - 1 });
 }, 60_000);
 afterAll(async () => {
   setStoryDb(null);
