@@ -4,6 +4,7 @@ import Head from 'next/head';
 import styles from '../../styles/Home.module.css';
 import { checkAdmin } from '../../lib/adminGate';
 import { isBillingV2 } from '../../lib/billingFlags';
+import PricingEditor from '../../components/admin/PricingEditor';
 
 /*
  * The admin page is checked on the server with the same gate as the admin
@@ -170,6 +171,8 @@ function AdminTools({ adminEmail, billing }) {
             admin allowlist regardless of what this UI shows.
           </p>
         </div>
+
+        <PricingEditor />
 
         <section
           style={{
