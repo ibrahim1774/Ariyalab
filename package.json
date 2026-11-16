@@ -2,7 +2,7 @@
   "name": "ariyalab",
   "version": "0.1.0",
   "private": true,
-  "description": "Ariya Lab — a luxury, minimal face-swap SaaS powered by Replicate.",
+  "description": "Ariya Lab: a story video maker that turns a brief into a finished short video (script, cast, shots, voice, music, render).",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
