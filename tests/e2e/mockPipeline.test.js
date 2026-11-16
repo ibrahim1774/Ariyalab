@@ -175,10 +175,11 @@ async function expectFinished({ user, projectId, quote, fee }) {
   expect((await getBalance(user.id)).held).toBe(0);
   expect(await spent(user.id)).toBe(fee + quote.total);
 
-  // No job left queued or running.
+  // No job left queued or running, and every finished job's side effects applied (runner: applied_at).
   const jobs = await storyDb().select('story_jobs', { project_id: projectId });
   expect(jobs.length).toBeGreaterThan(0);
   expect(jobs.filter((j) => j.status === 'queued' || j.status === 'running')).toEqual([]);
+  expect(jobs.filter((j) => !j.applied_at).map((j) => `${j.kind}:${j.status}`)).toEqual([]);
 }
 
 describe('the maker end to end (mock providers, PGlite)', () => {
@@ -193,6 +194,8 @@ describe('the maker end to end (mock providers, PGlite)', () => {
     });
     const done = await makeVideo(project.id);
     await expectFinished({ user, projectId: project.id, ...done });
+    const [script] = await storyDb().select('story_scripts', { project_id: project.id });
+    expect(script.source).toBe('brief');
   }, 240_000);
 
   it('does the same starting from the fixture reference video', async () => {
@@ -214,8 +217,10 @@ describe('the maker end to end (mock providers, PGlite)', () => {
 
     const done = await makeVideo(project.id);
     await expectFinished({ user, projectId: project.id, ...done });
-    // The script was written from the reference.
+    // The script was written from the reference's beats (lib/story/script.js saves source 'reference').
     const [p] = await storyDb().select('story_projects', { id: project.id });
     expect(p.reference_id).toBe(reference.id);
+    const [script] = await storyDb().select('story_scripts', { project_id: project.id });
+    expect(script.source).toBe('reference');
   }, 240_000);
 });
