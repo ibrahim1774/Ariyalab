@@ -102,7 +102,7 @@ vi.mock('../lib/supabaseServer', () => {
 import { PLANS, planFromPrice, topupFromPrice, parseV2LookupKey, v2PlanLookupKey, v2TopupLookupKey, planInfoFromPrice } from '../lib/stripe';
 import { setCreditsDb, getBalance, spendCredits } from '../lib/credits.js';
 import { setPricingDb, _resetPricingCache, v2Offers, getPricing } from '../lib/pricing.js';
-import { setGrantsDb, grantYearlyMonths, dueYearlyMonths, yearlyRef, addMonthsUtc } from '../lib/grants.js';
+import { setGrantsDb, grantYearlyMonths, dueYearlyMonths, yearlyRef, yearlyStartRef, addMonthsUtc } from '../lib/grants.js';
 import webhook from '../pages/api/stripe-webhook.js';
 import checkout from '../pages/api/checkout.js';
 import grantYearly from '../pages/api/cron/grant-yearly.js';
@@ -767,6 +767,33 @@ describe('Task 27 rounds 1-3, re-expressed by money', () => {
     expect(await a.net()).toBe(fair.total);
     // About: 3 days of Starter, a month of Studio paid at the last switch, and the days spent on each plan.
     expect(fair.total).toBeLessThan(1500 + 5400 + 5400);
+  });
+
+  it('final review I1: yearly -> monthly -> yearly within one UTC day grants the second period its own month 0', async () => {
+    await setV2(true);
+    // A fixed UTC day in the past, so every switch lands on the same calendar date.
+    const day = Math.floor(nowS() / DAY) * DAY - 2 * DAY;
+    const a = await account({ key: STARTER_M, start: day - 10 * DAY });
+    await a.first();
+    await a.change(STARTER_Y, day + 9 * HOUR);
+    await a.change(STARTER_M, day + 12 * HOUR);
+    await a.change(STARTER_Y, day + 17 * HOUR + 30 * 60);
+    const m0 = (await ledger(a.user.id)).filter((r) => r.op === 'renew' && r.ref.endsWith(':m0'));
+    expect(m0).toHaveLength(2);
+    expect(new Set(m0.map((r) => r.ref)).size).toBe(2);
+    expect(m0.map((r) => r.amount)).toEqual([1500, 1500]);
+    // Exactly the money kept: the running year is released month by month (month 0 now), the rest is settled.
+    const yEnd = S.state.subs.get(a.sub).current_period_end;
+    expect(await a.net()).toBe(fairOf(a.invs, { running: [yEnd] }).total + 1500);
+  });
+
+  it('final review I1: yearlyStartRef keys month 0 by the period start second, so two starts on one day differ', () => {
+    const morning = new Date(Date.UTC(2026, 11, 1, 9));
+    const evening = new Date(Date.UTC(2026, 11, 1, 17, 30));
+    expect(yearlyStartRef('sub_1', morning)).not.toBe(yearlyStartRef('sub_1', evening));
+    expect(yearlyStartRef('sub_1', morning)).toBe(`yearly:sub_1:${morning.getTime() / 1000}:m0`);
+    // Distinct from the cron's yearly:<sub>:<YYYY-MM> refs and outside the period: prefix.
+    expect(yearlyStartRef('sub_1', morning)).toMatch(/^yearly:sub_1:\d+:m0$/);
   });
 
   it('S3 / S4: refunds of yearly upgrades never leave more than the money kept, and the year gives exactly that', async () => {

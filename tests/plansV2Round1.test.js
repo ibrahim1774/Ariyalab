@@ -443,7 +443,7 @@ describe('Task 27 round 2: R3 one plan per account at claim time', () => {
 });
 
 describe('Task 27 round 2: yearly edges', () => {
-  it('minor: a switch to yearly with no "unused time" line still grants month 0 under a date-keyed ref', async () => {
+  it('minor: a switch to yearly with no "unused time" line still grants month 0 under a start-keyed ref', async () => {
     await setV2(true);
     const user = newUser(); const customer = await linkedCustomer(user);
     const t0 = nowS() - 20 * DAY;
@@ -458,7 +458,7 @@ describe('Task 27 round 2: yearly edges', () => {
       lines: { data: [{ proration: true, amount: 34800, price: { id: `price_${STARTER_Y}`, lookup_key: STARTER_Y } }] },
     });
     await deliver(invoiceEvent(inv));
-    const ref = `yearly:${sub}:${new Date(yStart * 1000).toISOString().slice(0, 10)}:m0`;
+    const ref = `yearly:${sub}:${yStart}:m0`;
     expect((await renews(user)).map((r) => r.ref)).toContain(ref);
   });
 
