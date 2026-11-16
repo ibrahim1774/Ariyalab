@@ -177,7 +177,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
 
   const savePlan = (patch, kind = 'plan') => run(kind, () => saveAudioPlan(project.id, patch));
   // The customer's own file: uploaded and checked by the server, then put in the plan. Nothing is charged.
-  const useOwnFile = (file, kind, planFor) => run('upload', async () => {
+  const uploadOwnFile = (file, kind, planFor) => run('upload', async () => {
     setUploading({ kind, percent: 0 });
     try {
       const asset = await uploadAudio(file, kind, { onProgress: (percent) => { if (alive.current) setUploading({ kind, percent }); } });
@@ -293,7 +293,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
                 </div>
               ) : (
                 <UploadRow label="Use my own recording" uploading={uploading?.kind === 'voice_track' ? uploading : null} disabled={busy !== '' && busy !== 'upload'}
-                  onFile={(f) => useOwnFile(f, 'voice_track', (a) => ({ voiceTrackAssetId: a.id }))} />
+                  onFile={(f) => uploadOwnFile(f, 'voice_track', (a) => ({ voiceTrackAssetId: a.id }))} />
               )}
               <TrackBody
                 track={narration}
@@ -335,7 +335,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
             <>
               <Tile icon="music" title="No music" text="Your video will have the narration only. Switch back any time." className={styles.state} />
               <UploadRow label="Use my own track" uploading={uploading?.kind === 'music' ? uploading : null} disabled={busy !== '' && busy !== 'upload'}
-                onFile={(f) => useOwnFile(f, 'music', (a) => ({ music: { type: 'upload', assetId: a.id } }))} />
+                onFile={(f) => uploadOwnFile(f, 'music', (a) => ({ music: { type: 'upload', assetId: a.id } }))} />
             </>
           )}
           {musicType === 'upload' && (
@@ -371,7 +371,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
                 onRetry={() => makeTrack('music', true)}
               />
               <UploadRow label="Use my own track" uploading={uploading?.kind === 'music' ? uploading : null} disabled={busy !== '' && busy !== 'upload'}
-                onFile={(f) => useOwnFile(f, 'music', (a) => ({ music: { type: 'upload', assetId: a.id } }))} />
+                onFile={(f) => uploadOwnFile(f, 'music', (a) => ({ music: { type: 'upload', assetId: a.id } }))} />
             </>
           )}
         </Section>

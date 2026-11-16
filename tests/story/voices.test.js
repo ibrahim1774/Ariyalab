@@ -21,6 +21,7 @@ import {
   CONSENT_STATEMENT, clientIp, createVoice, deleteVoice, listVoicesFor, parseAudioProbe, recoverStalledVoices, registerAudio, retryVoice, uploadKey,
 } from '../../lib/story/voices.js';
 import { runWorkerJob } from '../../lib/story/runner.js';
+import { audioInputArgs } from '../../lib/story/audioProbe.js';
 
 // The provider calls are spied on (and can be made to fail) but still run their mock fixtures.
 vi.mock('../../lib/providers/tts.js', async (importOriginal) => {
@@ -711,5 +712,104 @@ describe('/api/story/voices and /api/story/assets', () => {
     expect(res.statusCode).toBe(502);
     expect(res.body.error).toBe('provider_failed');
     expect((await voiceRows(userId))[0].status).toBe('failed');
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+describe('round 1', () => {
+  it('I1: an ID3 header in front of an HLS playlist is refused, and the demuxer is forced from the extension', async () => {
+    const userId = await newUser();
+    // The segment is a real 12 s mp3, so without the forced demuxer ffmpeg reports codec mp3 and 12 s, and the file would pass.
+    const wavFile = path.join(dir, 'segment.mp3');
+    writeFileSync(wavFile, wavs['twelve.mp3']);
+    const playlist = `#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:30\n#EXTINF:30,\nfile://${wavFile}\n#EXT-X-ENDLIST\n`;
+    const crafted = Buffer.concat([Buffer.from('ID3\x03\x00\x00\x00\x00\x00\x00'), Buffer.from(playlist)]);
+    const url = storeRaw(userId, 'sneaky.mp3', crafted);
+    await expect(registerAudio({ userId, kind: 'voice_sample', url })).rejects.toMatchObject({
+      status: 422, message: 'We could not read that file as audio. Upload an MP3, WAV or M4A file.',
+    });
+    expect(await storyDb().select('story_assets', { user_id: userId })).toEqual([]);
+    expect(audioInputArgs('mp3')).toEqual(['-protocol_whitelist', 'file', '-f', 'mp3']);
+    expect(audioInputArgs('wav')).toEqual(['-protocol_whitelist', 'file', '-f', 'wav']);
+    expect(audioInputArgs('m4a')).toEqual(['-protocol_whitelist', 'file', '-f', 'mov']);
+    expect(() => audioInputArgs('mp4')).toThrow();
+  });
+
+  it('M1: a retry whose last release never happened is refused, and no second hold is placed', async () => {
+    const userId = await newUser({ funds: 100 });
+    globalThis.__cloneFail = 'failed';
+    globalThis.__releaseFail = true;
+    try {
+      await clone(userId).catch(() => {});
+      await listVoicesFor({ userId }); // the second release fails too
+      const [row] = await voiceRows(userId);
+      expect(row.hold_id).toBeTruthy();
+      globalThis.__cloneFail = null;
+      await expect(retryVoice({ userId, id: row.id })).rejects.toMatchObject({ status: 409, code: 'clone_busy' });
+      expect((await voiceRows(userId))[0]).toMatchObject({ status: 'failed', hold_id: row.hold_id });
+      expect(await getBalance(userId)).toMatchObject({ held: 20 });
+    } finally {
+      globalThis.__releaseFail = false;
+    }
+    expect(cloneVoice).toHaveBeenCalledTimes(1);
+  });
+
+  it('M2: a timed-out provider call is logged for an operator, and the customer sees the same failure', async () => {
+    const userId = await newUser({ funds: 100 });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    globalThis.__cloneHook = async () => { throw new ProviderError('failed', undefined, { cause: Object.assign(new Error('timed out'), { name: 'TimeoutError' }) }); };
+    try {
+      await expect(clone(userId)).rejects.toBeInstanceOf(ProviderError);
+      expect(spy.mock.calls.some((c) => c.join(' ').includes('OPERATOR clone_ambiguous'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(await getBalance(userId)).toMatchObject({ held: 0, available: 100 });
+    expect((await voiceRows(userId))[0].status).toBe('failed');
+  });
+
+  it('M3: voices.js and the assets route do not import analyze.js', () => {
+    for (const f of ['lib/story/voices.js', 'pages/api/story/assets.js', 'pages/api/story/voices.js']) {
+      expect(readFileSync(path.join(process.cwd(), f), 'utf8')).not.toMatch(/analyze\.js/);
+    }
+  });
+
+  it('M5: deleting one voice keeps a sample another voice still uses', async () => {
+    const userId = await newUser({ funds: 100 });
+    const { voice } = await clone(userId);
+    const [first] = await voiceRows(userId);
+    const [twin] = await storyDb().insert('story_voices', {
+      user_id: userId, name: 'Twin', provider: 'fish', provider_voice_id: 'twin-1', status: 'ready', sample_asset_id: first.sample_asset_id,
+      consent_at: new Date().toISOString(), consent_statement: CONSENT_STATEMENT,
+    });
+    const [asset] = await storyDb().select('story_assets', { id: first.sample_asset_id });
+    await deleteVoice({ userId, id: voice.id });
+    expect(await storyDb().select('story_assets', { id: asset.id })).toHaveLength(1);
+    expect(() => readFileSync(mockStoragePath(asset.storage_key))).not.toThrow();
+    await deleteVoice({ userId, id: twin.id });
+    expect(await storyDb().select('story_assets', { id: asset.id })).toEqual([]);
+    expect(() => readFileSync(mockStoragePath(asset.storage_key))).toThrow();
+  });
+
+  it('M7: a clone price that is not a positive whole number is a 503 before anything is written', async () => {
+    const userId = await newUser({ funds: 100 });
+    const sample = await sampleFor(userId);
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      for (const bad of ['0', '12.5']) {
+        await raw.query(`insert into pricing_config (key, value) values ('voiceClone', '${bad}'::jsonb) on conflict (key) do update set value = '${bad}'::jsonb`);
+        _resetPricingCache();
+        await expect(createVoice({ userId, name: 'Maya', consent: true, sampleAssetId: sample.id })).rejects.toMatchObject({ status: 503, code: 'pricing_unavailable' });
+      }
+      expect(spy.mock.calls.some((c) => c.join(' ').includes('OPERATOR'))).toBe(true);
+    } finally {
+      spy.mockRestore();
+      await raw.query(`delete from pricing_config where key = 'voiceClone'`);
+      _resetPricingCache();
+    }
+    expect(await voiceRows(userId)).toEqual([]);
+    expect(await getBalance(userId)).toMatchObject({ available: 100, held: 0 });
+    expect(cloneVoice).not.toHaveBeenCalled();
   });
 });
