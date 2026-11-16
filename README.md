@@ -74,10 +74,10 @@ Just paste your **Stripe secret key** into Vercel — that's it. The app creates
 
 1. **Vercel → Settings → Environment Variables** (Production + Preview + Development):
    - `STRIPE_SECRET_KEY` — from <https://dashboard.stripe.com/apikeys>
-   - `APP_URL` *(optional)* — your deployed URL (auto-derived from request headers if omitted)
+   - `APP_URL` *(required)* — the one canonical public URL (for example `https://ariyalab.com`). Stripe return URLs, the OAuth consent Origin check and the Claude connector URL (`APP_URL/api/mcp`) all use it; the MCP OAuth server refuses to run without it.
 2. Pull locally with `vercel env pull .env.local`.
 
-No webhook needed — `/api/entitlement` reads subscription status directly from Stripe each time. Period rollovers (monthly/yearly resets) are detected by comparing `subscription.current_period_start` to the cached `periodStart` on `Customer.metadata`.
+Webhook: `APP_URL/api/stripe-webhook` with `STRIPE_WEBHOOK_SECRET`; the events and the full launch order are in `docs/go-live.md`. Legacy plans: `/api/entitlement` reads subscription status directly from Stripe each time. Period rollovers (monthly/yearly resets) are detected by comparing `subscription.current_period_start` to the cached `periodStart` on `Customer.metadata`.
 
 ### Plans + caps
 
