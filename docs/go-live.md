@@ -26,7 +26,7 @@ and to `.env.local` for local runs. `.env.example` lists them all with notes.
 | `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase | |
 | `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | Google sign-in button | Google Cloud "Authorized JavaScript origins" must include the production domain (and `http://localhost:3000` for local testing). |
 | `NEXT_PUBLIC_SOCIAL_INSTAGRAM`, `NEXT_PUBLIC_SOCIAL_TIKTOK`, `NEXT_PUBLIC_SOCIAL_YOUTUBE` | Footer social links | Icons are hidden while unset. |
-| `META_ACCESS_TOKEN`, `META_ADS_TOKEN`, `META_ADS_ACCOUNT_ID`, `NEXT_PUBLIC_TIKTOK_PIXEL_ID` | Ads and pixels | Only needed at step 10. |
+| `META_ACCESS_TOKEN`, `META_ADS_TOKEN`, `META_ADS_ACCOUNT_ID`, `NEXT_PUBLIC_TIKTOK_PIXEL_ID` | Ads and pixels | Only needed at step 11. |
 
 Platform:
 
@@ -34,19 +34,21 @@ Platform:
   runs every minute. On Hobby the cron runs daily and closed-tab progress is much slower.
 - Crons in `vercel.json`: `cleanup-history` (daily), `story-tick` (every minute), `oauth-cleanup` (daily),
   `legacy-holds` (every 10 min), `grant-yearly` (daily), `story-holds` (every 10 min), `story-cleanup` (daily).
-- After the first deploy, check in the function bundles that ffmpeg is traced into the story worker, analyze, assets and
-  render routes, and that `sharp` is traced only where it is used.
-- On a Vercel (linux) function: `ffmpeg -filters | grep ass` must list the `ass` filter, and render one frame with
-  captions to confirm.
-- Vercel keeps a worker running after its caller aborts; large renders upload to Blob with multipart. Confirm both on the
-  first long render.
 - Supabase Auth: "Confirm email" must be ON (admin checks and the email claim proof rely on confirmed emails).
-- The storage host must not share cookies with the app domain.
+- The storage host must not share cookies with the app domain. If you move to Cloudflare R2, serve it with
+  `X-Content-Type-Options: nosniff` (a Cloudflare transform rule); Vercel Blob already sends it.
 
 ## 2. Review and apply the migrations
 
-Apply in this exact order. Read each file's header first: several start with a pre-check query to run on the shared
-database. Every migration is additive (new `credit_` / `story_` objects) except where noted.
+Pre-checks on the shared database, before applying anything:
+
+- Duplicate customer links must not exist:
+  `select stripe_customer_id, count(*) from profiles where stripe_customer_id is not null group by 1 having count(*) > 1;`
+  must return nothing.
+- Run the pre-check query in the header of 000100, 000200 and 000500 (no `credit_*` / `story_*` names already taken;
+  the haelabs checks for `profiles`).
+
+Apply in this exact order. Every migration is additive (new `credit_` / `story_` objects) except where noted.
 
 | # | File | What it needs |
 |---|---|---|
@@ -68,13 +70,11 @@ database. Every migration is additive (new `credit_` / `story_` objects) except 
 | 16 | `20261116000100_story_mcp_drafts.sql` | Before the MCP code deploys. |
 | 17 | `20261116000200_story_mcp_draft_versions.sql` | Before the MCP code deploys. |
 | 18 | `20261116000300_story_assets.sql` | Before asset DELETE works. |
-| 19 | `20261116000400_billing_v2.sql` | Yearly subscriptions table and the closed-hold guard (replaces `credit_charge_closed_hold`, same signature). Before deploying the v2 billing code. |
+| 19 | `20261116000400_billing_v2.sql` | Yearly subscriptions and invoice-grant tables, their functions, and the closed-hold guard (replaces `credit_charge_closed_hold`, same signature). Before deploying the v2 billing code. |
 | 20 | `20261116000500_story_cleanup.sql` | Stale-hold sweeper and retention functions. Before the `story-holds` and `story-cleanup` crons run. |
 
 Checks on the real database after applying (they cannot be tested in the in-memory database):
 
-- Before applying 000100/000150: `select stripe_customer_id, count(*) from profiles where stripe_customer_id is not null group by 1 having count(*) > 1;`
-  must return nothing (duplicate customer links).
 - The service role can write `profiles.stripe_customer_id` (through `credit_link_customer`).
 - Two-connection checks: the credit claim advisory lock (two sessions racing one claim) and `story_claim_jobs` (two
   sessions never claim the same job).
@@ -87,13 +87,13 @@ The script moves this app's legacy credit balances (Stripe customer metadata) in
 
 1. Dry run now, to see the numbers: `node scripts/migrate-legacy-credits.mjs --cutoff=<planned ISO time of the flip>`.
    It writes nothing. Read the printed rows and totals (`--include-dormant` to also list customers with no plan).
-2. The real run happens right after billing v2 is turned on (step 6): dry run again with `--cutoff=<the exact ISO time
+2. The real run happens right after billing v2 is turned on (step 7): dry run again with `--cutoff=<the exact ISO time
    billing_v2 was turned on>`, then
    `node scripts/migrate-legacy-credits.mjs --cutoff=<ISO> --apply --confirm=<rows>:<total>` with the rows and total
    that dry run printed (`--allow-live` is needed with a live key). Keep the JSON report it writes.
 
-After `--apply`, **billing v2 is one-way**: migrated customers live in the ledger, and switching the flag off again does
-not move them back.
+After `--apply`, **billing v2 is one-way**: migrated customers live in the ledger. The admin switch refuses to turn
+billing v2 off once any customer was migrated (409).
 
 Shared Stripe account: haelabs.live uses the same Stripe customers. Decide whether haelabs keeps its own balances on a
 shared customer (this app only reads and writes `ariyalab_*` metadata keys and its own lookup keys).
@@ -111,21 +111,55 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
 - Prices are created lazily on the first checkout click (idempotent on `lookup_key`). Billing v2 keys start with
   `ariya_v2_` and name the amount and credits (`ariya_v2_creator_month_4900_2600`), so a price edited in the admin
   pricing editor becomes a new Stripe price; subscribers keep the price and credits they bought.
-- Plan changes: checkout refuses a second plan (409). Set up the Stripe customer portal for plan switches with
-  **upgrades invoiced immediately** (proration "always invoice") and **downgrades at the end of the period**. An
-  upgrade's credits (the difference in monthly credits, once per period) are granted only when its proration invoice
-  is paid; with prorations left for the next cycle invoice, that period's upgrade credits are never granted. A
-  downgrade grants nothing and the lower allotment starts at renewal. Refunding an upgrade invoice does not take the
-  upgrade credits back (claw back by hand from /admin if needed).
+- Plan changes go through the Stripe customer portal: /app/billing has a **Manage billing** button
+  (`/api/billing/portal`, a portal session for the signed-in buyer's own customer). Checkout refuses a second plan
+  (409, also for a past_due plan), and a v2 plan needs a signed-in buyer.
+- Configure the portal in the Stripe dashboard: the v2 Starter, Creator and Studio prices (monthly and yearly) as the
+  products customers may switch between, **upgrades invoiced immediately** (proration "always invoice") and
+  **downgrades at the end of the period**. **The portal configuration is account-wide: the Stripe account is shared
+  with haelabs.live**, so check that its settings suit haelabs too (or create a separate portal configuration and pass
+  it), and that haelabs' promotion codes are restricted to haelabs' products before `allow_promotion_codes` checkouts
+  go live here.
+- How a plan change is credited:
+  - An upgrade is granted only when its proration invoice is paid (also when paid from the customer balance): the
+    difference between the new monthly credits and the highest level already granted this period, **prorated by the
+    time left in the period** when the invoice was paid. With prorations left for the next cycle invoice, nothing is
+    granted for that period. A downgrade grants nothing; the lower allotment starts at renewal.
+  - Monthly to yearly: the year starts with that invoice; its first month is granted at once, the cron grants the
+    other eleven (12 per paid year).
+  - Yearly to a dearer yearly price: the current month's difference is prorated (or, if that month has not been
+    granted yet, the cron grants it at the new level), later months at the new level.
+- Renewals are granted at the plan the invoice paid for (its own line), not the subscription's plan at that moment.
 - Yearly v2 plans: the invoice grants the first month, `/api/cron/grant-yearly` grants each following month
-  (`yearly:<subscription>:<YYYY-MM>`). A refunded yearly invoice stops the remaining months.
+  (`yearly:<subscription>:<YYYY-MM>`).
+- Refunds and disputes: a **full** refund or dispute of a yearly invoice reverses month 0 and every month granted so
+  far and stops the remaining months; a **partial** one reverses that share of each month granted so far and of each
+  later month as it is granted (the months continue). A refund or dispute of an upgrade invoice reverses its share of
+  the upgrade grant (and, when full, puts a yearly plan's monthly level back); it never stops the year.
+- Verify on the first test-mode upgrade that the proration invoice lines carry `proration` and the price (the code
+  reads both the 2024-06-20 shape and the newer `parent` / `pricing` shape).
+- Several yearly months that come due at once (the cron was down for over a month, or the customer linked their
+  account late) are granted one after the other, and the plan rollover rule (at most one month carried over) caps
+  the total. Keep the cron running; grant the difference by hand from /admin if it happens.
 
 ## 5. Kie webhook secret
 
 Set `KIE_WEBHOOK_SECRET` on Vercel and the same secret in the kie.ai dashboard, then confirm one webhook arrives and is
 accepted (the runner also polls, so a missing webhook only slows things down).
 
-## 6. Prices, then flip billing v2
+## 6. Deploy
+
+Only after steps 1-5 (every migration applied, Stripe webhook and portal configured, kie secret set). billing v2 stays
+off. Then check on the deployed app:
+
+- In the function bundles, ffmpeg is traced into the story worker, analyze, assets and render routes, and `sharp` only
+  where it is used.
+- On a Vercel (linux) function: `ffmpeg -filters | grep ass` lists the `ass` filter; render one frame with captions.
+- Vercel keeps a worker running after its caller aborts, and large renders upload to Blob with multipart: confirm both
+  on the first long render.
+- Each cron answers 200 when called with `Authorization: Bearer $CRON_SECRET` (and 401 without).
+
+## 7. Prices, then flip billing v2
 
 1. Open `/admin` → Pricing. Set the final plan and pack prices, the yearly discount (0 until you set one) and per-quality
    rates. Check the cost per credit and the margin per quality against provider cost.
@@ -135,7 +169,7 @@ accepted (the runner also polls, so a missing webhook only slows things down).
    changes within 60 s.
 4. Run the legacy migration for real right away (step 3, part 2).
 
-## 7. Owner reviews before launch
+## 8. Owner reviews before launch
 
 - Consent wording for voice cloning: third-party processing (Fish Audio) and retention.
 - Fish voice provider-side delete is not implemented; the app removes the voice from the account only (the copy says
@@ -143,19 +177,25 @@ accepted (the runner also polls, so a missing webhook only slows things down).
 - Captions in non-Latin scripts need a font with those glyphs (today they get a `captions_missing` warning).
 - Paid transcription runs on each render: decide between a render cap and a charge.
 - Read the script prompt (Task 13 report) and run it once on the real model.
+- When `pricing_config` cannot be read on a cold instance, checkout answers 503 (also for legacy plans) rather than
+  sell the wrong plan: accepted.
+- Privacy: files of a DELETED project (not an expired one) are not swept by the retention job; they stay in storage
+  until removed by hand. Decide whether the delete should remove them.
 
-## 8. Quality comparison and live smoke tests (only with explicit approval and a stated cost)
+## 9. Quality comparison and live smoke tests (only with explicit approval and a stated cost)
 
 Each of these spends real money; run one only after approving it and its cost.
 
 - `scripts/provider-smoke.mjs` once per provider (kie, Fish, Google, Apify, Replicate or Groq, Blob).
+- Apify: one live reference link longer than 180 s, to confirm it is refused (today after the download, R9) and what
+  the download cost.
 - The spec 13a quality comparison.
 - Kling element-name format (accents are dropped from names) and the real kie/Kling refusal strings.
 - Meta Ad Library live check.
 - The real Claude connector: add `APP_URL/api/mcp` in claude.ai and in Claude Code and run one tool.
 - Google sign-in on `/sign-in`, `/sign-up` and the OAuth consent sign-in.
 
-## 9. Hardening list (known, not blocking)
+## 10. Hardening list (known, not blocking)
 
 - `lib/story/analyze.js` runs ffmpeg on reference media without a protocol whitelist or forced demuxer.
 - `pages/api/upload-token.js` signed-in limits allow image/* and video/* up to 1 GB on any allowed path (the server
@@ -164,8 +204,11 @@ Each of these spends real money; run one only after approving it and its cost.
   window.
 - Files of a deleted project are not swept by the retention job (only expired projects and the brand/audio upload
   folders are); a future sweep of `story/<id>/` prefixes without a project row would cover them.
+- Reference links (R9): a link over 180 s is refused only after the download, when the file is probed; refuse it
+  before the download from the provider's metadata.
+- Legacy QuickTime files without an `ftyp` box are refused by the upload magic-byte check (customers re-export).
 
-## 10. Turn on ads
+## 11. Turn on ads
 
 Only after everything above: set the Meta and TikTok variables and start campaigns.
 

@@ -68,6 +68,22 @@ export default function BillingPage() {
   }, []);
 
   // Same request the paywall and the top-up page make.
+  // Plan changes, cancel, card and invoices: the Stripe customer portal for the buyer's own customer.
+  const manage = useCallback(async () => {
+    if (busy) return;
+    setBusy('portal');
+    setError('');
+    try {
+      const res = await fetch('/api/billing/portal', { method: 'POST' });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) throw new Error(data.error || 'Could not open billing.');
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err.message);
+      setBusy(null);
+    }
+  }, [busy]);
+
   const checkout = useCallback(async (key, body) => {
     if (busy) return;
     setBusy(key);
@@ -130,6 +146,15 @@ export default function BillingPage() {
               </Card>
             )}
           </div>
+        )}
+
+        {billing?.v2 && (
+          <p className={styles.note}>
+            <Button variant="ghost" onClick={manage} disabled={busy !== null}>
+              {busy === 'portal' ? 'Opening…' : 'Manage billing'}
+            </Button>{' '}
+            Change or cancel your plan, update your card and see invoices.
+          </p>
         )}
 
         {error && <p className={styles.error} role="alert">{error}</p>}
