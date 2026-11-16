@@ -897,8 +897,7 @@ describe('round 2', () => {
     const found = lineRules('Each day the old baker kneaded dough every single morning.', bare);
     expect(found).toHaveLength(1);
     expect(found[0].matched).toMatch(/the old baker kneaded dough every/);
-    // Run matching applies only without sentence breaks: the same text punctuated uses sentence matching only.
-    expect(lineRules('Each day the old baker kneaded dough every single morning.', 'So the old baker kneaded dough every single morning before sunrise and sang to the bread. He smiled.')).toHaveLength(0);
+    // Round 3: punctuated transcripts get run matching too, with the stricter 8 words / 3 uncommon threshold (below).
   });
 
   it('N1: a copied run from an unpunctuated transcript is still refused after the retry', async () => {
@@ -987,7 +986,8 @@ describe('round 2', () => {
   it('N6: a percent-encoded or malformed pathname cannot reach story-uploads/ through the plain surface', async () => {
     const { default: route } = await import('../../pages/api/upload-token.js');
     globalThis.__analyzeSession = { user: { id: randomUUID() } };
-    for (const pathname of [`story-uploads%2F${randomUUID()}%2Fx.mp4`, 'uploads/%E0%A4%A.mp4']) {
+    // Round 3 (P1): a malformed encoding is no longer refused by itself; the raw form is still checked.
+    for (const pathname of [`story-uploads%2F${randomUUID()}%2Fx.mp4`, `Story-Uploads%2f${randomUUID()}%2fx.mp4`, `story-uploads/${randomUUID()}/%E0%A4%A.mp4`]) {
       const res = makeRes();
       await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname, clientPayload: '' } } }), res);
       expect(res.statusCode, pathname).toBe(400);
@@ -1016,5 +1016,37 @@ describe('round 2', () => {
     expect(out.reference_copies).toHaveLength(1);
     expect(out.reference_copies[0].matched).toMatch(/baker dreamed big/);
     expect(out.reference_copies[0].message).toBeTruthy();
+  });
+});
+
+// ---------------------------------------------------------------- round 3
+
+describe('round 3', () => {
+  const lineRules = (text, reference) => checkScriptRules([{ id: 's1', title: 'A', visual: 'A shop.', lines: [{ speaker: 'narrator', text }] }], { reference }).filter((v) => v.rule === 'reference_copy');
+  const PUNCTUATED = 'So the old baker kneaded dough every single morning before sunrise and sang to the bread. He smiled.';
+
+  it('P2: an 8-word copied run from a punctuated transcript is flagged, with the matched words', () => {
+    const found = lineRules('Each day the old baker kneaded dough every single morning.', PUNCTUATED);
+    expect(found).toHaveLength(1);
+    expect(found[0].matched).toBe('the old baker kneaded dough every single morning');
+  });
+
+  it('P2: on a punctuated transcript a 6 or 7 word run is not enough', () => {
+    expect(lineRules('Today the old baker kneaded dough with care.', PUNCTUATED)).toHaveLength(0); // 6 words
+    expect(lineRules('Then the old baker kneaded dough every day.', PUNCTUATED)).toHaveLength(0); // 7 words
+  });
+
+  it('P1: a plain upload whose name has a stray % is allowed, and story-uploads%2F is still refused', async () => {
+    const { default: route } = await import('../../pages/api/upload-token.js');
+    globalThis.__analyzeSession = { user: { id: randomUUID() } };
+    const call = async (pathname) => {
+      const res = makeRes();
+      await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname, clientPayload: '' } } }), res);
+      return res.statusCode;
+    };
+    expect(await call('50% off.jpg')).toBe(200);
+    expect(await call('uploads/100%.png')).toBe(200);
+    expect(await call(`story-uploads%2F${randomUUID()}%2Fx.mp4`)).toBe(400);
+    expect(await call(`story-uploads/${randomUUID()}/50% off.mp4`)).toBe(400);
   });
 });
