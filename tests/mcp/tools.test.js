@@ -546,7 +546,7 @@ describe('a full mock sequence through the tools', () => {
     expect(status.data.render).toMatchObject({ status: 'done' });
     const result = await use(client, 'get_result', { project_id: projectId });
     expect(result.isError, result.text).toBe(false);
-    expect(result.data.render.url).toMatch(new RegExp(`^${ISSUER}/api/mock/storage/story/${projectId}/render/v1-.*\\.mp4$`));
+    expect(result.data.render.url).toMatch(new RegExp(`^${ISSUER}/api/mock/storage/story/${projectId}/render/[0-9a-f-]{36}/[a-z0-9-]+-v1\\.mp4$`));
     // The video was made with the narration make_audio made.
     const [row] = await storyDb().select('story_renders', { project_id: projectId });
     expect(row.settings).toMatchObject({ mode: 'narrated', music: true });

@@ -808,7 +808,14 @@ describe('copy rules', () => {
       <StepLength key="e" {...common} />, <StepScript key="f" {...common} />, <StepCast key="g" {...common} cast={cast} jobs={[]} />,
       <StepCast key="g2" {...common} cast={[]} jobs={[]} />, <StepStoryboard key="h" {...common} shots={shots} />, <StepStoryboard key="h2" {...common} shots={[]} />,
       <StepGenerate key="i" {...common} shots={shots} />, <StepReview key="j" {...common} shots={shots} status={{ shots, project: p }} />,
-      <QuoteBar key="k" project={p} shots={[]} />, <StepFinish key="m" project={p} status={{ render: null, renders: [] }} />,
+      <QuoteBar key="k" project={p} shots={[]} />, ...[
+        { render: null, renders: [] },
+        { render: { id: 'q', version: 1, status: 'queued', created_at: new Date().toISOString(), warnings: [] }, renders: [] },
+        { render: { id: 'r', version: 1, status: 'running', created_at: new Date().toISOString(), warnings: [] }, renders: [] },
+        { render: { id: 'f', version: 2, status: 'failed', error: 'The video could not be made this time. Try again.', warnings: [] }, renders: [] },
+        { render: { id: 'd', version: 1, status: 'done', url: '/x.mp4', warnings: [{ code: 'loudness', message: 'The music is a little loud under the voice.' }], created_at: '2026-11-14T10:00:00Z' }, renders: [] },
+      ].map((st, i) => <StepFinish key={`m${i}`} project={p} status={{ ...st, renders: [st.render].filter(Boolean) }} />),
+      <StepFinish key="mx" project={{ ...p, status: 'expired', files_expire_at: '2020-01-01T00:00:00Z' }} status={{ render: null, renders: [] }} />,
       <div key="l"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.ChatPanelSlot /><slots.AssetPickerSlot /><slots.StartFromVideoSlot /></div>,
     ];
     for (const view of views) {
