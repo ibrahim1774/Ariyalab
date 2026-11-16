@@ -900,6 +900,19 @@ describe('round 1', () => {
     expect(ok.statusCode).toBe(200);
   });
 
+  it('final review M3: the plain upload surface also refuses the story/ prefix (retention lists and deletes by it)', async () => {
+    const { default: route } = await import('../../pages/api/upload-token.js');
+    globalThis.__analyzeSession = { user: { id: randomUUID() } };
+    for (const pathname of [`story/${randomUUID()}/x.png`, `/story/${randomUUID()}/x.png`, `story%2F${randomUUID()}%2Fx.png`]) {
+      const bad = makeRes();
+      await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname, clientPayload: '' } } }), bad);
+      expect(bad.statusCode, pathname).toBe(400);
+    }
+    const ok = makeRes();
+    await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname: 'stories/x.png', clientPayload: '' } } }), ok);
+    expect(ok.statusCode).toBe(200);
+  });
+
   it('R8: a run whose reference already has the paid marker refuses without calling anything', async () => {
     const ctx = await newProject();
     accounts.set({ paid: false });

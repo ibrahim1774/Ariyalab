@@ -167,7 +167,7 @@ export default async function handler(req, res) {
           return { ...AUDIO_UPLOAD_LIMITS, validUntil: Date.now() + AUDIO_TOKEN_TTL_MS, addRandomSuffix: true };
         }
         // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix), story-audio/ to audio uploads,
-        // story-brand/ to picture and clip uploads.
+        // story-brand/ to picture and clip uploads, story/ to files the runner stores (retention lists and deletes by it).
         // The pathname is also checked decoded once, so "story-uploads%2F..." cannot slip past. A name that is not
         // valid percent-encoding (a stray "%", as in "50% off.jpg") is an ordinary name: only its raw form is checked.
         if (typeof pathname !== 'string') throw new Error('Upload not allowed.');
@@ -177,7 +177,7 @@ export default async function handler(req, res) {
         } catch {
           // not encoded: the raw form is the name
         }
-        if (forms.some((p) => /^(story-uploads|story-audio|story-brand)\//i.test(p.replace(/^\/+/, '')))) throw new Error('Upload not allowed.');
+        if (forms.some((p) => /^(story|story-uploads|story-audio|story-brand)\//i.test(p.replace(/^\/+/, '')))) throw new Error('Upload not allowed.');
         return {
           ...(limits || ANON_LIMITS),
           ...(limits === SIGNED_IN_LIMITS ? {} : { validUntil: Date.now() + ANON_TOKEN_TTL_MS }),
