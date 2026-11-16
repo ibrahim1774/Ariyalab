@@ -63,6 +63,19 @@ describe('Task 16 maker edits', () => {
     await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('Every shot is made'));
   });
 
+  it('round 1 G5: once every shot is made the bar shows what was spent, never a bare 0 credits', async () => {
+    client.getBilling.mockResolvedValue({ v2: true, balance: { available: 900 }, history: [] });
+    client.getQuote.mockResolvedValue({ total: 0, lines: [], holdNeeded: 0, shotIds: [], spent: 174 });
+    render(<QuoteBar project={project} shots={[shot(1), shot(2)]} />);
+    await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('174 credits'));
+    expect(screen.getByText('Spent on this video')).toBeInTheDocument();
+  });
+
+  it('round 1 G7: the stand-in allowance rounds up like the server', () => {
+    const shots = Array.from({ length: 11 }, (_, i) => shot(i + 1));
+    expect(rerollInfo({ shots, project: { rerolls_used: 0 } }, shots[0]).left).toBe(3);
+  });
+
   it('the client sends expected_credits only when given', async () => {
     const actual = await vi.importActual('../../lib/story/client');
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));

@@ -327,10 +327,11 @@ describe('re-roll', () => {
   }
 
   it('free re-roll count for 15 shots is 3', async () => {
-    const ctx = await newProject();
+    // Round 1 (F-I1): the allowance counts shots with a delivered, paid clip.
+    const ctx = await readyProject();
     const res = await getStatus(ctx);
     expect(res.body.rerolls).toEqual({ included: 3, used: 0, left: 3 });
-    const eleven = await newProject({ n: 11 });
+    const eleven = await readyProject(11);
     expect((await getStatus(eleven)).body.rerolls.included).toBe(3); // ceil(11 x 0.2)
   });
 
@@ -343,7 +344,7 @@ describe('re-roll', () => {
     }
     expect((await balance(ctx.userId)).held).toBe(0);
     expect((await projectRow(ctx.project.id)).rerolls_used).toBe(3);
-    const fourth = await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id });
+    const fourth = await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id, expectedCredits: 42 });
     expect(fourth.charged).toBe(42);
     expect((await balance(ctx.userId)).held).toBe(42);
     const job = (await clipJobs(ctx.project.id)).at(-1);
@@ -522,7 +523,7 @@ describe('clip handler (carries 5, 6, 7)', () => {
     // A failed paid re-roll is retried at its price again, once.
     await storyDb().update('story_projects', { id: ctx.project.id }, { rerolls_used: 2 });
     await storyDb().update('story_shots', { id: ctx.shots[3].id }, { description: 'Shot four [[mock:fail]]' });
-    expect((await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id })).charged).toBe(42);
+    expect((await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id, expectedCredits: 42 })).charged).toBe(42);
     await finishJobs(ctx.project.id);
     expect((await balance(ctx.userId)).held).toBe(0);
     const paidRetry = (await getStatus(ctx)).body.shots.find((s) => s.id === ctx.shots[3].id);
@@ -748,5 +749,265 @@ describe('carry 1: GET /status', () => {
     const body = (await getStatus(ctx)).body; // submits; first poll is later
     expect(body.shots[0].status).toBe('generating');
     expect((await shotRow(ctx.shots[0].id)).status).toBe('queued');
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+describe('round 1', () => {
+  const storyboardMod = () => import('../../lib/story/storyboard.js');
+
+  it('F-C1 (p1): a retry after a quality upgrade is priced and made at the new quality', async () => {
+    const { updateShot: patch } = await storyboardMod();
+    const ctx = await newProject({ n: 1, quality: 'economy', seconds: 6, descriptions: ['A calm shot [[mock:fail]]'] });
+    const sid = ctx.shots[0].id;
+    let q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+    await finishJobs(ctx.project.id);
+    await raw.query("update story_shots set description = 'A calm shot' where id = $1", [sid]);
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_talking' } });
+    q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(q.total).toBe(6 * 21);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+    const job = (await clipJobs(ctx.project.id)).at(-1);
+    expect(job).toMatchObject({ cost_credits: 126 });
+    expect(job.payload.quality).toBe('pro_talking');
+    await finishJobs(ctx.project.id);
+    expect(charged(await ledger(ctx.userId))).toBe(126);
+  });
+
+  it('F-C1 (p5 a): a retry after a downgrade costs the lower price', async () => {
+    const { updateShot: patch } = await storyboardMod();
+    const ctx = await newProject({ n: 1, quality: 'pro_talking', seconds: 6, descriptions: ['A calm shot [[mock:fail]]'] });
+    const sid = ctx.shots[0].id;
+    let q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+    await finishJobs(ctx.project.id);
+    await raw.query("update story_shots set description = 'A calm shot' where id = $1", [sid]);
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'economy' } });
+    const v = (await getStatus(ctx)).body.shots[0];
+    expect(v.clip_credits).toBe(6 * 8);
+    q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(q.total).toBe(48);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+    await finishJobs(ctx.project.id);
+    expect(charged(await ledger(ctx.userId))).toBe(48);
+  });
+
+  it('F-C1 (p5 b): a failed free re-roll is not a free clip of a changed shot', async () => {
+    const { updateShot: patch } = await storyboardMod();
+    const ctx = await newProject({ n: 5, quality: 'economy', seconds: 6 });
+    const sid = ctx.shots[0].id;
+    await generateAll(ctx);
+    await finishJobs(ctx.project.id);
+    const paid = charged(await ledger(ctx.userId));
+    await raw.query("update story_shots set description = description || ' [[mock:fail]]' where id = $1", [sid]);
+    await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, expectedCredits: 0 });
+    await finishJobs(ctx.project.id);
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { description: 'A completely different shot of a beach.', quality: 'pro_talking' } });
+    await raw.query("update story_shots set still_url = '/still/new.png', still_key = 'still-new', status = 'still_ready' where id = $1", [sid]);
+    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [sid] });
+    expect(q.total).toBe(6 * 21);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [sid], confirmTotal: q.total });
+    await finishJobs(ctx.project.id);
+    expect(charged(await ledger(ctx.userId)) - paid).toBe(126);
+  });
+
+  it('F-I1 (p2): free re-rolls come from delivered paid clips, and a quality change goes through Generate', async () => {
+    const { updateShot: patch } = await storyboardMod();
+    const ctx = await newProject({ n: 25, quality: 'economy', seconds: 3 });
+    const sid = ctx.shots[0].id;
+    expect((await getStatus(ctx)).body.rerolls.included).toBe(0);
+    await generateAll(ctx, [sid]);
+    await finishJobs(ctx.project.id);
+    expect((await getStatus(ctx)).body.rerolls).toEqual({ included: 1, used: 0, left: 1 });
+    const { shot } = await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_talking' } });
+    expect(shot).toMatchObject({ stale: true, clip_mismatch: true });
+    await expect(rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, expectedCredits: 0 })).rejects.toMatchObject({ code: 'reroll_not_available' });
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [sid] })).total).toBe(63);
+    const copy = await duplicateProject({ userId: ctx.userId, id: ctx.project.id });
+    expect((await getStatus({ userId: ctx.userId, project: copy })).body.rerolls.included).toBe(0);
+  });
+
+  it('F-I2 / G2 (p3 a): a claim recovered while the hold call was stalled leaves no hold behind', async () => {
+    const ctx = await newProject({ n: 3 });
+    const pid = ctx.project.id;
+    _setShotsDeps({
+      holdCredits: async (args) => {
+        await raw.query("update story_projects set gen_claimed_at = gen_claimed_at - interval '31 seconds' where id = $1", [pid]);
+        await recoverStalledClips(pid);
+        return holdCredits(args);
+      },
+    });
+    const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 126 }).catch((e) => e);
+    expect(err.status).toBe(409);
+    expect(await clipJobs(pid)).toHaveLength(0);
+    expect((await balance(ctx.userId)).held).toBe(0);
+    expect((await shotRows(pid)).every((s) => s.status === 'still_ready')).toBe(true);
+  });
+
+  it('F-I2 (p3 b): a claim recovered between enqueues stops the request; only the job recovery kept is charged', async () => {
+    const ctx = await newProject({ n: 3 });
+    const pid = ctx.project.id;
+    let n = 0;
+    _setShotsDeps({
+      enqueue: async (args) => {
+        n += 1;
+        if (n === 2) {
+          await raw.query("update story_projects set gen_claimed_at = gen_claimed_at - interval '31 seconds' where id = $1", [pid]);
+          await recoverStalledClips(pid);
+        }
+        return enqueue(args);
+      },
+    });
+    const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 126 }).catch((e) => e);
+    _setShotsDeps();
+    expect(err.status).toBe(409);
+    expect(await clipJobs(pid)).toHaveLength(1);
+    expect((await balance(ctx.userId)).held).toBe(42);
+    await finishJobs(pid);
+    const b = await balance(ctx.userId);
+    expect(b.held).toBe(0);
+    expect(charged(await ledger(ctx.userId))).toBe(42);
+    const rows = await shotRows(pid);
+    expect(rows.filter((s) => s.status === 'ready')).toHaveLength(1);
+    expect(rows.filter((s) => s.status === 'still_ready')).toHaveLength(2);
+  });
+
+  it('F-I2 (4): a job queued after recovery read the claim carries no hold share', async () => {
+    const ctx = await newProject({ n: 2 });
+    const pid = ctx.project.id;
+    let n = 0;
+    _setShotsDeps({
+      enqueue: async (args) => {
+        n += 1;
+        const job = await enqueue(args);
+        if (n === 2) {
+          // Recovery ran between the request's claim check and this insert: it gave this share back already.
+          await raw.query("update story_projects set gen_claimed_at = gen_claimed_at - interval '31 seconds' where id = $1", [pid]);
+          await raw.query("update story_jobs set status = 'running' where id = $1", [job.id]); // the runner already took it
+          await raw.query("update story_jobs set payload = payload - 'accounted' where id = $1", [job.id]);
+          await recoverStalledClips(pid);
+          await raw.query("update story_jobs set payload = payload - 'accounted' where id = $1", [job.id]);
+        }
+        return job;
+      },
+    });
+    await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 84 }).catch((e) => e);
+    _setShotsDeps();
+    const jobs = await clipJobs(pid);
+    const late = jobs.find((j) => j.status === 'running');
+    expect(late).toMatchObject({ hold_id: null, cost_credits: null });
+  });
+
+  it('F-I2 (3): the action route ends before a claim can look stalled', async () => {
+    const route = await import('../../pages/api/story/projects/[id]/[action].js');
+    expect(route.config.maxDuration).toBeLessThan(STALE_CLAIM_MS / 1000);
+  });
+
+  it('G1: clips get character elements from the pick and the sheet; a one-picture character is left out', async () => {
+    const ctx = await newProject({ n: 1 });
+    const [maya, leo] = await storyDb().insert('story_cast', [
+      { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'A barber in an apron.', status: 'ready', image_url: '/pick/maya.png', image_key: 'pm', sheet: { url: '/sheet/maya.png', key: 'sm', from_key: 'pm' } },
+      { project_id: ctx.project.id, ord: 1, name: 'Leo', description: 'A friend.', status: 'ready', image_url: '/pick/leo.png', image_key: 'pl', sheet: {} },
+    ]);
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { cast_ids: [maya.id, leo.id] });
+    await generateAll(ctx);
+    const [job] = await clipJobs(ctx.project.id);
+    expect(job.payload.elements).toEqual([{ name: 'Maya', description: 'A barber in an apron.', imageUrls: ['/pick/maya.png', '/sheet/maya.png'] }]);
+    expect(job.payload.prompt).toContain('@Maya');
+    expect(job.payload.prompt).not.toContain('@Leo');
+    await expect(clipHandler.submit({ ...job, attempts: 1 })).resolves.toHaveProperty('taskId');
+  });
+
+  it('G3: the project fee is charged only once the clips are queued', async () => {
+    const ctx = await newProject({ n: 2, feeCharged: false });
+    _setShotsDeps({
+      enqueue: async () => {
+        throw new Error('database unavailable');
+      },
+    });
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 90 + 84 })).rejects.toThrow('database unavailable');
+    expect(await balance(ctx.userId)).toMatchObject({ held: 0, available: 2000 });
+    expect((await projectRow(ctx.project.id)).fee_charged).toBe(false);
+  });
+
+  it('G4: the copy-tries give-up takes the lease first too', async () => {
+    const userId = randomUUID();
+    const [project] = await storyDb().insert('story_projects', { user_id: userId, title: 'Kept', seconds: 15 });
+    const job = await enqueue({ projectId: project.id, kind: 'clip', payload: {} });
+    const started = new Date(Date.now() - 5 * 60_000).toISOString();
+    await storyDb().update('story_jobs', { id: job.id }, {
+      status: 'running', started_at: started, submitted_at: started, provider: 'mock', provider_task_id: 'mock-clip-tries',
+      provider_result: { url: '/api/mock/fixtures/clip.mp4' }, kept_at: new Date(Date.now() - 60_000).toISOString(), mirror_tries: 4,
+      locked_until: started, lease_until: null,
+    });
+    afterQuery = {
+      test: (sql, params) => /from public\.story_jobs/.test(sql) && (params || []).includes('running'),
+      run: () => raw.query(`update story_jobs set lease_until = now() + interval '60 seconds' where id = $1`, [job.id]),
+    };
+    await sweep({});
+    expect((await storyDb().select('story_jobs', { id: job.id }))[0].status).toBe('running');
+  });
+
+  it('G5: the quote says what was spent on the video once nothing is left to make', async () => {
+    const ctx = await newProject({ n: 2, feeCharged: false });
+    await generateAll(ctx);
+    await finishJobs(ctx.project.id);
+    expect(await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).toMatchObject({ total: 0, shotIds: [], spent: 90 + 84 });
+  });
+
+  it('G6: a blocked shot stays out of the default set until its description changes', async () => {
+    const { updateShot: patch } = await storyboardMod();
+    const ctx = await newProject({ n: 2, descriptions: ['A wave [[mock:blocked]]'] });
+    await generateAll(ctx);
+    await finishJobs(ctx.project.id);
+    const sid = ctx.shots[0].id;
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).shotIds).toEqual([]);
+    expect((await getStatus(ctx)).body.shots[0].clip_credits).toBeNull();
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { description: 'A calm wave' } });
+    await raw.query("update story_shots set still_url = '/still/n.png', still_key = 'n', status = 'still_ready' where id = $1", [sid]);
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).shotIds).toEqual([sid]);
+  });
+
+  it('G8: the project moves to review when every clip is ready', async () => {
+    const ctx = await newProject({ n: 2 });
+    await generateAll(ctx);
+    expect((await projectRow(ctx.project.id)).step).toBe('generate');
+    await finishJobs(ctx.project.id);
+    expect((await projectRow(ctx.project.id)).step).toBe('review');
+  });
+
+  it('F-M1: a paid re-roll needs the price the customer saw', async () => {
+    const ctx = await newProject({ n: 1 });
+    await generateAll(ctx);
+    await finishJobs(ctx.project.id);
+    await storyDb().update('story_projects', { id: ctx.project.id }, { rerolls_used: 1 });
+    await expect(rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id })).rejects.toMatchObject({ code: 'quote_changed', extra: { credits: 42 } });
+    expect((await balance(ctx.userId)).held).toBe(0);
+  });
+
+  it('F-M2: a clip whose settle gave up does not stay on the shot', async () => {
+    const ctx = await newProject({ n: 1 });
+    await generateAll(ctx);
+    const [job] = await clipJobs(ctx.project.id);
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { status: 'ready', clip_url: '/gone.mp4', clip_key: 'gone' });
+    await clipHandler.onFail({ ...job, result: { url: '/gone.mp4', key: 'gone' } }, { blocked: false, error: 'x', final: true });
+    expect(await shotRow(ctx.shots[0].id)).toMatchObject({ clip_url: null, clip_key: null, status: 'failed' });
+  });
+
+  it('F-M3: /status ticks a project at most once every 3 seconds', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date(Date.now() + 30 * 3_600_000));
+    const ctx = await newProject({ n: 2 });
+    await generateAll(ctx, [ctx.shots[0].id]);
+    await getStatus(ctx);
+    await generateAll(ctx, [ctx.shots[1].id]);
+    await getStatus(ctx);
+    const second = (await clipJobs(ctx.project.id)).find((j) => j.shot_id === ctx.shots[1].id);
+    expect(second.status).toBe('queued');
+    vi.setSystemTime(new Date(Date.now() + 4_000));
+    await getStatus(ctx);
+    expect((await clipJobs(ctx.project.id)).find((j) => j.shot_id === ctx.shots[1].id).status).toBe('running');
   });
 });

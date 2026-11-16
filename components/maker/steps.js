@@ -94,7 +94,7 @@ export function estimateCredits(project, pricing = DEFAULTS) {
 /** "2 tries included, then 42 credits" for a shot. Prefers numbers from the status payload. */
 export function rerollInfo(status, shot, pricing = DEFAULTS) {
   const shots = status?.shots || [];
-  const included = status?.rerolls?.included ?? Math.floor(shots.length * pricing.freeRerollShare);
+  const included = status?.rerolls?.included ?? Math.max(0, Math.ceil(shots.length * pricing.freeRerollShare - 1e-9));
   const used = status?.rerolls?.used ?? status?.project?.rerolls_used ?? 0;
   const left = Math.max(0, included - used);
   // The server's price for this shot (clip_price) wins; the rest only stand in while it is missing.

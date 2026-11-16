@@ -67,7 +67,8 @@ const scripts = (projectId) => storyDb().select('story_scripts', { project_id: p
 describe('/api/story/projects/[id]/[action]', () => {
   it('caps the request body, and only the model routes get a long duration', () => {
     expect(route.config.api.bodyParser.sizeLimit).toBe('64kb');
-    expect(route.config.maxDuration).toBeUndefined();
+    // Task 16 round 1: 25 s, below the clip claim's 30 s stall threshold (lib/story/shots.js STALE_CLAIM_MS).
+    expect(route.config.maxDuration).toBe(25);
     for (const r of [scriptRoute, reviseRoute]) {
       expect(r.config.api.bodyParser.sizeLimit).toBe('64kb');
       expect(r.config.maxDuration).toBe(120);

@@ -51,11 +51,13 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
 
   if (!project) return null;
   const estimate = estimateCredits(project, pricing);
-  const total = quote ? quote.total : estimate;
+  // Nothing left to make: show what the video cost so far instead of a bare 0.
+  const allMade = Boolean(quote) && quote.total === 0 && Array.isArray(quote.shotIds) && quote.shotIds.length === 0 && Number.isInteger(quote.spent);
+  const total = allMade ? quote.spent : quote ? quote.total : estimate;
   const available = billing?.balance?.available;
   // While billing v2 is off the balance is in the old unit, so a shortfall against a v2 price would be wrong.
   const comparable = billing?.v2 === true && typeof available === 'number';
-  const short = comparable && available < total ? total - available : 0;
+  const short = !allMade && comparable && available < total ? total - available : 0;
 
   const lines = quote?.lines || [];
   // With a server quote the label describes what was quoted (the shots), not the brief. While a
@@ -75,7 +77,7 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
     <section className={styles.bar} aria-label="Credit estimate" data-testid="quote-bar">
       <div className={styles.row}>
         <div className={styles.cost}>
-          <span className={styles.label}>{quote ? 'Quote for this video' : 'Estimated cost'}</span>
+          <span className={styles.label}>{allMade ? 'Spent on this video' : quote ? 'Quote for this video' : 'Estimated cost'}</span>
           <strong className={styles.total} data-testid="quote-total">{count(total)} credits</strong>
           <span className={styles.meta} data-testid="quote-sub" aria-busy={quoteIsStale || undefined}>
             {subLabel}

@@ -19,12 +19,17 @@
 -- back. gen_shots = [{ id, round, status }] as claimed; gen_rerolls = free
 -- re-rolls the claim counted (given back when the start is undone).
 --
+-- story_projects.status_ticked_at: when GET /status last ran a runner tick for
+-- the project (at most one every 3 s per project; lib/story/status.js).
+--
 -- story_clip_claim(project, claim, hold, shots, rerolls_used, rerolls_add, now)
 --   claims every shot in p_shots ([{ id, round, status }]) or none: each must
 --   still have that clip_round and status, a still, source 'generated', and no
 --   clip job in flight or waiting to be applied; the project must have no other
 --   claim and, when p_rerolls_used is given, that many free re-rolls used.
 --   Sets the shots 'queued' (clip_round + 1, clip_prev) and records the claim.
+--   The update repeats the round and status checks and raises 'shots_changed'
+--   (rolling the claim back) if it does not touch every shot.
 --   -> the claimed rows, or no row.
 --
 -- story_delete_project now also refuses ('project_busy') while a job's hold
@@ -42,7 +47,16 @@ alter table public.story_projects
   add column gen_hold_id uuid,
   add column gen_claimed_at timestamptz,
   add column gen_shots jsonb,
-  add column gen_rerolls integer not null default 0 check (gen_rerolls >= 0);
+  add column gen_rerolls integer not null default 0 check (gen_rerolls >= 0),
+  add column status_ticked_at timestamptz;
+
+-- The status tick stamp is bookkeeping like the cron's rotation stamp: it must not move updated_at.
+drop trigger story_projects_touch on public.story_projects;
+create trigger story_projects_touch before update on public.story_projects
+  for each row
+  when ((to_jsonb(old) - 'runner_ticked_at' - 'status_ticked_at' - 'updated_at')
+        is distinct from (to_jsonb(new) - 'runner_ticked_at' - 'status_ticked_at' - 'updated_at'))
+  execute function public.story_touch_updated_at();
 
 create function public.story_clip_claim(
   p_project uuid,
@@ -105,15 +119,20 @@ begin
          gen_rerolls = coalesce(p_rerolls_add, 0),
          rerolls_used = rerolls_used + coalesce(p_rerolls_add, 0)
    where id = p_project;
+  update story_shots s
+     set status = 'queued',
+         clip_round = s.clip_round + 1,
+         clip_prev = jsonb_build_object('status', s.status, 'error', s.error),
+         error = null
+    from jsonb_to_recordset(p_shots) as x(id uuid, round integer, status text)
+   where s.id = x.id and s.project_id = p_project and s.clip_round = x.round and s.status = x.status;
+  get diagnostics v_found = row_count;
+  if v_found <> v_want then
+    raise exception 'shots_changed';
+  end if;
   return query
-    update story_shots s
-       set status = 'queued',
-           clip_round = s.clip_round + 1,
-           clip_prev = jsonb_build_object('status', s.status, 'error', s.error),
-           error = null
-      from jsonb_to_recordset(p_shots) as x(id uuid)
-     where s.id = x.id and s.project_id = p_project
-    returning s.*;
+    select s.* from story_shots s
+     where s.project_id = p_project and s.id in (select x.id from jsonb_to_recordset(p_shots) as x(id uuid));
 end
 $$;
 
