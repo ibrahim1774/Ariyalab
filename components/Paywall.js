@@ -516,7 +516,14 @@ export default function Paywall({
           <p className={styles.subtitle} role="status">Loading plans…</p>
         )}
 
-        {showPlans && offers && !v2 && (
+        {showPlans && offers?.failed && (
+          <div className={styles.error} role="alert">
+            The plans could not be loaded.{' '}
+            <button type="button" className={styles.btn} onClick={offers.retry}>Try again</button>
+          </div>
+        )}
+
+        {showPlans && offers && !offers.failed && !v2 && (
           <div className={styles.tiersThree}>
             <PlanCard
               planKey="monthly"

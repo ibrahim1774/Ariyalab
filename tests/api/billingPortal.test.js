@@ -53,6 +53,25 @@ describe('/api/billing/portal', () => {
     expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing' }]);
   });
 
+  it('R4: the return URL never comes from the Host header; production without APP_URL answers 500', async () => {
+    S.user = { id: '00000000-0000-4000-8000-0000000000a1', email: 'a@example.test' };
+    let res = makeRes();
+    await portal(makeReq({ method: 'POST', headers: { host: 'evil.example' } }), res);
+    expect(S.created.at(-1).return_url).toBe('https://ariyalab.test/app/billing');
+    vi.stubEnv('APP_URL', '');
+    vi.stubEnv('NODE_ENV', 'production');
+    S.created.length = 0;
+    res = makeRes();
+    await portal(makeReq({ method: 'POST', headers: { host: 'evil.example' } }), res);
+    expect(res.statusCode).toBe(500);
+    expect(S.created).toHaveLength(0);
+    vi.stubEnv('NODE_ENV', 'test');
+    res = makeRes();
+    await portal(makeReq({ method: 'POST', headers: { host: 'evil.example' } }), res);
+    expect(S.created.at(-1).return_url).toBe('http://localhost:3000/app/billing');
+    vi.unstubAllEnvs();
+  });
+
   it('401 signed out, 404 without a customer, 405 on GET', async () => {
     let res = makeRes();
     await portal(makeReq({ method: 'POST' }), res);

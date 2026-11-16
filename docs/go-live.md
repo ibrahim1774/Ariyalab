@@ -112,8 +112,12 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   `ariya_v2_` and name the amount and credits (`ariya_v2_creator_month_4900_2600`), so a price edited in the admin
   pricing editor becomes a new Stripe price; subscribers keep the price and credits they bought.
 - Plan changes go through the Stripe customer portal: /app/billing has a **Manage billing** button
-  (`/api/billing/portal`, a portal session for the signed-in buyer's own customer). Checkout refuses a second plan
-  (409, also for a past_due plan), and a v2 plan needs a signed-in buyer.
+  (`/api/billing/portal`, a portal session for the signed-in buyer's own customer; the return URL is always `APP_URL`).
+  A signed-in buyer who already has a plan (also past_due) is refused at checkout (409). The anonymous pay-first
+  funnels can buy a v2 plan; when that purchase is claimed by an account that already has a plan, the new
+  subscription is cancelled and its first invoice refunded through Stripe, the new customer is not linked and the
+  buyer sees "You already have a plan — use Manage billing to change it. Your new payment has been refunded."
+  Check one such refund in test mode (only mocked so far).
 - Configure the portal in the Stripe dashboard: the v2 Starter, Creator and Studio prices (monthly and yearly) as the
   products customers may switch between, **upgrades invoiced immediately** (proration "always invoice") and
   **downgrades at the end of the period**. **The portal configuration is account-wide: the Stripe account is shared
@@ -125,8 +129,12 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
     difference between the new monthly credits and the highest level already granted this period, **prorated by the
     time left in the period** when the invoice was paid. With prorations left for the next cycle invoice, nothing is
     granted for that period. A downgrade grants nothing; the lower allotment starts at renewal.
-  - Monthly to yearly: the year starts with that invoice; its first month is granted at once, the cron grants the
-    other eleven (12 per paid year).
+  - Monthly to yearly (also a switch invoice with no "unused time" line whose period start moved): the year starts
+    with that invoice; its first month is granted at once (`yearly:<sub>:<YYYY-MM-DD>:m0`), the cron grants the other
+    eleven (12 per paid year).
+  - An upgrade is measured from the level the period (or the yearly month) was already granted at, so a downgrade
+    followed by an upgrade back in the same period grants nothing new. A late upgrade webhook is measured on the
+    period its invoice line names.
   - Yearly to a dearer yearly price: the current month's difference is prorated (or, if that month has not been
     granted yet, the cron grants it at the new level), later months at the new level.
 - Renewals are granted at the plan the invoice paid for (its own line), not the subscription's plan at that moment.
@@ -135,7 +143,9 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
 - Refunds and disputes: a **full** refund or dispute of a yearly invoice reverses month 0 and every month granted so
   far and stops the remaining months; a **partial** one reverses that share of each month granted so far and of each
   later month as it is granted (the months continue). A refund or dispute of an upgrade invoice reverses its share of
-  the upgrade grant (and, when full, puts a yearly plan's monthly level back); it never stops the year.
+  the upgrade grant and lowers a yearly plan's monthly level by the same share (never below what a later, still paid
+  upgrade bought); it never stops the year. If the cron already granted the current month at the raised level, that
+  month's extra is not reversed (only the upgrade's own grant is): claw it back by hand from /admin if needed.
 - Verify on the first test-mode upgrade that the proration invoice lines carry `proration` and the price (the code
   reads both the 2024-06-20 shape and the newer `parent` / `pricing` shape).
 - Several yearly months that come due at once (the cron was down for over a month, or the customer linked their

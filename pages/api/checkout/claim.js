@@ -1,4 +1,5 @@
 import { stripe, planFromPrice, planAmountCents, planCap } from '../../../lib/stripe';
+import { refuseSecondPlan, SECOND_PLAN_MESSAGE } from '../../../lib/planGuard';
 import {
   assertCanLink,
   linkStripeCustomerToProfile,
@@ -91,6 +92,12 @@ export default async function handler(req, res) {
     const plan = planFromPrice(price);
     if (!plan) {
       return res.status(400).json({ error: 'Session is not a subscription.' });
+    }
+
+    // One plan per account (billing v2): a claimer who already has a plan does
+    // not get a second one; the new subscription is cancelled and refunded.
+    if (await refuseSecondPlan({ userId: session.user.id, customerId, checkoutSession })) {
+      return res.status(409).json({ error: SECOND_PLAN_MESSAGE, code: 'HAS_PLAN', refunded: true });
     }
 
     // Grant before linking (the entitlement reader must never see a linked

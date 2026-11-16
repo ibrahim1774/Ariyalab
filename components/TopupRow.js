@@ -83,6 +83,8 @@ export default function TopupRow({
   // price shown is the price charged on every page that shows this row.
   const offers = useV2Offers();
   const v2Topups = offers?.billingV2 ? offers.topups : null;
+  // Video packs are drawn only once the offers are known (legacy prices may not be what checkout charges).
+  const offersReady = Boolean(offers) && !offers.failed;
   const videoPacks = v2Topups
     ? Object.entries(v2Topups).map(([pack, t]) => ({ pack, label: '$' + t.usd, credits: t.credits }))
     : VIDEO_PACKS;
@@ -172,7 +174,7 @@ export default function TopupRow({
 
   return (
     <>
-      {renderRow('Video credits', videoPacks, 'video credits', false)}
+      {offersReady && renderRow('Video credits', videoPacks, 'video credits', false)}
       {renderRow('Image credits', IMAGE_PACKS, 'image credits', inflateImage, imageNoun)}
       {localError && (
         <div className={paywallStyles.error} style={{ marginTop: 12 }}>

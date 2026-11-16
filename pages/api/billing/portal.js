@@ -15,9 +15,13 @@ import { customerForUser } from '../../../lib/grants';
  * account-wide: the Stripe account is shared with haelabs.live (see
  * docs/go-live.md).
  */
-function appOrigin(req) {
-  const app = process.env.APP_URL && process.env.APP_URL.replace(/\/$/, '');
-  return app || `https://${req.headers?.host}`;
+// Where Stripe sends the customer back. Never from the request's Host header
+// (a forged Host would turn the portal into an open redirect): APP_URL, or in
+// development http://localhost:3000. null in production without APP_URL.
+function returnOrigin() {
+  const app = process.env.APP_URL && process.env.APP_URL.trim().replace(/\/$/, '');
+  if (app) return app;
+  return process.env.NODE_ENV === 'production' ? null : 'http://localhost:3000';
 }
 
 export default async function handler(req, res) {
@@ -27,10 +31,15 @@ export default async function handler(req, res) {
   }
   const session = await getUserFromRequest(req, res);
   if (!session?.user) return res.status(401).json({ error: 'Sign in to manage billing.' });
+  const origin = returnOrigin();
+  if (!origin) {
+    console.error('[billing/portal] APP_URL is not set');
+    return res.status(500).json({ error: 'Billing is not configured. Please try again later.' });
+  }
   try {
     const customer = await customerForUser(session.user.id);
     if (!customer) return res.status(404).json({ error: 'There is no billing account yet. Choose a plan first.', code: 'NO_CUSTOMER' });
-    const portal = await stripe().billingPortal.sessions.create({ customer, return_url: `${appOrigin(req)}/app/billing` });
+    const portal = await stripe().billingPortal.sessions.create({ customer, return_url: `${origin}/app/billing` });
     return res.status(200).json({ url: portal.url });
   } catch (err) {
     console.error('[billing/portal] failed', err);

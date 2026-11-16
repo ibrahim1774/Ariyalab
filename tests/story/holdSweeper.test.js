@@ -183,6 +183,31 @@ describe('stale story-hold sweeper (backstop)', () => {
     expect((await holdRemaining(kept)).remaining).toBe(5);
   });
 
+  it('R2: the keyset cursor keeps microseconds; every hold is looked at once and the run ends', async () => {
+    const user = await account(100000);
+    const p = await project(user);
+    const a = await hold(user, p, 7);
+    const b = await hold(user, p, 8);
+    await db.query(`update public.credit_holds set created_at = '2020-01-01 00:00:00.123456+00' where id = $1`, [a]);
+    await db.query(`update public.credit_holds set created_at = '2020-01-01 00:00:00.123789+00' where id = $1`, [b]);
+    // Two KEPT holds (a cast round owns each): they stay active, so a cursor that lost the microseconds would page
+    // them again and again.
+    const k1 = await hold(user, p, 3);
+    const k2 = await hold(user, p, 4);
+    await db.query(`update public.credit_holds set created_at = '2020-01-01 00:00:00.000100+00' where id = $1`, [k1]);
+    await db.query(`update public.credit_holds set created_at = '2020-01-01 00:00:00.000200+00' where id = $1`, [k2]);
+    await db.query(`insert into public.story_cast (project_id, name, status, hold_id, hold_credits, ord) values ($1, 'k1', 'ready', $2, 3, 0), ($1, 'k2', 'ready', $3, 4, 1)`, [p, k1, k2]);
+    const { rows } = await db.query(
+      `select count(*)::int as n from public.credit_holds where status = 'active' and project_id is not null and created_at < now() - interval '30 minutes'`
+    );
+    const summary = await sweepStaleHolds({ pageSize: 1, limit: 500, recover: noRecover });
+    expect(summary.looked).toBe(rows[0].n);
+    expect(summary.kept).toBeGreaterThanOrEqual(2);
+    expect(await holdRemaining(k1)).toEqual({ remaining: 3, status: 'active' });
+    expect(await holdRemaining(a)).toEqual({ remaining: 0, status: 'closed' });
+    expect(await holdRemaining(b)).toEqual({ remaining: 0, status: 'closed' });
+  });
+
   it('the cron needs CRON_SECRET', async () => {
     const res = { statusCode: 200, headers: {}, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, setHeader() {} };
     await storyHoldsCron({ method: 'GET', headers: { authorization: 'Bearer wrong' } }, res);

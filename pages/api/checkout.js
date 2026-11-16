@@ -344,11 +344,9 @@ export default async function handler(req, res) {
       });
     }
     const v2Plan = v2 ? offers.plans[plan] : null;
-    // A v2 plan needs a signed-in buyer: the one-plan-per-customer check (no
-    // double billing) needs the account's Stripe customer.
-    if (v2Plan && isAnon) {
-      return res.status(401).json({ error: 'Sign in to choose a plan.', code: 'SIGN_IN' });
-    }
+    // Anonymous v2 plans are sold on the pay-first flows; the one-plan rule is
+    // enforced when the purchase is claimed (lib/planGuard.js). Signed-in
+    // buyers are checked below (HAS_PLAN).
     const planCents = v2Plan ? (interval === 'year' ? v2Plan.yearlyCents : v2Plan.monthlyCents) : null;
 
     // Anonymous subscription: route success_url through the claim-

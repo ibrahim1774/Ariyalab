@@ -4,7 +4,7 @@ import { createTestDb } from './helpers/db.js';
 
 // ---- in-memory Stripe (never the live account) ----------------------
 const S = vi.hoisted(() => {
-  const state = { customers: new Map(), sessions: new Map(), subs: new Map(), invoices: new Map(), charges: new Map(), created: [], v2Prices: [] };
+  const state = { customers: new Map(), sessions: new Map(), subs: new Map(), invoices: new Map(), charges: new Map(), created: [], v2Prices: [], cancels: [], refunds: [] };
   const clone = (o) => (o === undefined ? o : structuredClone(o));
   const api = {
     customers: {
@@ -32,7 +32,18 @@ const S = vi.hoisted(() => {
       },
     },
     subscriptions: {
-      retrieve: async (id) => clone(state.subs.get(id)),
+      retrieve: async (id, opts) => {
+        const sub = clone(state.subs.get(id));
+        if (sub && opts?.expand?.includes('latest_invoice') && typeof sub.latest_invoice === 'string') {
+          sub.latest_invoice = clone(state.invoices.get(sub.latest_invoice)) || sub.latest_invoice;
+        }
+        return sub;
+      },
+      cancel: async (id, _params, opts) => {
+        state.cancels.push({ id, key: opts?.idempotencyKey });
+        state.subs.get(id).status = 'canceled';
+        return clone(state.subs.get(id));
+      },
       list: async ({ customer, status }) => ({
         data: [...state.subs.values()].filter((x) => x.customer === customer && x.status === status).map(clone),
         has_more: false,
@@ -41,6 +52,12 @@ const S = vi.hoisted(() => {
     invoices: { retrieve: async (id) => clone(state.invoices.get(id)) },
     charges: { retrieve: async (id) => clone(state.charges.get(id)) },
     disputes: { list: async () => ({ data: [] }) },
+    refunds: {
+      create: async (params, opts) => {
+        state.refunds.push({ ...params, key: opts?.idempotencyKey });
+        return { id: `re_${state.refunds.length}` };
+      },
+    },
     webhooks: { constructEvent: (raw) => JSON.parse(raw.toString('utf8')) },
   };
   return { state, api };
@@ -89,6 +106,7 @@ import { setGrantsDb, grantYearlyMonths, dueYearlyMonths, yearlyRef, addMonthsUt
 import webhook from '../pages/api/stripe-webhook.js';
 import checkout from '../pages/api/checkout.js';
 import grantYearly from '../pages/api/cron/grant-yearly.js';
+import claim from '../pages/api/checkout/claim.js';
 
 let db;
 beforeAll(async () => {
@@ -413,14 +431,16 @@ describe('Task 27 round 1: refunds and disputes', () => {
 });
 
 describe('Task 27 round 1: checkout minors', () => {
-  it('a v2 plan needs a signed-in buyer (the one-plan check needs the customer)', async () => {
+  it('R3: an anonymous pay-first funnel can buy a v2 plan again (the one-plan rule moves to the claim)', async () => {
     await setV2(true);
     auth.user = null;
     const res = makeRes();
-    await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { plan: 'creator' } }, res);
-    expect(res.statusCode).toBe(401);
-    expect(res.body.code).toBe('SIGN_IN');
-    expect(S.state.created).toHaveLength(0);
+    await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { plan: 'creator', returnTo: '/ugc-2' } }, res);
+    expect(res.statusCode).toBe(200);
+    const created = S.state.created.at(-1);
+    expect(created.line_items[0].price).toBe(`price_${CREATOR_M}`);
+    expect(created.success_url).toContain('/ugc-2/claim?session_id=');
+    expect(created.metadata.pending_supabase_link).toBe('true');
   });
 
   it('F-M8: a past_due plan counts as a plan (no second subscription)', async () => {
@@ -439,5 +459,158 @@ describe('Task 27 round 1: checkout minors', () => {
     const res = makeRes();
     await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { mode: 'topup', pack: 'constructor' } }, res);
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('Task 27 round 2: R3 one plan per account at claim time', () => {
+  function anonymousPaidSession(email, lookupKey = CREATOR_M) {
+    const customer = `cus_${randomUUID().slice(0, 12)}`;
+    S.state.customers.set(customer, { id: customer, email, metadata: { pending_supabase_link: 'true' } });
+    const sub = newSub(customer, lookupKey);
+    const inv = paidInvoice(customer, sub);
+    Object.assign(S.state.invoices.get(inv), { payment_intent: `pi_${inv}` });
+    S.state.subs.get(sub).latest_invoice = inv;
+    const id = `cs_test_${randomUUID().replace(/-/g, '')}`;
+    S.state.sessions.set(id, {
+      id, object: 'checkout.session', mode: 'subscription', payment_status: 'paid', customer, subscription: sub,
+      client_reference_id: null, metadata: { pending_supabase_link: 'true' }, customer_details: { email }, created: nowS(),
+      line_items: { data: [{ price: { id: `price_${lookupKey}`, lookup_key: lookupKey } }] },
+    });
+    return { id, customer, sub, inv };
+  }
+  const claimAs = async (user, sessionId) => {
+    auth.user = user;
+    const res = makeRes();
+    await claim({ method: 'POST', query: { session_id: sessionId }, cookies: {}, headers: {} }, res);
+    return res;
+  };
+  const linkedTo = async (userId) => (await db.query('select stripe_customer_id from public.profiles where id = $1', [userId])).rows[0]?.stripe_customer_id;
+
+  it('a user who already has a plan: the new customer is not linked, its subscription cancelled and refunded, the message shown', async () => {
+    await setV2(true);
+    const user = newUser();
+    const mine = await linkedCustomer(user);
+    newSub(mine, STARTER_M);
+    S.state.cancels.length = 0;
+    S.state.refunds.length = 0;
+    const paid = anonymousPaidSession(user.email);
+    await deliver(invoiceEvent(paid.inv)); // the invoice grant parks (no linked user)
+    const res = await claimAs(user, paid.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ code: 'HAS_PLAN', refunded: true });
+    expect(res.body.error).toBe('You already have a plan — use Manage billing to change it. Your new payment has been refunded.');
+    expect(await linkedTo(user.id)).toBe(mine);
+    expect(S.state.cancels).toEqual([{ id: paid.sub, key: `second-plan-cancel-${paid.sub}` }]);
+    expect(S.state.refunds).toEqual([{ payment_intent: `pi_${paid.inv}`, key: `second-plan-refund-${paid.sub}` }]);
+    const parked = await db.query('select claimed_by from public.credit_pending_grants where stripe_customer_id = $1', [paid.customer]);
+    expect(parked.rows.every((r) => r.claimed_by === null)).toBe(true);
+    // A retried claim answers the same and never refunds twice (same idempotency key).
+    expect((await claimAs(user, paid.id)).statusCode).toBe(409);
+    expect(new Set(S.state.refunds.map((r) => r.key)).size).toBe(1);
+  });
+
+  it('a user without a plan claims normally: the customer is linked and the parked month is claimed', async () => {
+    await setV2(true);
+    const user = newUser();
+    await db.query('insert into public.profiles (id) values ($1)', [user.id]);
+    S.state.cancels.length = 0;
+    const paid = anonymousPaidSession(user.email);
+    await deliver(invoiceEvent(paid.inv));
+    const res = await claimAs(user, paid.id);
+    expect(res.statusCode).toBe(200);
+    expect(await linkedTo(user.id)).toBe(paid.customer);
+    expect(S.state.cancels).toEqual([]);
+    expect((await getBalance(user.id)).plan).toBe(2600);
+  });
+});
+
+describe('Task 27 round 2: upgrade level and yearly edges', () => {
+  it('R1: a period that started on Studio, downgraded, then upgraded back from the balance grants nothing', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const sub = newSub(customer, STUDIO_M);
+    await deliver(invoiceEvent(paidInvoice(customer, sub))); // 5400 granted for this period
+    setPrice(sub, STARTER_M);
+    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STUDIO_M, newKey: STARTER_M, paid: 0 })));
+    setPrice(sub, STUDIO_M);
+    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 0 });
+    Object.assign(S.state.invoices.get(inv), { total: 7000, amount_paid: 0 });
+    await deliver(invoiceEvent(inv));
+    expect(await upgrades(user)).toHaveLength(0);
+    expect((await bal(user)).plan).toBe(5400);
+  });
+
+  it('R1 (yearly): a month granted at Studio, downgraded, then upgraded back grants nothing for that month', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const start = nowS() - 10 * DAY;
+    const sub = newSub(customer, STUDIO_Y, { start, end: start + 365 * DAY });
+    await deliver(invoiceEvent(paidInvoice(customer, sub))); // month 0 at 5400
+    setPrice(sub, STARTER_Y);
+    await deliver(subUpdated(sub)); // level lowered to 1500 for later months
+    setPrice(sub, STUDIO_Y);
+    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 900 })));
+    expect(await upgrades(user)).toHaveLength(0);
+  });
+
+  it('minor: a switch to yearly with no "unused time" line still grants month 0 under a date-keyed ref', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const sub = newSub(customer, STARTER_M);
+    await deliver(invoiceEvent(paidInvoice(customer, sub)));
+    setPrice(sub, STARTER_Y);
+    const yStart = nowS();
+    Object.assign(S.state.subs.get(sub), { current_period_start: yStart, current_period_end: yStart + 365 * DAY });
+    const inv = `in_${randomUUID().slice(0, 12)}`;
+    S.state.invoices.set(inv, {
+      id: inv, customer, subscription: sub, status: 'paid', billing_reason: 'subscription_update', currency: 'usd', amount_paid: 34800,
+      lines: { data: [{ proration: true, amount: 34800, price: { id: `price_${STARTER_Y}`, lookup_key: STARTER_Y } }] },
+    });
+    await deliver(invoiceEvent(inv));
+    const ref = `yearly:${sub}:${new Date(yStart * 1000).toISOString().slice(0, 10)}:m0`;
+    expect((await renews(user)).map((r) => r.ref)).toContain(ref);
+  });
+
+  it('minor: a late upgrade webhook (after the renewal) is measured on the period its line names', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const t0 = nowS() - 40 * DAY;
+    const sub = newSub(customer, STARTER_M, { start: t0, end: t0 + 30 * DAY });
+    await deliver(invoiceEvent(paidInvoice(customer, sub)));
+    setPrice(sub, STUDIO_M);
+    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3500 });
+    const invRow = S.state.invoices.get(inv);
+    invRow.lines.data[1].period = { start: t0 + 15 * DAY, end: t0 + 30 * DAY };
+    invRow.status_transitions = { paid_at: t0 + 15 * DAY };
+    // The renewal happened before the webhook arrived.
+    Object.assign(S.state.subs.get(sub), { current_period_start: t0 + 30 * DAY, current_period_end: t0 + 60 * DAY });
+    await deliver(invoiceEvent(inv));
+    const [up] = await upgrades(user);
+    expect(up.ref.startsWith(`upgrade:${sub}:`)).toBe(true);
+    // About half of 3900: the window is the calendar month before the line's end (Stripe's monthly period).
+    expect(up.amount).toBeGreaterThanOrEqual(1880);
+    expect(up.amount).toBeLessThanOrEqual(1960);
+    // Keyed on the paid period's window, not the renewed one.
+    expect(Number(up.ref.split(':')[2])).toBeLessThan(t0 + 30 * DAY);
+  });
+
+  it('minor: a partial refund of a yearly upgrade lowers the raised level by its share; a full refund of an earlier one keeps a later paid level', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const start = nowS() - 10 * DAY;
+    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
+    await deliver(invoiceEvent(paidInvoice(customer, sub)));
+    setPrice(sub, CREATOR_Y);
+    const up1 = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: CREATOR_Y, paid: 800 });
+    await deliver(invoiceEvent(up1));
+    setPrice(sub, STUDIO_Y);
+    const up2 = prorationInvoice(customer, sub, { oldKey: CREATOR_Y, newKey: STUDIO_Y, paid: 2000 });
+    await deliver(invoiceEvent(up2));
+    expect((await yearlyRow(sub)).credits).toBe(5400);
+    await refund(customer, up1, 800, 800); // the earlier upgrade, fully
+    expect((await yearlyRow(sub)).credits).toBe(5400); // still paid for by the later one
+    await refund(customer, up2, 2000, 1000); // half of the later one
+    // The later upgrade was bought from Creator (2600): half of its 2600 -> 5400 step is still paid for.
+    expect((await yearlyRow(sub)).credits).toBe(2600 + Math.floor((5400 - 2600) * 0.5));
   });
 });
