@@ -213,6 +213,9 @@ off. Then check on the deployed app:
 - Vercel keeps a worker running after its caller aborts, and large renders upload to Blob with multipart: confirm both
   on the first long render.
 - Each cron answers 200 when called with `Authorization: Bearer $CRON_SECRET` (and 401 without).
+- Each worker route (`/api/story/worker/audio`, `/api/story/worker/analyze`, `/api/story/worker/draft`,
+  `/api/story/render-worker`) answers 200 to a POST with `Authorization: Bearer $CRON_SECRET` and no cookie (and 401
+  without the bearer). A non-2xx kick is logged as `[story] worker kick <path> answered <status>`.
 
 ## 7. Prices, then flip billing v2
 

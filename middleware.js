@@ -15,6 +15,14 @@ const GATED_PAGE_PREFIXES = [
   '/history',
 ];
 
+// Server-to-server worker routes under /api/story (exact paths; see lib/story/workers.js).
+const STORY_WORKER_PATHS = new Set([
+  '/api/story/worker/audio',
+  '/api/story/worker/analyze',
+  '/api/story/worker/draft',
+  '/api/story/render-worker',
+]);
+
 /*
  * Middleware that:
  *   1. Refreshes the Supabase session cookie on every request.
@@ -75,7 +83,10 @@ export async function middleware(req) {
     '/api/story',
   ];
   // /api/story/pricing is public: the marketing pricing section reads it.
-  const isPublicStoryApi = pathname === '/api/story/pricing';
+  // The worker routes are called server to server by kickWorker (lib/story/workers.js) with only
+  // `Authorization: Bearer $CRON_SECRET` and no cookie; each one checks that bearer itself
+  // (workerAuthorized, constant time, closed without the secret), so the session gate must let them by.
+  const isPublicStoryApi = pathname === '/api/story/pricing' || STORY_WORKER_PATHS.has(pathname);
   if (!isPublicStoryApi && privateApiPrefixes.some((p) => pathname.startsWith(p))) {
     if (!user) {
       return new NextResponse(

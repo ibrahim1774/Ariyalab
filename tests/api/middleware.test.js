@@ -41,6 +41,22 @@ describe('middleware', () => {
     }
   });
 
+  it('lets the CRON_SECRET worker routes past the session gate (each route checks the bearer itself)', async () => {
+    const { config } = await import('../../middleware.js');
+    const { pathToRegexp } = await import('next/dist/compiled/path-to-regexp');
+    const workers = ['/api/story/worker/audio', '/api/story/worker/analyze', '/api/story/worker/draft', '/api/story/render-worker'];
+    for (const path of workers) {
+      // Still matched (the cookie refresh runs), but not answered 401 for want of a session.
+      expect(config.matcher.some((m) => pathToRegexp(m).test(path)), path).toBe(true);
+      const res = await middleware(new NextRequest(`https://app.test${path}`, { method: 'POST', headers: { authorization: 'Bearer s' } }));
+      expect(res.status, path).toBe(200);
+    }
+    // Only those exact routes: a look-alike path stays gated.
+    for (const path of ['/api/story/worker', '/api/story/workers/audio', '/api/story/render-worker/x', '/api/story/render-workerx']) {
+      expect((await run(path)).status, path).toBe(401);
+    }
+  });
+
   it('answers 401 JSON to other /api/story paths without a session', async () => {
     const res = await run('/api/story/billing');
     expect(res.status).toBe(401);
