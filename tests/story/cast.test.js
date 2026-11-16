@@ -1214,6 +1214,7 @@ describe('prices on the row and held credits (L1 to L7)', () => {
     await storyDb().update('story_jobs', { id: first.id }, { status: 'done' });
     const [late] = await storyDb().select('story_jobs', { id: first.id });
     await expect(castImageHandler.onDone(late, pic('late'))).resolves.toBeUndefined();
+    await storyDb().update('story_jobs', { id: first.id }, { applied_at: new Date().toISOString() }); // as the runner does after onDone
     expect(await available(userId)).toBe(before);
     expect((await holdLedger(first.hold_id)).filter((e) => e.op === 'settle')).toHaveLength(0);
     const out = await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'y' });
@@ -1328,6 +1329,85 @@ describe('prices on the row and held credits (L1 to L7)', () => {
     expect(err?.status).toBe(409);
     expect(await ledgerHeld(userId)).toBe(0);
     expect((await jobsOf(project.id)).filter((j) => j.payload.castId === id && j.status === 'queued')).toHaveLength(0);
+  });
+
+  // ------------------------------------------------ round 5 (Y1 to Y3)
+
+  it('Y1: the reset takes the hold before it reads the jobs, so a slow live request cannot keep a job whose share was given back', async () => {
+    const { userId, project, id, holdId } = await deadPaidStart({ queued: 2 });
+    const [first] = await roundTwo(project.id, id);
+    await storyDb().update('story_jobs', { id: first.id }, { status: 'running' });
+    await agedDraft(id);
+    const { releaseHold } = await import('../../lib/credits.js');
+    const db = storyDb();
+    const real = db.select.bind(db);
+    let reads = 0;
+    let liveKept = null;
+    const spy = vi.spyOn(db, 'select').mockImplementation(async (table, match, opts) => {
+      const out = await real(table, match, opts);
+      if (table === 'story_jobs' && (reads += 1) === 2) {
+        // While the reset reads the jobs, the slow request queues its last job and tries to mark the round queued.
+        const late = await enqueue({
+          projectId: project.id, kind: 'cast_image', holdId, costCredits: 1,
+          payload: { stage: 'candidate', castId: id, round: 2, slot: 2, note: 'older', aspect: '3:4', prompt: 'p' },
+        });
+        const kept = await storyDb().update('story_cast', { id, round: 2, status: 'draft', hold_id: holdId }, { status: 'pending', hold_id: null, hold_credits: 0 });
+        liveKept = kept.length > 0;
+        if (!liveKept) {
+          // What launchRound's catch does when that update matches nothing.
+          await storyDb().remove('story_jobs', { id: late.id, status: 'queued' });
+          await releaseHold({ holdId, amount: 1, ref: `job:${late.id}` }).catch(() => {});
+        }
+      }
+      return out;
+    });
+    try {
+      await generateCast({ userId, projectId: project.id });
+    } finally {
+      spy.mockRestore();
+    }
+    expect(liveKept).toBe(false);
+    // Every credit still held belongs to a job that can still settle it.
+    const carrying = (await roundTwo(project.id, id)).filter((j) => !j.applied_at).reduce((n, j) => n + (j.cost_credits || 0), 0);
+    expect(await ledgerHeld(userId)).toBe(carrying);
+    expect(await castRow(id)).toMatchObject({ hold_id: null });
+  });
+
+  it('Y2: a regeneration waits while a picture of this character is delivered but not yet applied (its settle may still be pending)', async () => {
+    const { userId, project, id, jobs } = await paidRound();
+    await storyDb().update('story_jobs', { id: jobs.map((j) => j.id) }, { status: 'done' });
+    for (const j of jobs) await castImageHandler.onDone({ ...j, status: 'done' }, pic(`y2-${j.payload.slot}`));
+    expect((await castRow(id)).status).toBe('ready');
+    // The runner applied two of them; the first is delivered but not applied yet (its settle may still be retried).
+    await storyDb().update('story_jobs', { id: [jobs[1].id, jobs[2].id] }, { applied_at: new Date().toISOString() });
+    const err = await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'again' }).then(() => null, (e) => e);
+    expect(err?.status).toBe(409);
+    expect((await castRow(id)).round).toBe(2);
+    await storyDb().update('story_jobs', { id: jobs[0].id }, { applied_at: new Date().toISOString() });
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'again' })).resolves.toMatchObject({ charged: PRICE });
+  });
+
+  it('Y3: one character whose reset fails does not fail the request; the others are still reset', async () => {
+    const { userId, project, id } = await deadPaidStart({ queued: 2 });
+    const other = (await castRows(project.id)).find((r) => r.id !== id);
+    await storyDb().update('story_cast', { id: other.id }, { status: 'draft', round: 2 }); // a dead free start: no job of round 2 queued
+    await agedDraft(other.id);
+    const { HoldExceededError } = await import('../../lib/credits.js');
+    const spy = vi.spyOn(storyDb(), 'remove').mockImplementationOnce(async () => { throw new HoldExceededError({ requested: 5, remaining: 1 }); });
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let out;
+    let loggedCalls = 0;
+    try {
+      out = await generateCast({ userId, projectId: project.id }).then((v) => v, (e) => e);
+    } finally {
+      loggedCalls = logged.mock.calls.length;
+      spy.mockRestore();
+      logged.mockRestore();
+    }
+    expect(out).not.toBeInstanceOf(Error);
+    expect(out.cast).toHaveLength(2);
+    expect(loggedCalls).toBeGreaterThan(0);
+    expect((await castRow(other.id)).status).toBe('failed');
   });
 
   it('holdRemaining reads what is left of a hold and whether it is closed', async () => {
