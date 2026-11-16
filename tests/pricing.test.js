@@ -138,7 +138,7 @@ describe('constants', () => {
     expect(PLANS_V2.starter).toEqual({ usd: 29, credits: 1500 });
     expect(PLANS_V2.studio).toEqual({ usd: 99, credits: 5400 });
     expect(TOPUPS_V2.l).toEqual({ usd: 100, credits: 5000 });
-    expect(YEARLY_DISCOUNT).toBe(0.2);
+    expect(YEARLY_DISCOUNT).toBe(0); // no yearly discount until the owner sets one (Task 27 ruling)
     expect(LEGACY_TO_V2).toBe(21 / 100);
   });
 });

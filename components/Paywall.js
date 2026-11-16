@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 
 import styles from './Paywall.module.css';
 import TopupRow from './TopupRow';
+import useV2Offers from './useV2Offers';
 import { META_PRODUCT } from './MetaPixel';
 
 // Cosmetic credit-display multiplier for image-credit surfaces.
@@ -15,6 +16,15 @@ const PLAN_VIDEO_CAPS = {
   yearly: 3840,
 };
 const CREDITS_PER_BASE_VIDEO = 40;
+
+// Billing v2 plans (shown when the billing_v2 switch is on).
+const V2_TIERS = ['starter', 'creator', 'studio'];
+const V2_CARDS = [
+  { key: 'starter', name: 'Starter' },
+  { key: 'creator', name: 'Creator', featured: true },
+  { key: 'studio', name: 'Studio' },
+];
+const V2_FEATS = ['Plan credits roll over for one month', 'Top up anytime', 'Cancel anytime'];
 
 const SURFACE_COPY = {
   video: {
@@ -328,6 +338,9 @@ export default function Paywall({
   surface = 'video',
 }) {
   const [busy, setBusy] = useState(null);
+  // Billing v2 on: the plans /api/checkout sells now (prices from the server).
+  const offers = useV2Offers();
+  const v2 = offers?.billingV2 ? offers : null;
   const [localError, setLocalError] = useState('');
   const [trialBlocked, setTrialBlocked] = useState(false);
   const [infoOpenMonthly, setInfoOpenMonthly] = useState(false);
@@ -425,7 +438,8 @@ export default function Paywall({
     entitlement &&
     (entitlement.tier === 'monthly' ||
       entitlement.tier === 'pro' ||
-      entitlement.tier === 'yearly');
+      entitlement.tier === 'yearly' ||
+      V2_TIERS.includes(entitlement.tier));
   const isTrialing = entitlement && entitlement.status === 'trialing';
   const showTopups = isSubscriber;
   const showPlans = !isSubscriber || isTrialing;
@@ -470,7 +484,35 @@ export default function Paywall({
           </div>
         )}
 
-        {showPlans && (
+        {showPlans && v2 && (
+          <div className={styles.tiersThree} data-billing="v2">
+            {V2_CARDS.map((c) => {
+              const p = v2.plans?.[c.key];
+              if (!p) return null;
+              return (
+                <PlanCard
+                  key={c.key}
+                  planKey={c.key}
+                  name={c.name}
+                  price={p.usd}
+                  period="month"
+                  feats={[`${Number(p.credits).toLocaleString()} video credits each month`, ...V2_FEATS]}
+                  copy={copy}
+                  infoOpen={false}
+                  setInfoOpen={() => {}}
+                  busy={busy}
+                  onSubscribe={startCheckout}
+                  isTrialing={isTrialing}
+                  featured={c.featured}
+                  btnClass={c.featured ? styles.btnAccent : styles.btnPrimary}
+                  ctaPrefix="Subscribe"
+                />
+              );
+            })}
+          </div>
+        )}
+
+        {showPlans && !v2 && (
           <div className={styles.tiersThree}>
             <PlanCard
               planKey="monthly"

@@ -39,6 +39,7 @@ export default function BillingPage() {
   const [offers, setOffers] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState('');
+  const [yearly, setYearly] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -56,7 +57,7 @@ export default function BillingPage() {
           const r = await fetch('/api/story/pricing');
           if (r.ok) {
             const p = await r.json();
-            if (alive) setOffers({ plans: p.plans, topups: p.topups });
+            if (alive) setOffers({ plans: p.plans, topups: p.topups, v2: true, yearlyDiscount: p.yearlyDiscount || 0 });
           }
         } catch {}
       } else if (data.offers) {
@@ -137,17 +138,29 @@ export default function BillingPage() {
           <>
             <section className={styles.section}>
               <h2>Plans</h2>
+              {offers.v2 && (
+                <div role="group" aria-label="Billing period">
+                  <Button variant={yearly ? 'ghost' : 'primary'} aria-pressed={!yearly} onClick={() => setYearly(false)}>Monthly</Button>{' '}
+                  <Button variant={yearly ? 'primary' : 'ghost'} aria-pressed={yearly} onClick={() => setYearly(true)}>Yearly</Button>
+                </div>
+              )}
               <div className={styles.offers}>
-                {Object.entries(offers.plans).map(([key, p]) => (
+                {Object.entries(offers.plans).map(([key, p]) => {
+                  const isYear = offers.v2 ? yearly : p.interval === 'year';
+                  const usd = offers.v2 && yearly ? (p.yearlyUsd ?? p.usd * 12) : p.usd;
+                  return (
                   <Card key={key} className={styles.offer}>
                     <span className={styles.offerName}>{key}</span>
-                    <span className={styles.offerPrice}>{money(p.usd)}<small>{p.interval === 'year' ? '/yr' : '/mo'}</small></span>
-                    <span className={styles.offerCredits}>{count(p.credits)} credits every {p.interval === 'year' ? 'year' : 'month'}</span>
-                    <Button onClick={() => checkout(`plan-${key}`, { plan: key })} disabled={busy !== null}>
+                    <span className={styles.offerPrice}>{money(usd)}<small>{isYear ? '/yr' : '/mo'}</small></span>
+                    <span className={styles.offerCredits}>
+                      {count(p.credits)} credits every {offers.v2 || !isYear ? 'month' : 'year'}{offers.v2 && yearly ? ', billed yearly' : ''}
+                    </span>
+                    <Button onClick={() => checkout(`plan-${key}`, offers.v2 ? { plan: key, interval: yearly ? 'year' : 'month' } : { plan: key })} disabled={busy !== null}>
                       {busy === `plan-${key}` ? 'Redirecting…' : 'Choose plan'}
                     </Button>
                   </Card>
-                ))}
+                  );
+                })}
               </div>
             </section>
             <section className={styles.section}>

@@ -48,7 +48,7 @@ export default function PricingSection() {
           </button>
           <button type="button" aria-pressed={yearly} className={`${styles.opt} ${yearly ? styles.on : ''}`} onClick={() => setYearly(true)}>
             Yearly
-            <span className={styles.save}>Save {Math.round(YEARLY_DISCOUNT * 100)}%</span>
+            {YEARLY_DISCOUNT > 0 && <span className={styles.save}>Save {Math.round(YEARLY_DISCOUNT * 100)}%</span>}
           </button>
         </div>
 

@@ -4,9 +4,15 @@ import {
   stripe,
   getOrCreatePrice,
   getOrCreateTopupPrice,
+  getOrCreateV2Price,
+  planFromPrice,
   PLANS,
   TOPUPS,
+  V2_PLAN_NAMES,
+  V2_PACKS,
 } from '../../lib/stripe';
+import { isBillingV2Strict } from '../../lib/billingFlags';
+import { getPricing, v2Offers } from '../../lib/pricing';
 import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
@@ -178,6 +184,15 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
   return customerId;
 }
 
+/** True when the customer has an active or trialing subscription to one of this app's prices. */
+async function hasOurSubscription(customerId) {
+  for (const status of ['active', 'trialing']) {
+    const list = await stripe().subscriptions.list({ customer: customerId, status, limit: 20, expand: ['data.items.data.price'] });
+    if ((list?.data || []).some((sub) => planFromPrice(sub.items?.data?.[0]?.price))) return true;
+  }
+  return false;
+}
+
 /*
  * Ad attribution for /tracking: lib/adAttribution.js persists the ad-click
  * params (utm_* / fbclid / …) in the `al_attr` cookie (last touch) and
@@ -231,6 +246,18 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Sign in required to buy a top-up.' });
   }
 
+  // What is on sale depends on billing_v2, read strictly: with the flag
+  // unreadable nothing is sold (never the wrong plan at the wrong price).
+  let v2;
+  let offers = null;
+  try {
+    v2 = await isBillingV2Strict();
+    if (v2) offers = v2Offers(await getPricing());
+  } catch (flagErr) {
+    console.error('[checkout] billing flag unavailable', flagErr?.message);
+    return res.status(503).json({ error: 'Please try again.' });
+  }
+
   const origin = buyerOrigin(req);
 
   // Optional: where to send the user after dashboard finishes
@@ -244,10 +271,15 @@ export default async function handler(req, res) {
 
   try {
     if (mode === 'topup') {
-      if (!TOPUPS[pack]) {
+      // Billing v2 sells its own video packs (s/m/l at the configured
+      // price); image packs stay the legacy ones.
+      const v2Pack = v2 && V2_PACKS.includes(pack) ? offers.topups[pack] : null;
+      if (!v2Pack && (!TOPUPS[pack] || (v2 && TOPUPS[pack].kind === 'video'))) {
         return res.status(400).json({ error: 'Invalid top-up pack.' });
       }
-      const price = await getOrCreateTopupPrice(pack);
+      const price = v2Pack
+        ? await getOrCreateV2Price({ kind: 'topup', pack, amountCents: v2Pack.cents, credits: v2Pack.credits })
+        : await getOrCreateTopupPrice(pack);
 
       // Find an existing Stripe customer (never create on click).
       // If none exists, Stripe Checkout creates one at payment
@@ -276,7 +308,7 @@ export default async function handler(req, res) {
         client_reference_id: session.user.id,
         metadata: { ...adAttr, supabase_user_id: session.user.id },
       });
-      const value = TOPUPS[pack].amountCents / 100;
+      const value = (v2Pack ? v2Pack.cents : TOPUPS[pack].amountCents) / 100;
       const eventId = nsEventId(`ic-${checkout.id}`);
       sendCapiEvent({
         eventName: 'InitiateCheckout',
@@ -297,11 +329,16 @@ export default async function handler(req, res) {
       });
     }
 
-    if (plan !== 'monthly' && plan !== 'pro' && plan !== 'yearly') {
+    const interval = req.body?.interval === 'year' ? 'year' : 'month';
+    if (v2 ? !V2_PLAN_NAMES.includes(plan) : plan !== 'monthly' && plan !== 'pro' && plan !== 'yearly') {
       return res.status(400).json({
-        error: "Expected { plan: 'monthly'|'pro'|'yearly' } or { mode: 'topup', pack: 's'|'m'|'l' }.",
+        error: v2
+          ? "Expected { plan: 'starter'|'creator'|'studio', interval?: 'month'|'year' } or { mode: 'topup', pack: 's'|'m'|'l' }."
+          : "Expected { plan: 'monthly'|'pro'|'yearly' } or { mode: 'topup', pack: 's'|'m'|'l' }.",
       });
     }
+    const v2Plan = v2 ? offers.plans[plan] : null;
+    const planCents = v2Plan ? (interval === 'year' ? v2Plan.yearlyCents : v2Plan.monthlyCents) : null;
 
     // Anonymous subscription: route success_url through the claim-
     // and-create-account flow on /sign-up. The user signs up with
@@ -381,7 +418,9 @@ export default async function handler(req, res) {
       'real-estate',
     ]);
     const safeSurface = ALLOWED_SURFACES.has(surface) ? surface : 'default';
-    const price = await getOrCreatePrice(plan, safeSurface);
+    const price = v2Plan
+      ? await getOrCreateV2Price({ kind: 'plan', plan, interval, amountCents: planCents, credits: v2Plan.credits })
+      : await getOrCreatePrice(plan, safeSurface);
 
     // For authed users, look up (never create) an existing Stripe
     // customer. If one is found we pass `customer: customerId` so
@@ -403,6 +442,15 @@ export default async function handler(req, res) {
       });
     }
 
+    // One plan per customer: a second subscription would bill twice. Plan
+    // changes go through the Stripe customer portal (docs/go-live.md).
+    if (v2Plan && subCustomerId && (await hasOurSubscription(subCustomerId))) {
+      return res.status(409).json({
+        error: 'You already have a plan. To change it, use Manage billing or contact support.',
+        code: 'HAS_PLAN',
+      });
+    }
+
     const checkout = await stripe().checkout.sessions.create({
       mode: 'subscription',
       payment_method_types: ['card'],
@@ -420,7 +468,7 @@ export default async function handler(req, res) {
     });
 
     // Pixel value: actual cents charged today.
-    const value = PLANS[plan].amountCents / 100;
+    const value = (v2Plan ? planCents : PLANS[plan].amountCents) / 100;
     const eventId = nsEventId(`ic-${checkout.id}`);
     sendCapiEvent({
       eventName: 'InitiateCheckout',
@@ -432,6 +480,7 @@ export default async function handler(req, res) {
       customData: {
         kind: 'subscription',
         plan,
+        ...(v2Plan ? { interval } : {}),
         ...(session?.user?.id ? { supabase_user_id: session.user.id } : { anonymous: 1 }),
       },
     }).catch(() => {});

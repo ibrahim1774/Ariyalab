@@ -1,4 +1,4 @@
-import { stripe, planFromPrice, topupFromPrice, PLANS, CAPS } from '../../../lib/stripe';
+import { stripe, planFromPrice, topupFromPrice, planAmountCents, planCap } from '../../../lib/stripe';
 import {
   assertCanLink,
   linkStripeCustomerToProfile,
@@ -144,7 +144,7 @@ export default async function handler(req, res) {
     let value;
     if (plan) {
       eventKind = 'subscription';
-      value = PLANS[plan].amountCents / 100;
+      value = planAmountCents(plan, price) / 100;
     } else if (topup) {
       eventKind = topup.kind === 'image' ? 'topup-image' : 'topup';
       value = topup.amountCents / 100;
@@ -186,7 +186,7 @@ export default async function handler(req, res) {
       ok: true,
       kind: eventKind,
       tier: plan || 'unknown',
-      videoCap: plan ? CAPS[plan] : 0,
+      videoCap: plan ? planCap(plan, price) : 0,
       creditsAdded,
       ...(grant.inProgress ? { inProgress: true } : {}),
       ...(grant.skipped ? { skipped: grant.skipped } : {}),

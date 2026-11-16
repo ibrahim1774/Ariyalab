@@ -1,4 +1,4 @@
-import { stripe, planFromPrice, topupFromPrice, PLANS } from '../../lib/stripe';
+import { stripe, planFromPrice, topupFromPrice, planAmountCents } from '../../lib/stripe';
 import { sendCapiEvent } from '../../lib/meta';
 import { KEY, nsEventId } from '../../lib/metaKeys';
 import { getSupabaseAdmin } from '../../lib/supabaseServer';
@@ -8,6 +8,7 @@ import {
   grantForCheckoutSession,
   grantForInvoice,
   clawbackForPayment,
+  syncSubscription,
   recordStripeEvent,
   isStripeEventRecorded,
 } from '../../lib/grants';
@@ -46,7 +47,8 @@ import {
  *   1. Stripe Dashboard → Webhooks → endpoint
  *      https://<host>/api/stripe-webhook subscribed to
  *      invoice.payment_succeeded, checkout.session.completed,
- *      charge.refunded, charge.dispute.created
+ *      charge.refunded, charge.dispute.created,
+ *      customer.subscription.updated, customer.subscription.deleted
  *   2. Add STRIPE_WEBHOOK_SECRET (whsec_…) to Vercel env vars.
  */
 
@@ -96,7 +98,7 @@ export default async function handler(req, res) {
     if (await isStripeEventRecorded(event.id)) {
       return res.status(200).json({ received: true, duplicate: true });
     }
-    await handle(event.data.object, req);
+    await handle(event.data.object, req, event);
     await recordStripeEvent(event.id);
   } catch (err) {
     console.error('[stripe-webhook] handler threw', event.type, event.id, err.message);
@@ -112,7 +114,17 @@ const HANDLERS = {
   'checkout.session.completed': handleCheckoutSessionCompleted,
   'charge.refunded': (charge) => handleRefundOrDispute({ charge }),
   'charge.dispute.created': (dispute) => handleRefundOrDispute({ dispute }),
+  // Yearly v2 bookkeeping and mid-period upgrades (lib/grants.js syncSubscription).
+  'customer.subscription.updated': (sub, _req, event) => handleSubscriptionChange(sub, event, false),
+  'customer.subscription.deleted': (sub, _req, event) => handleSubscriptionChange(sub, event, true),
 };
+
+async function handleSubscriptionChange(sub, event, deleted) {
+  const result = await syncSubscription(sub, event?.data?.previous_attributes || {}, { deleted });
+  if (result.upgrade && typeof result.upgrade === 'object') {
+    console.info('[stripe-webhook] plan upgrade granted', sub.id, JSON.stringify(result.upgrade));
+  }
+}
 
 async function handleRefundOrDispute(payment) {
   const result = await clawbackForPayment(payment);
@@ -160,7 +172,7 @@ async function handleInvoicePaymentSucceeded(eventInvoice, req) {
   if (invoice.billing_reason === 'subscription_create') return;
   if (!invoice.amount_paid || invoice.amount_paid <= 0) return;
 
-  const value = PLANS[plan].amountCents / 100;
+  const value = planAmountCents(plan, price) / 100;
 
   const customerId =
     typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;

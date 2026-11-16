@@ -1,3 +1,4 @@
+import useV2Offers from './useV2Offers';
 import { useEffect, useState } from 'react';
 
 import paywallStyles from './Paywall.module.css';
@@ -78,6 +79,13 @@ export default function TopupRow({
   onLocalError,
   surface = 'video',
 }) {
+  // Billing v2 on: the packs /api/checkout sells now ({ s: { usd, credits }, ... }), so the
+  // price shown is the price charged on every page that shows this row.
+  const offers = useV2Offers();
+  const v2Topups = offers?.billingV2 ? offers.topups : null;
+  const videoPacks = v2Topups
+    ? Object.entries(v2Topups).map(([pack, t]) => ({ pack, label: '$' + t.usd, credits: t.credits }))
+    : VIDEO_PACKS;
   const inflateImage = surface === 'glow-up' || surface === 'interior-design';
   const imageNoun = IMAGE_NOUNS[surface] || 'images';
   const [busy, setBusy] = useState(null);
@@ -164,7 +172,7 @@ export default function TopupRow({
 
   return (
     <>
-      {renderRow('Video credits', VIDEO_PACKS, 'video credits', false)}
+      {renderRow('Video credits', videoPacks, 'video credits', false)}
       {renderRow('Image credits', IMAGE_PACKS, 'image credits', inflateImage, imageNoun)}
       {localError && (
         <div className={paywallStyles.error} style={{ marginTop: 12 }}>

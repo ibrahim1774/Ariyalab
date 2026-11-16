@@ -1,4 +1,4 @@
-import { stripe, planFromPrice, PLANS, CAPS } from '../../../lib/stripe';
+import { stripe, planFromPrice, planAmountCents, planCap } from '../../../lib/stripe';
 import {
   assertCanLink,
   linkStripeCustomerToProfile,
@@ -145,12 +145,12 @@ export default async function handler(req, res) {
         alreadyProcessed: Boolean(grant.already),
         ...(grant.skipped ? { skipped: grant.skipped } : {}),
         tier: plan,
-        videoCap: CAPS[plan],
+        videoCap: planCap(plan, price),
       });
     }
 
     const sub = checkoutSession.subscription;
-    const value = PLANS[plan].amountCents / 100;
+    const value = planAmountCents(plan, price) / 100;
     // Match /api/checkout/confirm.js: a trialing yearly sub fires
     // StartTrial (no charge yet); the real Purchase fires from the
     // Stripe webhook when the post-trial invoice is paid.
@@ -176,7 +176,7 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       tier: plan,
-      videoCap: CAPS[plan],
+      videoCap: planCap(plan, price),
       meta: { eventId, eventName, value: reportedValue, currency: 'USD' },
     });
   } catch (err) {

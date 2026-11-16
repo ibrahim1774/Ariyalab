@@ -109,7 +109,8 @@ async function ourSubscription(stripe, customerId) {
   for (const sub of list?.data || []) {
     if (sub.status !== 'active' && sub.status !== 'trialing') continue;
     const plan = planFromPrice(sub.items?.data?.[0]?.price);
-    if (plan) return { sub, plan };
+    // A billing-v2 plan is already granted in the ledger: not a legacy balance.
+    if (plan && CAPS[plan] !== undefined) return { sub, plan };
   }
   return { sub: null, plan: null };
 }

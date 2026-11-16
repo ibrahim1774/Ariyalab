@@ -115,6 +115,10 @@ export const stripeModule = {
   CAPS: { monthly: PLAN_CAP, pro: PLAN_CAP, yearly: PLAN_CAP },
   TRIAL_CREDITS: 2,
   planFromPrice: () => 'monthly',
+  // Billing v2 resolvers (lib/stripe.js): the fake price is always a legacy plan.
+  planInfoFromPrice: () => null,
+  planCap: () => PLAN_CAP,
+  planAmountCents: () => 500,
 };
 
 // ---- providers ------------------------------------------------------

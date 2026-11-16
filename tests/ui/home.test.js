@@ -72,7 +72,10 @@ describe('homepage', () => {
     renderPage();
     for (const p of ['$29', '$49', '$99']) expect(screen.getByText(p)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /yearly/i }));
-    for (const p of ['$23.20', '$39.20', '$79.20']) expect(screen.getByText(p)).toBeInTheDocument();
+    // No yearly discount until the owner sets one (pricing_config yearlyDiscount): same per-month price, billed yearly.
+    for (const p of ['$29.00', '$49.00', '$99.00']) expect(screen.getByText(p)).toBeInTheDocument();
+    expect(screen.getByText('Billed yearly at $348.00')).toBeInTheDocument();
+    expect(screen.queryByText(/save \d+%/i)).toBeNull();
     expect(screen.getAllByText(/about \d+ videos/i)).toHaveLength(3);
   });
 
@@ -129,7 +132,7 @@ describe('pricing data', () => {
     expect(PLANS.starter).toEqual({ usd: 29, credits: 1500 });
     expect(PLANS.creator).toEqual({ usd: 49, credits: 2600 });
     expect(PLANS.studio).toEqual({ usd: 99, credits: 5400 });
-    expect(YEARLY_DISCOUNT).toBe(0.2);
+    expect(YEARLY_DISCOUNT).toBe(0);
     expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(2);
     expect(videosPerPlan({ credits: 5400, quality: 'pro_narrated', seconds: 45 })).toBe(7);
   });
