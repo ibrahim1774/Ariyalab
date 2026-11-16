@@ -6,6 +6,7 @@ import { put } from '@vercel/blob';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
 import { getUserFromRequest } from '../../lib/supabaseServer';
+import { downloadLegacyVideo, legacyVideoInputArgs, LegacyMediaError } from '../../lib/legacyMedia';
 
 export const config = {
   api: {
@@ -81,17 +82,9 @@ export default async function handler(req, res) {
   const outPath = path.join(tmp, `${id}-out.mp4`);
 
   try {
-    // Download all clips in parallel to /tmp.
-    await Promise.all(
-      videoUrls.map(async (url, i) => {
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          throw new Error(`Could not fetch clip ${i + 1} (${resp.status})`);
-        }
-        const buf = Buffer.from(await resp.arrayBuffer());
-        await fs.writeFile(inPaths[i], buf);
-      })
-    );
+    // Download all clips in parallel to /tmp: guarded (no private addresses), capped, mp4/mov only
+    // (lib/legacyMedia.js). Each file is checked, so the concat demuxer below only ever reads mp4/mov files.
+    await Promise.all(videoUrls.map((url, i) => downloadLegacyVideo(url, inPaths[i])));
 
     // Build concat list file with one "file '<path>'" line per input.
     // -safe 0 is required when absolute paths are used.
@@ -101,6 +94,8 @@ export default async function handler(req, res) {
     const fastArgs = [
       '-y',
       '-loglevel', 'warning',
+      // The list is ours; the file protocol only, so it (and the files it names) can only be read from disk.
+      '-protocol_whitelist', 'file',
       '-f', 'concat',
       '-safe', '0',
       '-i', listPath,
@@ -118,7 +113,7 @@ export default async function handler(req, res) {
       // Filter_complex re-encode fallback — rescales every input to
       // match the first, which guarantees concat works even if codecs
       // or resolutions differ.
-      const inputArgs = inPaths.flatMap((p) => ['-i', p]);
+      const inputArgs = inPaths.flatMap((p) => [...legacyVideoInputArgs(), '-i', p]);
       const n = inPaths.length;
       const scaled = Array.from({ length: n }, (_, i) =>
         `[${i}:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30[v${i}]`
@@ -164,6 +159,7 @@ export default async function handler(req, res) {
       method: used,
     });
   } catch (err) {
+    if (err instanceof LegacyMediaError) return res.status(err.status).json({ error: err.message });
     console.error('[concat-videos] failed', err);
     return res.status(500).json({
       error: err.message || 'Video concatenation failed.',

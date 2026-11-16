@@ -6,6 +6,7 @@ import { put } from '@vercel/blob';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 
 import { getUserFromRequest } from '../../lib/supabaseServer';
+import { downloadLegacyVideo, legacyVideoInputArgs, LegacyMediaError } from '../../lib/legacyMedia';
 
 export const config = {
   api: {
@@ -69,12 +70,8 @@ export default async function handler(req, res) {
   const outPath = path.join(os.tmpdir(), `${id}.jpg`);
 
   try {
-    const videoResp = await fetch(videoUrl);
-    if (!videoResp.ok) {
-      throw new Error(`Could not fetch source video (${videoResp.status})`);
-    }
-    const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
-    await fs.writeFile(inPath, videoBuffer);
+    // Guarded download (no private addresses), capped, and mp4/mov only (lib/legacyMedia.js).
+    await downloadLegacyVideo(videoUrl, inPath);
 
     // Two-stage fallback: sseof is fast but can fail on non-keyframe
     // endings; if it doesn't produce output, fall back to seeking most
@@ -83,6 +80,7 @@ export default async function handler(req, res) {
       '-y',
       '-loglevel', 'warning',
       '-sseof', '-1',
+      ...legacyVideoInputArgs(),
       '-i', inPath,
       '-update', '1',
       '-q:v', '3',
@@ -103,6 +101,7 @@ export default async function handler(req, res) {
       const args2 = [
         '-y',
         '-loglevel', 'warning',
+        ...legacyVideoInputArgs(),
         '-i', inPath,
         '-vf', 'select=eq(n\\,NB_FRAMES-1)',
         '-vsync', 'vfr',
@@ -116,6 +115,7 @@ export default async function handler(req, res) {
         const args3 = [
           '-y',
           '-loglevel', 'warning',
+          ...legacyVideoInputArgs(),
           '-i', inPath,
           '-vf', "select='gte(t,n_seconds-0.1)'",
           '-frames:v', '1',
@@ -140,6 +140,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ frameUrl: blob.url });
   } catch (err) {
+    if (err instanceof LegacyMediaError) return res.status(err.status).json({ error: err.message });
     console.error('[extract-last-frame] failed', err);
     return res
       .status(500)

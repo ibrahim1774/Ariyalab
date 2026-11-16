@@ -5,6 +5,7 @@ import os from 'os';
 import { put } from '@vercel/blob';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
 import { getUserFromRequest } from '../../lib/supabaseServer';
+import { downloadLegacyVideo, legacyVideoInputArgs, LegacyMediaError } from '../../lib/legacyMedia';
 
 export const config = {
   api: {
@@ -67,17 +68,14 @@ export default async function handler(req, res) {
   const outPath = path.join(os.tmpdir(), `${id}.jpg`);
 
   try {
-    const videoResp = await fetch(videoUrl);
-    if (!videoResp.ok) {
-      throw new Error(`Could not fetch source video (${videoResp.status})`);
-    }
-    const videoBuffer = Buffer.from(await videoResp.arrayBuffer());
-    await fs.writeFile(inPath, videoBuffer);
-    console.log('[extract-frame] written to tmp', { bytes: videoBuffer.length, inPath });
+    // Guarded download (no private addresses), capped, and mp4/mov only (lib/legacyMedia.js).
+    await downloadLegacyVideo(videoUrl, inPath);
+    console.log('[extract-frame] written to tmp', { inPath });
 
     const args = [
       '-y',
       '-loglevel', 'warning',
+      ...legacyVideoInputArgs(),
       '-i', inPath,
       '-frames:v', '1',
       '-q:v', '3',
@@ -108,6 +106,7 @@ export default async function handler(req, res) {
     console.log('[extract-frame] uploaded', { url: blob.url });
     return res.status(200).json({ frameUrl: blob.url });
   } catch (err) {
+    if (err instanceof LegacyMediaError) return res.status(err.status).json({ error: err.message });
     console.error('[extract-frame] failed', err);
     return res
       .status(500)
