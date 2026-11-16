@@ -32,13 +32,13 @@ Then start Claude Code, type `/mcp`, choose **ariya-lab** and **Authenticate**. 
 
 ## What Claude can do
 
-Claude follows the same steps as the website: create a project, break down a reference video, write and change the script, make the characters, the storyboard and the video clips, put the video together and give you the link.
+Claude follows the same steps as the website: create a project, break down a reference video, write and change the script, make the characters, the storyboard, the narration, the music and the video clips, put the video together and give you the link.
 
-Pictures, clips and the final video take a little while. Claude starts them and checks back until they are done.
+Writing the script and characters, pictures, clips, the voice and the final video take a little while. Claude starts them and checks back until they are done.
 
 ## Credits
 
-Claude spends the same credits as the website at the same prices. Before anything that costs credits (the project fee, extra pictures, the video clips), Claude tells you the price and waits for your yes. Nothing is charged until you agree.
+Claude spends the same credits as the website at the same prices. Before anything that costs credits (the project fee, extra pictures, extra narration or music, the video clips), Claude tells you the price and waits for your yes. Nothing is charged until you agree.
 
 ## Disconnect
 
