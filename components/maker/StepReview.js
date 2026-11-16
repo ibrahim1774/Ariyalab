@@ -43,6 +43,7 @@ function ClipActions({ shot, project, status, refresh, returnTo }) {
             {busy ? 'Making it again…' : price ? `Make it again (${price} credits)` : 'Make it again'}
           </Button>
           <span className={styles.hint} data-testid="reroll-info">{info.text}</span>
+          {shot.error && <span className={styles.hint} role="status" data-testid="reroll-error">{shot.error}</span>}
         </>
       )}
       <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />

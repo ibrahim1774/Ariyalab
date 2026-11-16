@@ -61,12 +61,16 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
   // With a server quote the label describes what was quoted (the shots), not the brief. While a
   // re-quote for edited shots is on its way the total is the old one, so the label says it is updating.
   const quoteIsStale = Boolean(quote) && quote.shotSignature !== shotSignature;
-  const qualities = [...new Set(shots.map((s) => s.quality))];
+  // The server says which shots its total covers (shotIds): only the shots still to make once clips exist.
+  const quoted = Array.isArray(quote?.shotIds) ? shots.filter((s) => quote.shotIds.includes(s.id)) : shots;
+  const qualities = [...new Set(quoted.map((s) => s.quality))];
   const subLabel = quoteIsStale
     ? 'Updating the quote\u2026'
-    : quote && shots.length > 0
-      ? `${shots.length} ${shots.length === 1 ? 'shot' : 'shots'}, ${shots.reduce((n, s) => n + (s.seconds || 0), 0)} seconds, ${qualities.length === 1 ? QUALITY_LABELS[qualities[0]] || qualities[0] : 'Mixed quality'}`
-      : `${QUALITY_LABELS[project.quality] || project.quality}, ${project.seconds} seconds`;
+    : quote && Array.isArray(quote.shotIds) && quoted.length === 0 && shots.length > 0
+      ? 'Every shot is made'
+      : quote && quoted.length > 0
+        ? `${quoted.length} ${quoted.length === 1 ? 'shot' : 'shots'}${quoted.length < shots.length ? ' to make' : ''}, ${quoted.reduce((n, s) => n + (s.seconds || 0), 0)} seconds, ${qualities.length === 1 ? QUALITY_LABELS[qualities[0]] || qualities[0] : 'Mixed quality'}`
+        : `${QUALITY_LABELS[project.quality] || project.quality}, ${project.seconds} seconds`;
   return (
     <section className={styles.bar} aria-label="Credit estimate" data-testid="quote-bar">
       <div className={styles.row}>

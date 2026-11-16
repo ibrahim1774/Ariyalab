@@ -17,6 +17,7 @@ vi.mock('../../lib/story/client', async (importOriginal) => {
 const client = await import('../../lib/story/client');
 const { describeError } = await import('../../components/maker/errors');
 const { default: StepReview } = await import('../../components/maker/StepReview');
+const { default: QuoteBar } = await import('../../components/maker/QuoteBar');
 const { startable } = await import('../../components/maker/StepGenerate');
 const { rerollInfo, shotCredits } = await import('../../components/maker/steps');
 const { DEFAULTS } = await import('../../lib/pricingConstants');
@@ -41,6 +42,25 @@ describe('Task 16 maker edits', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Make it again (42 credits)' }));
     await waitFor(() => expect(client.rerollShot).toHaveBeenCalledWith('p1', 's1', 42));
     expect(screen.getByTestId('reroll-info')).toHaveTextContent('0 tries included, then 42 credits');
+  });
+
+  it('says when a remake did not work and the earlier clip was kept', () => {
+    const shots = [shot(1, { reroll_credits: 0, error: 'The new clip could not be made, so this shot keeps its earlier clip.' })];
+    render(<StepReview project={project} shots={shots} status={{ shots, project, rerolls: { included: 3, used: 1, left: 2 } }} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByTestId('reroll-error')).toHaveTextContent('keeps its earlier clip');
+    expect(screen.getByRole('button', { name: 'Continue to finish' })).toBeEnabled();
+  });
+
+  it('QuoteBar describes the shots the quote covers, not every shot', async () => {
+    client.getBilling.mockResolvedValue({ v2: true, balance: { available: 900 }, history: [] });
+    const shots = [shot(1), shot(2), shot(3, { status: 'still_ready', clip_url: null })];
+    client.getQuote.mockResolvedValue({ total: 42, lines: [{ label: '1 Pro narrated shot', credits: 42 }], holdNeeded: 42, shotIds: ['s3'] });
+    const { unmount } = render(<QuoteBar project={project} shots={shots} />);
+    await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('1 shot to make, 3 seconds, Pro narrated'));
+    unmount();
+    client.getQuote.mockResolvedValue({ total: 0, lines: [], holdNeeded: 0, shotIds: [] });
+    render(<QuoteBar project={project} shots={shots.slice(0, 2)} />);
+    await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('Every shot is made'));
   });
 
   it('the client sends expected_credits only when given', async () => {

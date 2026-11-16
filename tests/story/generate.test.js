@@ -501,16 +501,32 @@ describe('clip handler (carries 5, 6, 7)', () => {
     expect(failed.status).toBe('failed');
     expect(failed.error).toMatch(/try again/i);
     expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [failed.id] })).total).toBe(42);
-    // A free re-roll that fails is retried free.
+    // A free re-roll that fails leaves the shot ready with its earlier clip; Make it again retries it free
+    // and uses no second free re-roll.
     await storyDb().update('story_shots', { id: ctx.shots[1].id }, { description: 'Shot two [[mock:fail]]' });
+    const before = await shotRow(ctx.shots[1].id);
     await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[1].id });
     await finishJobs(ctx.project.id);
     const s1 = await shotRow(ctx.shots[1].id);
-    expect(s1.status).toBe('failed');
-    expect(s1.clip_url).toBeTruthy(); // the earlier clip stays
-    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [s1.id] });
-    expect(q.total).toBe(0);
-    expect(q.lines).toEqual([{ label: '1 retry', credits: 0 }]);
+    expect(s1).toMatchObject({ status: 'ready', clip_url: before.clip_url, clip_key: before.clip_key });
+    expect(s1.error).toMatch(/keeps its earlier clip/);
+    expect((await projectRow(ctx.project.id)).rerolls_used).toBe(1);
+    await expect(quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [s1.id] })).rejects.toMatchObject({ code: 'already_ready' });
+    const status = (await getStatus(ctx)).body;
+    expect(status.shots.find((s) => s.id === s1.id).reroll_credits).toBe(0);
+    const again = await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: s1.id, expectedCredits: 0 });
+    expect(again.charged).toBe(0);
+    expect((await projectRow(ctx.project.id)).rerolls_used).toBe(1);
+    expect((await clipJobs(ctx.project.id)).at(-1).payload.kind).toBe('retry');
+    await finishJobs(ctx.project.id);
+    // A failed paid re-roll is retried at its price again, once.
+    await storyDb().update('story_projects', { id: ctx.project.id }, { rerolls_used: 2 });
+    await storyDb().update('story_shots', { id: ctx.shots[3].id }, { description: 'Shot four [[mock:fail]]' });
+    expect((await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id })).charged).toBe(42);
+    await finishJobs(ctx.project.id);
+    expect((await balance(ctx.userId)).held).toBe(0);
+    const paidRetry = (await getStatus(ctx)).body.shots.find((s) => s.id === ctx.shots[3].id);
+    expect(paidRetry).toMatchObject({ status: 'ready', reroll_credits: 42 });
     // A failed still (status failed, latest clip job done) is not a clip retry: the shot has its clip.
     await storyDb().update('story_shots', { id: ctx.shots[2].id }, { status: 'failed' });
     expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).shotIds).not.toContain(ctx.shots[2].id);
@@ -637,10 +653,15 @@ describe('carry 8: runner and delete', () => {
     await storyDb().update('story_jobs', { id: job.id }, { status: 'failed', applied_at: null });
     await expect(deleteProject({ userId: ctx.userId, id: ctx.project.id })).rejects.toMatchObject({ status: 409 });
     await storyDb().update('story_jobs', { id: job.id }, { applied_at: new Date().toISOString() });
-    await storyDb().update('story_projects', { id: ctx.project.id }, { gen_claim_id: randomUUID() });
+    // A claim being queued right now is refused; one left by a dead request is recovered (its hold given back) and deleted.
+    const holdId = randomUUID();
+    await holdCredits({ userId: ctx.userId, currency: 'video', amount: 10, projectId: ctx.project.id, holdId });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { gen_claim_id: randomUUID(), gen_hold_id: holdId, gen_claimed_at: new Date().toISOString(), gen_shots: [] });
     await expect(deleteProject({ userId: ctx.userId, id: ctx.project.id })).rejects.toMatchObject({ status: 409 });
-    await storyDb().update('story_projects', { id: ctx.project.id }, { gen_claim_id: null });
+    await raw.query(`update story_projects set gen_claimed_at = now() - interval '5 minutes' where id = $1`, [ctx.project.id]);
     await expect(deleteProject({ userId: ctx.userId, id: ctx.project.id })).resolves.toEqual({ id: ctx.project.id });
+    expect((await holdOf(holdId)).status).toBe('closed');
+    expect((await holdOf(holdId)).remaining).toBe(0);
   });
 });
 

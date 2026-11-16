@@ -28,8 +28,10 @@
 --   -> the claimed rows, or no row.
 --
 -- story_delete_project now also refuses ('project_busy') while a job's hold
--- share is not settled or released yet (applied_at null with a hold), or a
--- still, cast round or clip start is being claimed (its hold is in flight).
+-- share is not settled or released yet (applied_at null with a hold; the
+-- runner always ends that state, marking the row applied even when it gives
+-- up), or a still, cast round or clip start claimed in the last 2 minutes is
+-- still being queued (its hold is in flight).
 
 alter table public.story_shots
   add column clip_round integer not null default 0 check (clip_round >= 0),
@@ -136,10 +138,12 @@ begin
   ) then
     raise exception 'project_busy';
   end if;
-  -- A start whose hold is in flight (claimed, not queued yet).
-  if exists (select 1 from story_projects where id = p_project and gen_claim_id is not null)
-     or exists (select 1 from story_shots where project_id = p_project and still_hold_id is not null)
-     or exists (select 1 from story_cast where project_id = p_project and hold_id is not null) then
+  -- A start whose hold is in flight (claimed in the last 2 minutes, not queued yet). Older claims were
+  -- left by requests that died: deleteProject (lib/story/projects.js) runs the stall recoveries first, which
+  -- give their holds back; a dead cast round's hold is left to the stale-hold sweeper.
+  if exists (select 1 from story_projects where id = p_project and gen_claim_id is not null and gen_claimed_at > now() - interval '2 minutes')
+     or exists (select 1 from story_shots where project_id = p_project and still_hold_id is not null and still_claimed_at > now() - interval '2 minutes')
+     or exists (select 1 from story_cast where project_id = p_project and hold_id is not null and updated_at > now() - interval '2 minutes') then
     raise exception 'project_busy';
   end if;
   delete from story_projects where id = p_project;
