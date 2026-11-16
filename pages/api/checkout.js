@@ -274,6 +274,11 @@ export default async function handler(req, res) {
       // Billing v2 sells its own video packs (s/m/l at the configured
       // price); image packs stay the legacy ones.
       const v2Pack = v2 && V2_PACKS.includes(pack) ? offers.topups[pack] : null;
+      // s/m/l name the legacy packs too: a page that drew the legacy prices (offers not loaded,
+      // or loaded before the flip) must not buy a v2 pack at another price.
+      if (v2Pack && req.body?.catalog !== 'v2') {
+        return res.status(409).json({ error: 'Prices have changed. Reload the page and try again.', code: 'RELOAD' });
+      }
       if (!v2Pack && (!TOPUPS[pack] || (v2 && TOPUPS[pack].kind === 'video'))) {
         return res.status(400).json({ error: 'Invalid top-up pack.' });
       }

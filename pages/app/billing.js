@@ -170,7 +170,7 @@ export default function BillingPage() {
                   <Card key={key} className={styles.offer}>
                     <span className={styles.offerPrice}>{money(t.usd)}</span>
                     <span className={styles.offerCredits}>{count(t.credits)} credits, no expiry</span>
-                    <Button variant="ghost" onClick={() => checkout(`topup-${key}`, { mode: 'topup', pack: key })} disabled={busy !== null}>
+                    <Button variant="ghost" onClick={() => checkout(`topup-${key}`, offers.v2 ? { mode: 'topup', pack: key, catalog: 'v2' } : { mode: 'topup', pack: key })} disabled={busy !== null}>
                       {busy === `topup-${key}` ? 'Redirecting…' : 'Buy credits'}
                     </Button>
                   </Card>

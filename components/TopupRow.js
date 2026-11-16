@@ -111,7 +111,7 @@ export default function TopupRow({
       const res = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'topup', pack, returnTo }),
+        body: JSON.stringify({ mode: 'topup', pack, returnTo, ...(v2Topups ? { catalog: 'v2' } : {}) }),
       });
       const data = await res.json();
       if (!res.ok || !data.url) {

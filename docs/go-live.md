@@ -111,9 +111,12 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
 - Prices are created lazily on the first checkout click (idempotent on `lookup_key`). Billing v2 keys start with
   `ariya_v2_` and name the amount and credits (`ariya_v2_creator_month_4900_2600`), so a price edited in the admin
   pricing editor becomes a new Stripe price; subscribers keep the price and credits they bought.
-- Plan changes: checkout refuses a second plan (409). Set up the Stripe customer portal for upgrades and downgrades.
-  An upgrade grants the difference in monthly credits once for the current period; a downgrade takes effect at
-  renewal.
+- Plan changes: checkout refuses a second plan (409). Set up the Stripe customer portal for plan switches with
+  **upgrades invoiced immediately** (proration "always invoice") and **downgrades at the end of the period**. An
+  upgrade's credits (the difference in monthly credits, once per period) are granted only when its proration invoice
+  is paid; with prorations left for the next cycle invoice, that period's upgrade credits are never granted. A
+  downgrade grants nothing and the lower allotment starts at renewal. Refunding an upgrade invoice does not take the
+  upgrade credits back (claw back by hand from /admin if needed).
 - Yearly v2 plans: the invoice grants the first month, `/api/cron/grant-yearly` grants each following month
   (`yearly:<subscription>:<YYYY-MM>`). A refunded yearly invoice stops the remaining months.
 
