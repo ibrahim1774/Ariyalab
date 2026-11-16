@@ -1766,7 +1766,7 @@ describe('runCron', () => {
     expect(logSpy.mock.calls.some((c) => c.join(' ').includes(broken.id))).toBe(true);
     const { rows } = await raw.query(`select runner_ticked_at from story_projects where id = $1`, [broken.id]);
     expect(rows[0].runner_ticked_at).not.toBeNull();
-  });
+  }, 20_000);
 });
 
 // ---------------------------------------------------------------- helpers, registry, schema

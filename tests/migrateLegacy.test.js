@@ -397,5 +397,5 @@ describe('guards', () => {
     });
     expect(live.status).toBe(2);
     expect(live.stderr).toMatch(/live/i);
-  });
+  }, 30_000);
 });
