@@ -76,6 +76,19 @@ describe('Task 16 maker edits', () => {
     expect(rerollInfo({ shots, project: { rerolls_used: 0 } }, shots[0]).left).toBe(3);
   });
 
+  it('round 2 H2: "Spent" only when every shot has its clip; busy and blocked shots say so', async () => {
+    client.getBilling.mockResolvedValue({ v2: true, balance: { available: 900 }, history: [] });
+    client.getQuote.mockResolvedValue({ total: 0, lines: [], holdNeeded: 0, shotIds: [], spent: 84 });
+    const { unmount } = render(<QuoteBar project={project} shots={[shot(1), shot(2, { status: 'generating', clip_url: null })]} />);
+    await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('1 shot being made'));
+    expect(screen.queryByText('Spent on this video')).toBeNull();
+    expect(screen.getByText('Charged so far')).toBeInTheDocument();
+    unmount();
+    render(<QuoteBar project={project} shots={[shot(1), shot(2, { status: 'blocked', clip_url: null })]} />);
+    await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('1 shot needs a new description'));
+    expect(screen.queryByText('Spent on this video')).toBeNull();
+  });
+
   it('the client sends expected_credits only when given', async () => {
     const actual = await vi.importActual('../../lib/story/client');
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) }));

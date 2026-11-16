@@ -33,10 +33,11 @@
 --                    sig is unchanged, and markStale uses the same sig.
 -- still_base_round : the still_round of the last description change. A failed
 --                    still job from before it cannot be retried.
--- clip_mismatch    : the clip no longer matches the shot's own description or
---                    still (a description edit, or a new still that landed, on
---                    a shot with a clip). Such a shot stays stale through rebuilds; making
---                    a new clip (Task 16) clears it with stale.
+-- clip_mismatch    : the clip no longer matches the shot's own description,
+--                    still or quality (a description edit, a new still that
+--                    landed, or a quality change, on a shot with a clip). Such a
+--                    shot stays stale through rebuilds; making a new clip
+--                    (Task 16) clears it with stale.
 -- still_round never moves backwards: a start that is put back keeps its round,
 -- so a job of the aborted start can never land on a later attempt.
 --

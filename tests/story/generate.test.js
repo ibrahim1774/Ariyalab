@@ -914,7 +914,7 @@ describe('round 1', () => {
     await storyDb().update('story_shots', { id: ctx.shots[0].id }, { cast_ids: [maya.id, leo.id] });
     await generateAll(ctx);
     const [job] = await clipJobs(ctx.project.id);
-    expect(job.payload.elements).toEqual([{ name: 'Maya', description: 'A barber in an apron.', imageUrls: ['/pick/maya.png', '/sheet/maya.png'] }]);
+    expect(job.payload.elements).toEqual([{ name: 'Maya', description: 'Maya: A barber in an apron.', imageUrls: ['/pick/maya.png', '/sheet/maya.png'] }]); // round 2 H7: display name in the description
     expect(job.payload.prompt).toContain('@Maya');
     expect(job.payload.prompt).not.toContain('@Leo');
     await expect(clipHandler.submit({ ...job, attempts: 1 })).resolves.toHaveProperty('taskId');
@@ -1009,5 +1009,106 @@ describe('round 1', () => {
     vi.setSystemTime(new Date(Date.now() + 4_000));
     await getStatus(ctx);
     expect((await clipJobs(ctx.project.id)).find((j) => j.shot_id === ctx.shots[1].id).status).toBe('running');
+  });
+});
+
+// ---------------------------------------------------------------- round 2
+
+describe('round 2', () => {
+  it('H1 (q2): a lost claim that takes out a queued job puts its shot back', async () => {
+    const ctx = await newProject({ n: 2 });
+    const pid = ctx.project.id;
+    const adapter = storyDb();
+    const origUpdate = adapter.update;
+    let gate = null;
+    let open;
+    adapter.update = async (table, match, patch, ...rest) => {
+      if (table === 'story_jobs' && patch?.payload?.accounted && gate) {
+        const g = gate;
+        gate = null;
+        await g;
+      }
+      return origUpdate.call(adapter, table, match, patch, ...rest);
+    };
+    let n = 0;
+    let recovery;
+    _setShotsDeps({
+      enqueue: async (args) => {
+        const job = await enqueue(args);
+        n += 1;
+        if (n === 1) {
+          await raw.query("update story_projects set gen_claimed_at = now() - interval '1 hour' where id = $1", [pid]);
+          gate = new Promise((r) => { open = r; });
+          recovery = recoverStalledClips(pid);
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        return job;
+      },
+    });
+    try {
+      const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 84 }).catch((e) => e);
+      expect(err.status).toBe(409);
+    } finally {
+      open?.();
+      await recovery;
+      adapter.update = origUpdate;
+      _setShotsDeps();
+    }
+    expect(await clipJobs(pid)).toHaveLength(0);
+    expect((await shotRows(pid)).every((s) => s.status === 'still_ready')).toBe(true);
+    expect((await balance(ctx.userId)).held).toBe(0);
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: pid })).shotIds).toHaveLength(2);
+  });
+
+  it('H3: a redone onDone still moves the project to review', async () => {
+    const ctx = await newProject({ n: 1 });
+    await generateAll(ctx);
+    const [job] = await clipJobs(ctx.project.id);
+    await clipHandler.onDone(job, { url: '/a.mp4', key: 'a' });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { step: 'generate' }); // as if the first run stopped before the step write
+    await clipHandler.onDone(job, { url: '/a.mp4', key: 'a' });
+    expect((await projectRow(ctx.project.id)).step).toBe('review');
+  });
+
+  it('H4: changing the quality back to the clip quality clears stale again', async () => {
+    const { updateShot: patch } = await import('../../lib/story/storyboard.js');
+    const ctx = await newProject({ n: 1 });
+    await generateAll(ctx);
+    await finishJobs(ctx.project.id);
+    const sid = ctx.shots[0].id;
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'standard' } });
+    expect(await shotRow(sid)).toMatchObject({ stale: true, clip_mismatch: true });
+    const { shot } = await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_narrated' } });
+    expect(shot).toMatchObject({ stale: false, clip_mismatch: false });
+    // Not after a description change since the clip.
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'standard' } });
+    await raw.query("update story_shots set description = 'Something else' where id = $1", [sid]);
+    const again = await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_narrated' } });
+    expect(again.shot.stale).toBe(true);
+  });
+
+  it('H5: a generate never moves the step back from review', async () => {
+    const ctx = await newProject({ n: 2 });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { step: 'storyboard' });
+    _setShotsDeps({
+      enqueue: async (args) => {
+        await storyDb().update('story_projects', { id: ctx.project.id }, { step: 'review' });
+        return enqueue(args);
+      },
+    });
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 84 });
+    expect((await projectRow(ctx.project.id)).step).toBe('review');
+  });
+
+  it('H7: a cast name with spaces becomes a safe element name, the display name stays in the description', async () => {
+    const ctx = await newProject({ n: 1 });
+    const [c] = await storyDb().insert('story_cast', [
+      { project_id: ctx.project.id, ord: 0, name: 'Mr. Hall Senior', description: 'An older barber.', status: 'ready', image_url: '/p.png', image_key: 'p', sheet: { url: '/s.png', key: 's', from_key: 'p' } },
+    ]);
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { cast_ids: [c.id] });
+    await generateAll(ctx);
+    const [job] = await clipJobs(ctx.project.id);
+    expect(job.payload.elements).toEqual([{ name: 'MrHallSenior', description: 'Mr. Hall Senior: An older barber.', imageUrls: ['/p.png', '/s.png'] }]);
+    expect(job.payload.prompt).toContain('@MrHallSenior');
   });
 });

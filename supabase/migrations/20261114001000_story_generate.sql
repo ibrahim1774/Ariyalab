@@ -19,6 +19,10 @@
 -- back. gen_shots = [{ id, round, status }] as claimed; gen_rerolls = free
 -- re-rolls the claim counted (given back when the start is undone).
 --
+-- story_shots.clip_mismatch (from 20261114000800) is now also set by a
+-- quality change on a shot with a clip, and cleared when the quality goes back
+-- to the one the clip was made at (lib/story/storyboard.js updateShot).
+--
 -- story_projects.status_ticked_at: when GET /status last ran a runner tick for
 -- the project (at most one every 3 s per project; lib/story/status.js).
 --

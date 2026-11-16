@@ -51,13 +51,18 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
 
   if (!project) return null;
   const estimate = estimateCredits(project, pricing);
-  // Nothing left to make: show what the video cost so far instead of a bare 0.
-  const allMade = Boolean(quote) && quote.total === 0 && Array.isArray(quote.shotIds) && quote.shotIds.length === 0 && Number.isInteger(quote.spent);
-  const total = allMade ? quote.spent : quote ? quote.total : estimate;
+  // Nothing left to quote: show what was charged so far instead of a bare 0. "Spent on this video" only when every
+  // generated shot has its clip and nothing is being made; otherwise say what is still going on.
+  const nothingQuoted = Boolean(quote) && quote.total === 0 && Array.isArray(quote.shotIds) && quote.shotIds.length === 0 && Number.isInteger(quote.spent);
+  const generatedShots = shots.filter((s) => (s.source || 'generated') !== 'footage');
+  const making = generatedShots.filter((s) => ['queued', 'generating', 'still_pending'].includes(s.status)).length;
+  const needDescription = generatedShots.filter((s) => s.status === 'blocked' && !s.clip_url).length;
+  const allMade = nothingQuoted && making === 0 && generatedShots.length > 0 && generatedShots.every((s) => s.clip_url);
+  const total = nothingQuoted ? quote.spent : quote ? quote.total : estimate;
   const available = billing?.balance?.available;
   // While billing v2 is off the balance is in the old unit, so a shortfall against a v2 price would be wrong.
   const comparable = billing?.v2 === true && typeof available === 'number';
-  const short = !allMade && comparable && available < total ? total - available : 0;
+  const short = !nothingQuoted && comparable && available < total ? total - available : 0;
 
   const lines = quote?.lines || [];
   // With a server quote the label describes what was quoted (the shots), not the brief. While a
@@ -66,9 +71,14 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
   // The server says which shots its total covers (shotIds): only the shots still to make once clips exist.
   const quoted = Array.isArray(quote?.shotIds) ? shots.filter((s) => quote.shotIds.includes(s.id)) : shots;
   const qualities = [...new Set(quoted.map((s) => s.quality))];
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const subLabel = quoteIsStale
     ? 'Updating the quote\u2026'
-    : quote && Array.isArray(quote.shotIds) && quoted.length === 0 && shots.length > 0
+    : nothingQuoted && making > 0
+      ? `${plural(making, 'shot', 'shots')} being made`
+      : nothingQuoted && needDescription > 0
+        ? `${plural(needDescription, 'shot needs', 'shots need')} a new description`
+        : quote && Array.isArray(quote.shotIds) && quoted.length === 0 && shots.length > 0
       ? 'Every shot is made'
       : quote && quoted.length > 0
         ? `${quoted.length} ${quoted.length === 1 ? 'shot' : 'shots'}${quoted.length < shots.length ? ' to make' : ''}, ${quoted.reduce((n, s) => n + (s.seconds || 0), 0)} seconds, ${qualities.length === 1 ? QUALITY_LABELS[qualities[0]] || qualities[0] : 'Mixed quality'}`
@@ -77,7 +87,7 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
     <section className={styles.bar} aria-label="Credit estimate" data-testid="quote-bar">
       <div className={styles.row}>
         <div className={styles.cost}>
-          <span className={styles.label}>{allMade ? 'Spent on this video' : quote ? 'Quote for this video' : 'Estimated cost'}</span>
+          <span className={styles.label}>{allMade ? 'Spent on this video' : nothingQuoted ? 'Charged so far' : quote ? 'Quote for this video' : 'Estimated cost'}</span>
           <strong className={styles.total} data-testid="quote-total">{count(total)} credits</strong>
           <span className={styles.meta} data-testid="quote-sub" aria-busy={quoteIsStale || undefined}>
             {subLabel}
