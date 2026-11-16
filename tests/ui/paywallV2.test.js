@@ -51,6 +51,16 @@ describe('old funnel pricing with billing_v2', () => {
     expect(screen.queryByText('Starter')).toBeNull();
   });
 
+  it('while the offers load, no legacy plan button is shown (a v2 checkout never starts from legacy prices)', async () => {
+    let answer;
+    global.fetch = vi.fn(() => new Promise((resolve) => { answer = resolve; }));
+    render(<Paywall entitlement={null} returnTo="/ugc-2" surface="video" />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading plans');
+    expect(screen.queryByRole('button', { name: /Subscribe/ })).toBeNull();
+    answer({ ok: true, json: async () => ({ ...OFFERS, billingV2: true }) });
+    await waitFor(() => expect(screen.getByText('Starter')).toBeInTheDocument());
+  });
+
   it('on: the top-up row shows the v2 pack prices and credits', async () => {
     stubFetch(true);
     render(<TopupRow returnTo="/dashboard" />);

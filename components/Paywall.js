@@ -512,7 +512,11 @@ export default function Paywall({
           </div>
         )}
 
-        {showPlans && !v2 && (
+        {showPlans && !offers && (
+          <p className={styles.subtitle} role="status">Loading plans…</p>
+        )}
+
+        {showPlans && offers && !v2 && (
           <div className={styles.tiersThree}>
             <PlanCard
               planKey="monthly"

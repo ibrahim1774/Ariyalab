@@ -172,7 +172,8 @@ async function handleInvoicePaymentSucceeded(eventInvoice, req) {
   if (invoice.billing_reason === 'subscription_create') return;
   if (!invoice.amount_paid || invoice.amount_paid <= 0) return;
 
-  const value = planAmountCents(plan, price) / 100;
+  // An upgrade invoice reports what it charged, not the plan's full price.
+  const value = invoice.billing_reason === 'subscription_update' ? (invoice.amount_paid || 0) / 100 : planAmountCents(plan, price) / 100;
 
   const customerId =
     typeof invoice.customer === 'string' ? invoice.customer : invoice.customer?.id;

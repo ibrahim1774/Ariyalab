@@ -1,5 +1,5 @@
 import { requireAdmin } from '../../../lib/adminGate.js';
-import { getPricing, readPricingRowsFresh, writePricingConfig } from '../../../lib/pricing.js';
+import { getPricing, legacyMigrationRan, readPricingRowsFresh, writePricingConfig } from '../../../lib/pricing.js';
 import { DEFAULTS, PROVIDER_COSTS_USD } from '../../../lib/pricingConstants.js';
 import { pricingReadout, validatePricingWrite, EDITABLE } from '../../../lib/adminPricing.js';
 
@@ -11,8 +11,8 @@ import { pricingReadout, validatePricingWrite, EDITABLE } from '../../../lib/adm
  *         (defaults merged with the rows); readout: cost per credit, margin per
  *         quality, drift from the homepage's static defaults.
  * POST { key, value, confirm? } -> the same, after writing one row.
- *         Turning billing_v2 on needs confirm: 'billing_v2' (once the legacy
- *         migration ran with --apply it must stay on: docs/go-live.md).
+ *         Turning billing_v2 on needs confirm: 'billing_v2'. Turning it off is
+ *         refused (409 ONE_WAY) once the legacy migration ran with --apply.
  *         A changed plan or pack price is a NEW Stripe price at the next
  *         checkout; subscribers keep the price (and credits) they bought.
  *         This instance re-reads at once; other instances within 60 s.
@@ -47,6 +47,12 @@ export default async function handler(req, res) {
       if (problem) return res.status(400).json({ error: problem });
       if (key === 'billing_v2' && value === true && confirm !== 'billing_v2') {
         return res.status(400).json({ error: 'Turning billing v2 on needs confirm: "billing_v2".', code: 'CONFIRM_REQUIRED' });
+      }
+      if (key === 'billing_v2' && value === false && (await legacyMigrationRan())) {
+        return res.status(409).json({
+          error: 'Billing v2 cannot be turned off: the legacy credit migration has already moved customers into the new ledger.',
+          code: 'ONE_WAY',
+        });
       }
       await writePricingConfig(key, value);
       console.info('[admin/pricing] write', admin.user.email, key, JSON.stringify(value));

@@ -415,7 +415,10 @@ describe('yearly grants', () => {
     S.state.charges.set(chargeId, { id: chargeId, customer, invoice: inv, amount: 58800, amount_refunded: 500 });
     expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: { id: chargeId } } })).statusCode).toBe(200);
     await grantYearlyMonths();
-    expect((await ledger(user.id)).filter((r) => r.ref.startsWith('yearly:'))).toHaveLength(1);
+    const rows = await ledger(user.id);
+    // The month is still granted (months continue); the refunded share of it is taken off.
+    expect(rows.filter((r) => r.op === 'renew' && r.ref.startsWith('yearly:'))).toHaveLength(1);
+    expect(rows.some((r) => r.reason === 'stripe_refund' && r.ref.startsWith('yearly:'))).toBe(true);
   });
 
   it('a refunded yearly invoice stops the later months', async () => {
@@ -466,22 +469,24 @@ describe('mid-period plan changes', () => {
     expect((await getBalance(user.id)).plan).toBe(1500);
   });
 
-  it('a paid upgrade invoice grants the allotment difference once for the period (upgrade:<subId>:<periodStart>)', async () => {
+  it('a paid upgrade invoice grants the allotment difference PRORATED by the time left, once per level per period', async () => {
     await setV2(true);
     const user = newUser();
     const customer = await linkedCustomer(user);
-    const sub = newSub(customer, STARTER_M);
+    const t0 = nowS() - 15 * DAY; // half the 30-day period left
+    const sub = newSub(customer, STARTER_M, { start: t0, end: t0 + 30 * DAY });
     await deliver(invoiceEvent(paidInvoice(customer, sub)));
     S.state.subs.get(sub).items.data[0].price = { id: `price_${STUDIO_M}`, lookup_key: STUDIO_M };
     const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3500 });
     expect((await deliver(invoiceEvent(inv))).statusCode).toBe(200);
-    const periodStart = S.state.subs.get(sub).current_period_start;
-    expect((await ledger(user.id)).at(-1)).toMatchObject({ op: 'grant', reason: 'plan_upgrade', ref: `upgrade:${sub}:${periodStart}`, amount: 3900, bucket: 'plan' });
-    // A repeat delivery, or a second upgrade invoice in the same period, grants nothing more.
+    const row = (await ledger(user.id)).at(-1);
+    expect(row).toMatchObject({ op: 'grant', reason: 'plan_upgrade', ref: `upgrade:${sub}:${t0}:5400`, bucket: 'plan' });
+    expect(row.amount).toBeGreaterThanOrEqual(1950);
+    expect(row.amount).toBeLessThanOrEqual(1952); // ceil(3900 x 15/30), a second or two of drift
+    // A repeat delivery, or a second invoice for the same level, grants nothing more.
     await deliver(invoiceEvent(inv));
     await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3500 })));
     expect((await ledger(user.id)).filter((r) => r.reason === 'plan_upgrade')).toHaveLength(1);
-    expect((await getBalance(user.id)).plan).toBe(5400);
   });
 
   it('a downgrade (net credit, nothing paid) grants nothing', async () => {

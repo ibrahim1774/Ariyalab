@@ -113,6 +113,23 @@ describe('admin pricing editor', () => {
     expect(res.body.billingV2).toBe(false);
   });
 
+  it('O4: billing_v2 cannot be turned off once the legacy migration moved anyone (409 ONE_WAY)', async () => {
+    await call(ADMIN, { method: 'POST', body: { key: 'billing_v2', value: true, confirm: 'billing_v2' } });
+    await db.query(`insert into public.credit_legacy_migrations (customer_id, currency, plan, topup, parked) values ('cus_moved', 'video', 10, 0, false)`);
+    const res = await call(ADMIN, { method: 'POST', body: { key: 'billing_v2', value: false } });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('ONE_WAY');
+    expect(await isBillingV2()).toBe(true);
+    await db.query(`delete from public.credit_legacy_migrations where customer_id = 'cus_moved'`);
+  });
+
+  it('F-M4 / F-M5 (Fable P1): two-decimal prices are accepted, a 0-credit voice clone is not', () => {
+    for (const usd of [19.99, 29.99, 0.55, 8.95, 1.15, 49]) expect(validatePricingWrite('plans', { starter: { usd } })).toBeNull();
+    expect(validatePricingWrite('plans', { starter: { usd: 19.999 } })).not.toBeNull();
+    expect(validatePricingWrite('voiceClone', 0)).not.toBeNull();
+    expect(validatePricingWrite('voiceClone', 1)).toBeNull();
+  });
+
   it('readout margins stay at or above the 2x rule with the default prices', () => {
     const r = pricingReadout(structuredClone(DEFAULTS));
     for (const m of Object.values(r.margins)) expect(m.marginLow).toBeGreaterThan(0.4);

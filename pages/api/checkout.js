@@ -186,7 +186,7 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
 
 /** True when the customer has an active or trialing subscription to one of this app's prices. */
 async function hasOurSubscription(customerId) {
-  for (const status of ['active', 'trialing']) {
+  for (const status of ['active', 'trialing', 'past_due']) {
     const list = await stripe().subscriptions.list({ customer: customerId, status, limit: 20, expand: ['data.items.data.price'] });
     if ((list?.data || []).some((sub) => planFromPrice(sub.items?.data?.[0]?.price))) return true;
   }
@@ -279,7 +279,8 @@ export default async function handler(req, res) {
       if (v2Pack && req.body?.catalog !== 'v2') {
         return res.status(409).json({ error: 'Prices have changed. Reload the page and try again.', code: 'RELOAD' });
       }
-      if (!v2Pack && (!TOPUPS[pack] || (v2 && TOPUPS[pack].kind === 'video'))) {
+      const legacyPack = typeof pack === 'string' && Object.hasOwn(TOPUPS, pack) ? TOPUPS[pack] : null;
+      if (!v2Pack && (!legacyPack || (v2 && legacyPack.kind === 'video'))) {
         return res.status(400).json({ error: 'Invalid top-up pack.' });
       }
       const price = v2Pack
@@ -343,6 +344,11 @@ export default async function handler(req, res) {
       });
     }
     const v2Plan = v2 ? offers.plans[plan] : null;
+    // A v2 plan needs a signed-in buyer: the one-plan-per-customer check (no
+    // double billing) needs the account's Stripe customer.
+    if (v2Plan && isAnon) {
+      return res.status(401).json({ error: 'Sign in to choose a plan.', code: 'SIGN_IN' });
+    }
     const planCents = v2Plan ? (interval === 'year' ? v2Plan.yearlyCents : v2Plan.monthlyCents) : null;
 
     // Anonymous subscription: route success_url through the claim-
