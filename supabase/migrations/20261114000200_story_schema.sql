@@ -541,3 +541,11 @@ begin
   end if;
 end
 $$;
+
+-- ---------------------------------------------------------------- Task 18 (chat helper)
+-- story_chat (above) already has the owner-only read policy and the
+-- (project_id, created_at) index the chat reads with. This follow-up only
+-- records the stored shapes (lib/story/chat.js); writes go through the
+-- service role.
+comment on column public.story_chat.content is
+  'user: the customer''s text (a JSON string). assistant: [{type:''text'',text}, ...{type:''confirm'',tool,needsConfirm,quote,confirm}]; only text blocks go back to the model.';

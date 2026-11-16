@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
+import ChatPanel from './ChatPanel';
 import ErrorNotice from './ErrorNotice';
 import { signInHref } from './errors';
 import MakerLayout from './MakerLayout';
@@ -28,6 +29,8 @@ function MakerPageInner({ id, returnTo }) {
   const { project, shots, cast, jobs, loading, error, refresh, save } = data;
   const [view, setView] = useState(null);
   const [reachedLocal, setReachedLocal] = useState(null);
+  // Bumped when the chat changes the script, so the script step (which loads its own copy) reads it again.
+  const [scriptRev, setScriptRev] = useState(0);
   const lastFurthest = useRef(null);
 
   const list = stepsFor(project);
@@ -85,7 +88,7 @@ function MakerPageInner({ id, returnTo }) {
     case 'style': body = <StepStyle {...common} save={save} />; break;
     case 'length': body = <StepLength {...common} save={save} />; break;
     case 'breakdown': body = <ReferenceBreakdownSlot project={project} />; break;
-    case 'script': body = <StepScript {...common} />; break;
+    case 'script': body = <StepScript key={scriptRev} {...common} />; break;
     case 'cast': body = <StepCast {...common} cast={cast} jobs={jobs} />; break;
     case 'storyboard': body = <StepStoryboard {...common} shots={shots} />; break;
     case 'audio': body = <StepAudio {...common} />; break;
@@ -104,6 +107,16 @@ function MakerPageInner({ id, returnTo }) {
       onSelect={goTo}
       notice={error ? <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} /> : null}
       quote={showQuote ? <QuoteBar project={project} shots={shots} reloadKey={reloadKey} /> : null}
+      chat={(
+        <ChatPanel
+          project={project}
+          returnTo={returnTo}
+          onChanged={(changed) => {
+            refresh();
+            if (!Array.isArray(changed) || changed.includes('script')) setScriptRev((n) => n + 1);
+          }}
+        />
+      )}
     >
       {body}
     </MakerLayout>

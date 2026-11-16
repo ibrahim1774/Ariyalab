@@ -7,9 +7,9 @@ import styles from './MakerLayout.module.css';
 /**
  * The page frame (AppShell is added by _app.js): stepper on top, the step in the main column, and a
  * side slot for the chat panel that becomes a bottom sheet under 900 px.
- * `steps` = [{ id, label, stale?, locked? }]
+ * `steps` = [{ id, label, stale?, locked? }]; `chat` = the chat panel (the slot is shown when there is none, e.g. before a project exists)
  */
-export default function MakerLayout({ title, steps, currentId, onSelect, quote, children, notice }) {
+export default function MakerLayout({ title, steps, currentId, onSelect, quote, chat, children, notice }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
   const summaryRef = useRef(null);
@@ -98,7 +98,7 @@ export default function MakerLayout({ title, steps, currentId, onSelect, quote, 
             <button type="button" className={styles.sheetClose} onClick={() => setSheetOpen(false)}>
               Close
             </button>
-            <ChatPanelSlot />
+            {chat || <ChatPanelSlot />}
           </aside>
         </div>
         {sheetOpen && <button type="button" className={styles.scrim} aria-label="Close chat helper" onClick={() => setSheetOpen(false)} />}
