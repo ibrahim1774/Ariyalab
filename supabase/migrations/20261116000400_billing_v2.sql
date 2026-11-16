@@ -1,5 +1,6 @@
 -- Task 27 (billing v2 plans, yearly grants, billing hardening). Applies after 20261116000300_story_assets.sql.
--- Additive: three new credit_ tables, eight new functions, and a replacement body for credit_charge_closed_hold
+-- Additive: three new credit_ tables, one new column (credit_accounts.plan_debt), ten new functions, and a replacement
+-- body for credit_charge_closed_hold
 -- (same signature, same privileges). Touches no shared (haelabs) table.
 --
 -- credit_yearly_subs: one row per yearly billing-v2 subscription (lib/grants.js). Written when its invoice is paid
@@ -26,6 +27,10 @@
 --   the cron releases it month by month and never past it, and anything given above it is clawed back at once.
 -- credit_period_state(user, customer, refs, prefix): what a period gave so far (its month refs, plus refs under
 --   <prefix>: for catch-ups and clawbacks; parked grants count too).
+-- credit_accounts.plan_debt (new column): what a plan change's clawback could not take because the credits were
+--   already spent (money for that time went back to the customer's balance). credit_plan_clawback records it;
+--   credit_collect_plan_debt takes it from the next plan grants (ref <grant ref>:debt, reason plan_debt). Refund and
+--   dispute clawbacks do not create debt.
 -- credit_period_apply(...): one grant or clawback for a period under a per-period advisory lock, applied only when
 --   the period still stands at the total the caller computed from (else 'stale': re-read and retry), so the cron, a
 --   webhook and a retry of either can never both act on the same state.
@@ -174,6 +179,72 @@ as $$
   on conflict (line_key) do nothing;
 $$;
 
+alter table public.credit_accounts add column plan_debt integer not null default 0 check (plan_debt >= 0);
+
+-- A plan change's clawback (reason plan_change): what it cannot take now (spent, not on hold) becomes plan_debt.
+-- A replay of the same ref adds nothing.
+create function public.credit_plan_clawback(p_user uuid, p_amount integer, p_reason text, p_ref text)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  a credit_accounts;
+  r jsonb;
+  v_lost integer;
+begin
+  a := credit_lock_account(p_user, 'video');
+  if exists (select 1 from credit_ledger
+              where user_id = p_user and currency = 'video' and reason = p_reason and ref = p_ref) then
+    return credit_clawback(p_user, 'video', p_amount, p_reason, p_ref, 'plan') || jsonb_build_object('debt', 0);
+  end if;
+  r := credit_clawback(p_user, 'video', p_amount, p_reason, p_ref, 'plan');
+  v_lost := p_amount - coalesce((r->>'taken')::integer, 0) - coalesce((r->>'owed')::integer, 0);
+  if v_lost > 0 then
+    update credit_accounts set plan_debt = plan_debt + v_lost, updated_at = now()
+     where user_id = p_user and currency = 'video';
+  end if;
+  return r || jsonb_build_object('debt', greatest(v_lost, 0));
+end
+$$;
+
+-- Right after a plan grant (p_ref): takes up to plan_debt from the plan credits available, once per grant
+-- (ref <p_ref>:debt). Returns what it took.
+create function public.credit_collect_plan_debt(p_user uuid, p_ref text)
+returns integer
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  a credit_accounts;
+  v integer;
+  v_ref text;
+begin
+  if p_user is null or coalesce(p_ref, '') = '' then
+    raise exception 'invalid_ref';
+  end if;
+  v_ref := p_ref || ':debt';
+  a := credit_lock_account(p_user, 'video');
+  if a.plan_debt <= 0 then
+    return 0;
+  end if;
+  if exists (select 1 from credit_ledger
+              where user_id = p_user and currency = 'video' and reason = 'plan_debt' and ref = v_ref) then
+    return 0;
+  end if;
+  v := least(a.plan_debt, a.plan_balance, greatest(0, a.plan_balance + a.topup_balance - a.held));
+  if v <= 0 then
+    return 0;
+  end if;
+  perform credit_clawback(p_user, 'video', v, 'plan_debt', v_ref, 'plan');
+  update credit_accounts set plan_debt = plan_debt - v, updated_at = now()
+   where user_id = p_user and currency = 'video';
+  return v;
+end
+$$;
+
 create function public.credit_period_state(p_user uuid, p_customer text, p_refs text[], p_prefix text)
 returns jsonb
 language plpgsql
@@ -199,7 +270,7 @@ begin
    where p_user is not null and user_id = p_user and currency = 'video'
      and ((op in ('grant', 'renew') and reason in ('plan_renewal', 'plan_upgrade')
            and (ref = any(p_refs) or left(ref, length(p_prefix) + 1) = p_prefix || ':'))
-       or (op = 'clawback' and left(ref, length(p_prefix) + 1) = p_prefix || ':'));
+       or (op = 'clawback' and reason <> 'plan_debt' and left(ref, length(p_prefix) + 1) = p_prefix || ':'));
   select coalesce(sum(amount), 0)::integer,
          coalesce(array_agg(ref) filter (where ref = any(p_refs)), '{}'),
          (count(*) filter (where left(ref, length(p_prefix) + 4) = p_prefix || ':up:'))::integer
@@ -254,7 +325,11 @@ begin
   end if;
   if p_kind = 'claw' then
     v_ref := p_prefix || ':claw:' || ((s->>'claws')::integer + 1);
-    perform credit_clawback(p_user, 'video', p_amount, p_reason, v_ref, 'plan');
+    if p_reason = 'plan_change' then
+      perform credit_plan_clawback(p_user, p_amount, p_reason, v_ref);
+    else
+      perform credit_clawback(p_user, 'video', p_amount, p_reason, v_ref, 'plan');
+    end if;
     return jsonb_build_object('status', 'applied', 'granted', v_granted - p_amount, 'ref', v_ref);
   end if;
   if p_kind = 'up' then
@@ -267,6 +342,7 @@ begin
       return jsonb_build_object('status', 'present', 'granted', v_granted);
     end if;
     perform credit_grant(p_user, 'video', p_amount, 'plan', 'plan_upgrade', v_ref);
+    perform credit_collect_plan_debt(p_user, v_ref);
     return jsonb_build_object('status', 'applied', 'granted', v_granted + p_amount, 'ref', v_ref);
   end if;
   a := credit_lock_account(p_user, 'video');
@@ -278,6 +354,7 @@ begin
       'plan_expiry', p_ref, null, 'expire', a.plan_balance + p_amount - v_target
     );
   end if;
+  perform credit_collect_plan_debt(p_user, p_ref);
   return jsonb_build_object('status', 'applied', 'granted', v_granted + p_amount, 'ref', p_ref);
 end
 $$;
@@ -333,6 +410,7 @@ begin
         and p.proname = any (array[
           'credit_yearly_record', 'credit_yearly_sync', 'credit_yearly_raise', 'credit_yearly_period_record',
           'credit_yearly_period_end', 'credit_plan_line_record', 'credit_period_state', 'credit_period_apply',
+          'credit_plan_clawback', 'credit_collect_plan_debt',
           'credit_charge_closed_hold'
         ])
   loop

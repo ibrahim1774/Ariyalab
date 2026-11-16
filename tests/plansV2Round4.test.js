@@ -100,7 +100,7 @@ vi.mock('../lib/supabaseServer', () => {
 });
 
 import { PLANS, planFromPrice, topupFromPrice, parseV2LookupKey, v2PlanLookupKey, v2TopupLookupKey, planInfoFromPrice } from '../lib/stripe';
-import { setCreditsDb, getBalance } from '../lib/credits.js';
+import { setCreditsDb, getBalance, spendCredits } from '../lib/credits.js';
 import { setPricingDb, _resetPricingCache, v2Offers, getPricing } from '../lib/pricing.js';
 import { setGrantsDb, grantYearlyMonths, dueYearlyMonths, yearlyRef, addMonthsUtc } from '../lib/grants.js';
 import webhook from '../pages/api/stripe-webhook.js';
@@ -270,9 +270,18 @@ async function account({ key, start }) {
   const priceKey = () => cur().items.data[0].price.lookup_key;
   const a = {
     user, customer, sub, invs,
+    balance: 0, // the Stripe customer balance (credit): money given back, paying later invoices first
+    cash: 0, // money actually charged
+    spent: 0,
     async issue(reason, lines, t, type = 'invoice.payment_succeeded') {
       const id = addInvoice(customer, sub, { reason, lines, t });
-      invs.push(S.state.invoices.get(id));
+      const inv = S.state.invoices.get(id);
+      const fromBalance = inv.total < 0 ? inv.total : Math.min(a.balance, inv.total);
+      a.balance -= fromBalance;
+      Object.assign(inv, { starting_balance: -a.balance - fromBalance, amount_paid: inv.total - fromBalance, amount_due: inv.total - fromBalance });
+      if (inv.total < 0) Object.assign(inv, { amount_paid: 0, amount_due: 0 });
+      a.cash += inv.amount_paid;
+      invs.push(inv);
       const res = await deliver(invoiceAs(type, id));
       expect(res.statusCode).toBe(200);
       return id;
@@ -308,8 +317,27 @@ async function account({ key, start }) {
     change(newKey, t, type) {
       return a.issue('subscription_update', a.changeLines(newKey, t), t, type);
     },
+    /** The customer spends every credit available (a video, say). */
+    async spendAll() {
+      const { available } = await getBalance(user.id);
+      if (available > 0) {
+        await spendCredits({ userId: user.id, currency: 'video', amount: available, reason: 'test_spend', ref: randomUUID() });
+        a.spent += available;
+      }
+    },
+    /** What the customer actually got: spent plus still available. */
+    delivered: async () => a.spent + (await getBalance(user.id)).available,
+    /** Credits a plan change could not take back (spent), still owed. */
+    debt: async () => {
+      try {
+        const { rows } = await db.query('select plan_debt from public.credit_accounts where user_id = $1 and currency = $2', [user.id, 'video']);
+        return rows[0]?.plan_debt ?? 0;
+      } catch {
+        return 0; // before round 4 there is no debt
+      }
+    },
     net: async () => (await ledger(user.id)).reduce((n, r) => {
-      if (r.op === 'clawback') return n - r.amount;
+      if (r.op === 'clawback') return r.reason === 'plan_debt' ? n : n - r.amount;
       if ((r.op === 'renew' || r.op === 'grant') && (r.reason === 'plan_renewal' || r.reason === 'plan_upgrade')) return n + r.amount;
       return n;
     }, 0),
@@ -389,6 +417,55 @@ describe('Task 27 round 4: plan changes credited by money (probes P1-P4, flips a
       // The whole year, month by month: exactly the year paid for.
       await grantYearlyMonths({ now: new Date((yEnd - DAY) * 1000) });
       expect(await a.net()).toBe(fair.monthly + 12 * 1500);
+    });
+  }
+
+  for (const [label, gap] of GAPS) {
+    it(`P2 spending first (${label}): spending every credit before the downgrade never farms (what was not taken back is owed)`, async () => {
+      await setV2(true);
+      const a = await account({ key: STARTER_M, start: nowS() - 200 * DAY });
+      await a.first();
+      await a.spendAll();
+      const owedAfter = [];
+      for (let loop = 0; loop < 3; loop += 1) {
+        const p0 = S.state.subs.get(a.sub).current_period_start;
+        await a.change(STUDIO_M, p0 + gap);
+        await a.spendAll();
+        await a.change(STARTER_M, p0 + gap + 600); // unused Studio money to the balance, credits already spent
+        await a.renew(); // paid from that balance
+        await a.spendAll();
+        owedAfter.push(await a.debt());
+      }
+      const fair = fairOf(a.invs).total;
+      // Delivered beyond the money kept is exactly what is still owed, and the debt does not grow loop after loop.
+      expect((await a.delivered()) - (await a.debt())).toBe(fair);
+      expect(Math.max(...owedAfter)).toBeLessThanOrEqual(5400);
+      expect(owedAfter[2]).toBeLessThanOrEqual(owedAfter[0]);
+      // Cash charged (not balance money going round): about one Starter month per month, not Studio.
+      expect(await a.delivered()).toBeLessThanOrEqual(Math.floor(((a.cash - a.balance) * 5400) / 9900) + (await a.debt()) + 10);
+    });
+
+    it(`P1 spending first (${label}): yearly Studio month 0 spent, then back to monthly, never farms`, async () => {
+      await setV2(true);
+      const a = await account({ key: STARTER_M, start: nowS() - 260 * DAY });
+      await a.first();
+      await a.spendAll();
+      const owedAfter = [];
+      for (let loop = 0; loop < 3; loop += 1) {
+        const p0 = S.state.subs.get(a.sub).current_period_start;
+        await a.change(STUDIO_Y, p0 + gap);
+        await a.spendAll();
+        await a.change(STARTER_M, p0 + gap + HOUR);
+        await deliver(subUpdated(a.sub));
+        await a.renew();
+        await a.spendAll();
+        owedAfter.push(await a.debt());
+      }
+      const fair = fairOf(a.invs).total;
+      expect((await a.delivered()) - (await a.debt())).toBe(fair);
+      expect(Math.max(...owedAfter)).toBeLessThanOrEqual(5400);
+      expect(owedAfter[2]).toBeLessThanOrEqual(owedAfter[0]);
+      expect(await a.delivered()).toBeLessThanOrEqual(Math.floor(((a.cash - a.balance) * 5400) / 9900) + (await a.debt()) + 10);
     });
   }
 

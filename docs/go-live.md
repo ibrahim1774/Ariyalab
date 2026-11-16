@@ -156,10 +156,14 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
     invoices like money. So upgrades, downgrades, interval switches and loops of them all come to "credits = money kept
     x rate", within a credit per line (rounding always favours the business). Prorations left for the next renewal
     invoice (`create_prorations`) are credited on that invoice the same way.
-  - Grants are applied before clawbacks within one invoice. A clawback takes what is available; credits already spent
-    cannot be taken back (as with refunds), so a customer who spends a month's credits and then downgrades with
-    proration keeps what was spent while the unused time goes to their balance. The portal setting above (downgrades
-    at the period end, no proration) is what closes that; check it before go-live.
+  - Grants are applied before clawbacks within one invoice. A plan change's clawback (reason `plan_change`) takes
+    what is available; what it cannot take because the credits were already spent is **owed** (`plan_debt` on the
+    account) and taken from the next plan grants (renewal, upgrade, yearly month; ledger reason `plan_debt`, ref
+    `<grant ref>:debt`), since the money for that time went back to the customer's balance and pays those grants. So
+    spending every credit before a downgrade never farms: what was delivered beyond the money kept is exactly what is
+    still owed, and it does not grow from one plan change to the next. A customer who cancels while owing keeps that
+    one change's spent credits (their unused balance stays in Stripe). Refund and dispute clawbacks do not create
+    debt (as before: credits spent before a refund are not taken back).
   - A line in another currency than its price (currency options, adaptive pricing) is skipped and logged: v2 prices
     are USD only.
 - Refunds and disputes take back, of each invoice, the share of money returned (refunded plus disputed, over what the
