@@ -33,7 +33,7 @@ describe('FinishSlot', () => {
     const { rerender } = render(<FinishSlot project={project} status={{ render: { version: 1, status: 'running' } }} />);
     expect(screen.getByText(/being made/i)).toBeInTheDocument();
     expect(screen.getByRole('button')).toBeDisabled();
-    rerender(<FinishSlot project={project} status={{ render: { version: 2, status: 'done', file_url: '/api/mock/storage/x.mp4' } }} />);
+    rerender(<FinishSlot project={project} status={{ render: { version: 2, status: 'done', url: '/api/mock/storage/x.mp4' } }} />);
     expect(screen.getByRole('link', { name: /watch your video/i })).toHaveAttribute('href', '/api/mock/storage/x.mp4');
     expect(screen.getByRole('button', { name: /make it again/i })).toBeEnabled();
   });
@@ -43,5 +43,12 @@ describe('FinishSlot', () => {
     render(<FinishSlot project={project} status={{ render: null }} refresh={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: /make my video/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent(/./);
+  });
+
+  it('F1: says why the video cannot be made yet, in the server\'s words', async () => {
+    client.startRender.mockRejectedValue(Object.assign(new Error('x'), { status: 409, code: 'audio_not_ready', serverMessage: 'Your voice or music is still being made. Wait for it to finish, then make your video.' }));
+    render(<FinishSlot project={project} status={{ render: null }} refresh={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: /make my video/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Your voice or music is still being made.');
   });
 });

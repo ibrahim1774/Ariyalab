@@ -139,8 +139,9 @@ const start = async (ctx, kind, opts = {}) => {
   return fn({ userId: ctx.userId, projectId: ctx.project.id, ...opts });
 };
 
-async function addAsset(userId, { kind = 'voice_track', url = '/api/mock/fixtures/voice.mp3' } = {}) {
-  const [asset] = await storyDb().insert('story_assets', { user_id: userId, kind, url, storage_key: `uploads/${randomUUID()}.mp3`, name: 'mine' });
+async function addAsset(userId, { kind = 'voice_track', url = '/api/mock/fixtures/voice.mp3', mime = 'audio/mpeg' } = {}) {
+  // mime is what lib/story/voices.js registerAudio stores after checking the file (Task 20 T24b reads it).
+  const [asset] = await storyDb().insert('story_assets', { user_id: userId, kind, url, storage_key: `uploads/${randomUUID()}.mp3`, name: 'mine', mime });
   return asset;
 }
 
@@ -150,7 +151,7 @@ describe('sliceNarration', () => {
   const lines = (...texts) => texts.map((text, i) => ({ sceneId: 's1', lineIndex: i, text }));
 
   it('returns one segment per line, cut at the silences, on the fixture with known silences', async () => {
-    const out = await sliceNarration({ filePath: FIXTURE(), lines: lines('First line here.', 'A second, longer line is here.', 'Third.') });
+    const out = await sliceNarration({ ext: 'wav', filePath: FIXTURE(), lines: lines('First line here.', 'A second, longer line is here.', 'Third.') });
     expect(out.method).toBe('silence');
     expect(out.segments).toHaveLength(3);
     expect(out.duration).toBeCloseTo(4.5, 1);
@@ -163,7 +164,7 @@ describe('sliceNarration', () => {
 
   it('splits by character count when the number of silences does not match the lines (the proportional fallback)', async () => {
     const four = lines('x'.repeat(10), 'y'.repeat(30), 'z'.repeat(10), 'w'.repeat(50));
-    const out = await sliceNarration({ filePath: FIXTURE(), lines: four });
+    const out = await sliceNarration({ ext: 'wav', filePath: FIXTURE(), lines: four });
     expect(out.method).toBe('proportional');
     expect(out.segments).toHaveLength(4);
     // The speech runs from 0 to 4.5 s here; 10, 30, 10 and 50 of 100 characters.
@@ -186,7 +187,7 @@ describe('sliceNarration', () => {
     const graph = [tone(440, 0.8, 'a'), gap(0.3, 'g1'), tone(450, 0.8, 'b'), gap(0.9, 'g2'), tone(550, 1.2, 'c'), gap(0.3, 'g3'), tone(560, 0.5, 'd'), gap(1.0, 'g4'), tone(660, 1.0, 'e'),
       '[a][g1][b][g2][c][g3][d][g4][e]concat=n=9:v=0:a=1[o]'].join(';');
     spawnSync(ffmpegInstaller.path, ['-hide_banner', '-loglevel', 'error', '-y', '-filter_complex', graph, '-map', '[o]', file]);
-    const out = await sliceNarration({ filePath: file, lines: lines('First line, with a pause in it.', 'Second line, also with one.', 'Third.') });
+    const out = await sliceNarration({ ext: 'wav', filePath: file, lines: lines('First line, with a pause in it.', 'Second line, also with one.', 'Third.') });
     rmSync(dir, { recursive: true, force: true });
     expect(out.method).toBe('longest_silences');
     expect(out.segments).toHaveLength(3);
@@ -202,7 +203,7 @@ describe('sliceNarration', () => {
     const tone = (d, label) => `sine=f=500:d=${d},aformat=sample_rates=44100:channel_layouts=mono[${label}]`;
     spawnSync(ffmpegInstaller.path, ['-hide_banner', '-loglevel', 'error', '-y', '-filter_complex',
       `${tone(1, 'a')};anullsrc=r=44100:cl=mono,atrim=0:0.2[g];${tone(1, 'b')};[a][g][b]concat=n=3:v=0:a=1[o]`, '-map', '[o]', file]);
-    const out = await sliceNarration({ filePath: file, lines: lines('One line only.') });
+    const out = await sliceNarration({ ext: 'wav', filePath: file, lines: lines('One line only.') });
     rmSync(dir, { recursive: true, force: true });
     expect(out.method).toBe('silence');
     expect(out.segments).toHaveLength(1);
@@ -567,7 +568,7 @@ describe('music', () => {
     const { prompt, seconds } = providerMusic.mock.calls[0][0];
     expect(MUSIC_SUFFIX).toBe('full from the first second, no soft intro');
     expect(prompt).toBe('Warm and hopeful piano, full from the first second, no soft intro');
-    expect(seconds).toBe(30);
+    expect(seconds).toBe(34); // the video plus the 4 s the render skips (Task 20 O6)
   });
 
   it('has a default description when the customer wrote none', async () => {

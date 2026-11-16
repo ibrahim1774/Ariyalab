@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   MIN_WORD_SECONDS, MAX_PHRASE_WORDS, SAFE_BAND, countSyllables, retimeStretch, captionLayout, buildCaptionEvents,
-  wordsFromSegments, wordsFromShotLines, assTime,
+  wordsFromSegments, wordsFromShotLines, assTime, fitFontSize, unsupportedCharacters, CAPTION_FONT_FILE,
 } from '../../lib/story/captions.js';
 
 const sum = (xs) => xs.reduce((n, x) => n + x, 0);
@@ -80,7 +80,8 @@ describe('phrases and cuts', () => {
     }
     // The text that is written to the ASS file respects the cuts too (times are rounded inward).
     const dialogue = ass.split('\n').filter((l) => l.startsWith('Dialogue:'));
-    expect(dialogue).toHaveLength(events.length);
+    // bold_pop has an accent: one line per spoken word (Round 1 O5).
+    expect(dialogue).toHaveLength(words.length);
     for (const line of dialogue) {
       const [, start, end] = line.split(',');
       const s = toSeconds(start);
@@ -158,5 +159,56 @@ describe('position', () => {
       expect(t).not.toMatch(/[{}]/);
       expect(t).not.toContain('\\N');
     }
+  });
+});
+
+describe('round 1', () => {
+  const dialogues = (ass) => ass.split('\n').filter((l) => l.startsWith('Dialogue:'));
+
+  it('O5: the accent follows the spoken word, one line per word with the word times', () => {
+    const words = wordsFromSegments([{ sceneId: 's', lineIndex: 0, text: 'Once upon a time,', start: 0, end: 2 }]);
+    const { events, ass } = buildCaptionEvents({ words, cuts: [], style: 'serif_accent' });
+    expect(events).toHaveLength(1);
+    const lines = dialogues(ass);
+    expect(lines).toHaveLength(4);
+    lines.forEach((line, k) => {
+      const [, start] = line.split(',');
+      expect(toSeconds(start)).toBeCloseTo(Math.round(events[0].timings[k].start * 100) / 100, 2);
+      // The accented word is word k.
+      const accented = /\{\\1c&H[0-9A-F]+&\}([^{]+)\{/.exec(line)[1];
+      expect(accented).toBe(events[0].words[k]);
+    });
+    // The lines meet: each ends where the next starts.
+    for (let k = 1; k < lines.length; k += 1) expect(lines[k].split(',')[1]).toBe(lines[k - 1].split(',')[2]);
+  });
+
+  it('Fm2: a word too wide for the frame shrinks that caption\'s font', () => {
+    const long = 'Supercalifragilisticexpialidociouslyamazing';
+    const base = fitFontSize(['short'], { style: 'bold_pop', width: 1080, height: 1920 });
+    const small = fitFontSize([long], { style: 'bold_pop', width: 1080, height: 1920 });
+    expect(small).toBeLessThan(base);
+    expect(small * 0.7 * long.length).toBeLessThanOrEqual(1080 - 2 * Math.round(1080 * 0.08));
+    const { ass } = buildCaptionEvents({ words: wordsFromSegments([{ sceneId: 's', lineIndex: 0, text: long, start: 0, end: 2 }]), style: 'bold_pop' });
+    expect(dialogues(ass)[0]).toContain(`\\fs${small}`);
+  });
+
+  it('Fm1: words past the end are dropped and the last caption stops at the end', () => {
+    const words = wordsFromSegments([{ sceneId: 's', lineIndex: 0, text: 'one two three four five six', start: 0, end: 6 }]);
+    const { events } = buildCaptionEvents({ words, style: 'clean', end: 4 });
+    expect(events[events.length - 1].end).toBeLessThanOrEqual(4);
+    expect(events.flatMap((e) => e.words)).not.toContain('six');
+  });
+
+  it('O3: talking words are spread inside the clip\'s detected speech', () => {
+    const words = wordsFromShotLines([{ seconds: 3, line: 'Hello there' }, { seconds: 3, line: 'Bye now' }], { windows: [[0.8, 2.0], null] });
+    expect(words[0].start).toBeCloseTo(0.8, 6);
+    expect(words[1].end).toBeCloseTo(2.0, 6);
+    expect(words[2].start).toBeCloseTo(3.2, 6);
+  });
+
+  it('Fm3: finds the characters the bundled font has no glyph for', () => {
+    const font = `${process.cwd()}/public/fonts/${CAPTION_FONT_FILE}`;
+    expect(unsupportedCharacters(['Hello, café! "quoted"'], font)).toEqual([]);
+    expect(unsupportedCharacters(['你好 😀 ok'], font).sort()).toEqual(['你', '好', '😀'].sort());
   });
 });

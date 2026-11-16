@@ -1,7 +1,7 @@
 // Task 20: the finished video. Renders real mp4s from ffmpeg-made fixtures (mock storage, mock transcription).
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
@@ -14,7 +14,7 @@ import { setCreditsDb, grantCredits } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
 import { putObject, localPathFor, mockStoragePath } from '../../lib/providers/storage.js';
 import { transcribe } from '../../lib/providers/stt.js';
-import { runWorkerJob, sweep, _resetHandlers } from '../../lib/story/runner.js';
+import { runWorkerJob, sweep, enqueue } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
 import { setAudioPlan } from '../../lib/story/audio.js';
 import { startRender, renderTargetSize, _configureRender } from '../../lib/story/render.js';
@@ -25,6 +25,19 @@ import { getProjectStatus } from '../../lib/story/status.js';
 vi.mock('../../lib/providers/stt.js', async (importOriginal) => {
   const real = await importOriginal();
   return { ...real, transcribe: vi.fn(real.transcribe) };
+});
+vi.mock('../../lib/providers/storage.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    putObject: vi.fn(async (args) => {
+      if (globalThis.__putFailures > 0 && String(args.key).includes('/render/')) {
+        globalThis.__putFailures -= 1;
+        throw new Error('storage hiccup');
+      }
+      return real.putObject(args);
+    }),
+  };
 });
 vi.mock('../../lib/story/captions.js', async (importOriginal) => {
   const real = await importOriginal();
@@ -88,12 +101,23 @@ beforeAll(async () => {
   clip('c2.mp4', 2.5, 90);
   clip('c3.mp4', 4, 180);
   clip('c4.mp4', 5, 270);
-  // Narration: two "lines" of tone with a short breath between, 0.2 to 5.4 s, then nothing.
-  ff([
+  // Narration tracks: two "lines" of tone (s1, s2) with a 0.3 s breath between.
+  const narration = (name, a, b) => ff([
     '-filter_complex',
-    'sine=f=220:d=2.2,volume=0.5,adelay=200|200,apad=pad_dur=0.3[a];sine=f=260:d=2.7,volume=0.5[b];[a][b]concat=n=2:v=0:a=1,apad=pad_dur=1[out]',
-    '-map', '[out]', '-ac', '1', '-ar', '44100', 'narration.wav',
+    `sine=f=220:d=${a},volume=0.5,adelay=200|200,apad=pad_dur=0.3[a];sine=f=260:d=${b},volume=0.5[b];[a][b]concat=n=2:v=0:a=1,apad=pad_dur=0.5[out]`,
+    '-map', '[out]', '-ac', '1', '-ar', '44100', name,
   ]);
+  narration('narration.wav', 5.7, 5.5); // each line fills its scene (6 s of shots)
+  narration('short.wav', 2.2, 2.7); // short lines: the voice has a long gap once placed at the scenes
+  narration('long.wav', 5.7, 8); // s2 is longer than its 6 s even sped up
+  // A talking clip whose speech (0.3 to 2.6 s) ends before a 3 s shot does.
+  ff([
+    '-f', 'lavfi', '-i', 'testsrc2=size=540x960:rate=24:duration=4',
+    '-f', 'lavfi', '-i', "sine=f=300:d=4,volume='between(t,0.3,2.6)':eval=frame",
+    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', 'tk1.mp4',
+  ]);
+  // Music shorter than the video, to be looped.
+  ff(['-filter_complex', 'anoisesrc=d=5:c=pink:a=0.1[out]', '-map', '[out]', '-ac', '2', '-ar', '44100', 'music5.wav']);
   // Music: 20 s bed (long enough for the 4 s start).
   ff([
     '-filter_complex', 'anoisesrc=d=20:c=pink:a=0.08[n];sine=f=110:d=20,volume=0.2[s];[n][s]amix=inputs=2[out]',
@@ -101,9 +125,12 @@ beforeAll(async () => {
   ]);
   // A one-second gap, for the silence check.
   ff(['-filter_complex', 'sine=f=300:d=1[a];anullsrc=r=44100:cl=mono,atrim=0:1[g];sine=f=300:d=1[b];[a][g][b]concat=n=3:v=0:a=1[out]', '-map', '[out]', 'gap.wav']);
-  for (const n of ['c1', 'c2', 'c3', 'c4']) media[n] = await store(`${n}.mp4`, 'mp4');
+  for (const n of ['c1', 'c2', 'c3', 'c4', 'tk1']) media[n] = await store(`${n}.mp4`, 'mp4');
   media.narration = await store('narration.wav', 'wav');
+  media.short = await store('short.wav', 'wav');
+  media.long = await store('long.wav', 'wav');
   media.music = await store('music.wav', 'wav');
+  media.music5 = await store('music5.wav', 'wav');
 }, 120_000);
 
 afterAll(async () => {
@@ -131,17 +158,20 @@ const SCENES = [
   { id: 's1', title: 'Morning', visual: 'A small bakery at dawn.', lines: [{ speaker: 'narrator', text: 'Once upon a time,' }] },
   { id: 's2', title: 'Dream', visual: 'The baker looks out of the window.', lines: [{ speaker: 'Maya', text: 'One day.' }, { speaker: 'narrator', text: 'a baker dreamed big.' }] },
 ];
-const SEGMENTS = [
-  { sceneId: 's1', lineIndex: 0, text: 'Once upon a time,', start: 0.2, end: 2.4 },
-  { sceneId: 's2', lineIndex: 1, text: 'a baker dreamed big.', start: 2.7, end: 5.4 },
+const segs = (a, b) => [
+  { sceneId: 's1', lineIndex: 0, text: 'Once upon a time,', start: 0.2, end: 0.2 + a },
+  { sceneId: 's2', lineIndex: 1, text: 'a baker dreamed big.', start: 0.5 + a, end: 0.5 + a + b },
 ];
+const NARRATIONS = { fill: segs(5.7, 5.5), short: segs(2.2, 2.7), long: segs(5.7, 8) };
+const SEGMENTS = NARRATIONS.fill;
 
-async function newProject({ style = 'serif_accent', music = true, clips = ['c1', 'c2', 'c3', 'c4'], ready = true } = {}) {
+async function newProject({ style = 'serif_accent', music = true, clips = ['c1', 'c2', 'c3', 'c4'], ready = true, narration = 'fill', musicFile = 'music' } = {}) {
   const userId = randomUUID();
+  const track = { fill: media.narration, short: media.short, long: media.long }[narration];
   const [project] = await storyDb().insert('story_projects', {
     user_id: userId, title: 'Render test', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
-    narration_url: media.narration.url, narration_key: media.narration.key, narration_seconds: 6.4, narration_segments: SEGMENTS,
-    music_url: music ? media.music.url : null, music_key: music ? media.music.key : null,
+    narration_url: track.url, narration_key: track.key, narration_seconds: 12, narration_segments: NARRATIONS[narration],
+    music_url: music ? media[musicFile].url : null, music_key: music ? media[musicFile].key : null,
     audio_plan: { captions: { on: true, style }, music: { type: music ? 'generated' : 'none', prompt: '', assetId: null } },
   });
   await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
@@ -189,6 +219,11 @@ describe('render', () => {
     expect(row.settings).toMatchObject({ captions: { on: true, style: 'serif_accent', format: 'ass' }, aspect: '9:16', mode: 'narrated', music: true });
     expect(row.settings.shots).toHaveLength(4);
     expect(row.settings.checks).toMatchObject({ coverage: 1, ok: true });
+    // O1: each scene's narration starts with that scene's first shot: s2's line is inside 6 to 12 s.
+    const placed = Object.fromEntries(row.settings.narrationPlan.map((p) => [p.sceneId, p]));
+    expect(placed.s1.at).toBeCloseTo(0, 6);
+    expect(placed.s2.at).toBeCloseTo(6, 6);
+    expect(placed.s2.at + placed.s2.length).toBeLessThanOrEqual(12);
   }, 240_000);
 
   it('talking mode on 16:9: the clips\' own sound, captions from the shot lines, a footage shot and a framed inset', async () => {
@@ -204,7 +239,7 @@ describe('render', () => {
       { user_id: userId, kind: 'product_photo', url: still.url, storage_key: still.key, name: 'product' },
     ]);
     await storyDb().insert('story_shots', [
-      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,', inset_asset_id: inset.id, inset: { x: 0.5, y: 0.3, w: 0.3 } },
+      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.tk1.url, clip_key: media.tk1.key, line: 'Once upon a time,', inset_asset_id: inset.id, inset: { x: 0.5, y: 0.3, w: 0.3 } },
       { project_id: project.id, ord: 1, scene_id: 's2', seconds: 4, quality: 'pro_talking', source: 'footage', status: 'draft', footage_asset_id: footage.id, footage: { trimStart: 0.5, fit: 'contain' } },
       { project_id: project.id, ord: 2, scene_id: 's2', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.c2.url, clip_key: media.c2.key, line: 'a baker dreamed big.' },
     ]);
@@ -273,24 +308,25 @@ describe('render', () => {
     await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toMatchObject({ status: 402, code: 'plan_required' });
   });
 
-  it('a crashed render is retried once by the sweep, then failed, and the render row says so', async () => {
+  it('F3: a killed render is failed by the sweep after 330 s, never run a second time, and the row says so', async () => {
     const ctx = await newProject();
     const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
     const [job] = await storyDb().select('story_jobs', { project_id: ctx.project.id, kind: 'render' });
-    const longAgo = new Date(Date.now() - 11 * 60_000).toISOString();
-    // The worker claimed it and died (attempt 1): the sweep puts it back once.
-    await raw.query(`update story_jobs set status = 'running', attempts = 1, started_at = $2, locked_until = $2 where id = $1`, [job.id, longAgo]);
+    // The worker claimed it 5 minutes ago (inside its 330 s): the sweep leaves it alone.
+    const recent = new Date(Date.now() - 300_000).toISOString();
+    await raw.query(`update story_jobs set status = 'running', attempts = 1, started_at = $2, locked_until = $2 where id = $1`, [job.id, recent]);
     await raw.query(`update story_renders set status = 'running' where id = $1`, [render.id]);
     await sweep({});
-    expect((await storyDb().select('story_jobs', { id: job.id }))[0].status).toBe('queued');
-    // It died again (attempt 2): the sweep ends it, and onFail marks the render failed.
-    await raw.query(`update story_jobs set status = 'running', attempts = 2, started_at = $2, locked_until = $2, run_after = null where id = $1`, [job.id, longAgo]);
+    expect((await storyDb().select('story_jobs', { id: job.id }))[0].status).toBe('running');
+    // Past 330 s the worker is gone: failed at once, not queued again.
+    const gone = new Date(Date.now() - 340_000).toISOString();
+    await raw.query(`update story_jobs set started_at = $2, locked_until = $2 where id = $1`, [job.id, gone]);
     await sweep({});
     await sweep({});
-    expect((await storyDb().select('story_jobs', { id: job.id }))[0].status).toBe('failed');
+    expect((await storyDb().select('story_jobs', { id: job.id }))[0]).toMatchObject({ status: 'failed', attempts: 1 });
     const [row] = await storyDb().select('story_renders', { id: render.id });
     expect(row.status).toBe('failed');
-    expect(row.error).toBeTruthy();
+    expect(row.error).toBe('The render stopped. Try again.');
     // A failed render frees the project for the next one.
     const next = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
     expect(next.render.version).toBe(2);
@@ -351,6 +387,9 @@ describe('render', () => {
     const status = await getProjectStatus({ userId: ctx.userId, projectId: ctx.project.id });
     expect(status.render).toMatchObject({ id: res.body.render.id, status: 'queued', version: 1 });
     expect(status.renders.map((r) => r.version)).toEqual([1]);
+    // Fm4: a public shape, never job ids, storage keys or the frozen settings.
+    expect(Object.keys(status.render).sort()).toEqual(['created_at', 'error', 'finished_at', 'id', 'status', 'url', 'version', 'warnings']);
+    expect(Object.keys(res.body.render).sort()).toEqual(['created_at', 'error', 'finished_at', 'id', 'status', 'url', 'version', 'warnings']);
   });
 });
 
@@ -389,7 +428,7 @@ describe('checks', () => {
   });
 
   it('reports a silence over 0.6 s, low word coverage and loudness out of range', async () => {
-    const out = await runChecks({ renderPath: path.join(dir, 'gap.wav'), scriptWords: ['the', 'quick', 'brown', 'fox'] });
+    const out = await runChecks({ renderPath: path.join(dir, 'gap.wav'), voicePath: path.join(dir, 'gap.wav'), scriptWords: ['the', 'quick', 'brown', 'fox'] });
     expect(out.ok).toBe(false);
     const codes = out.failures.map((f) => f.code).sort();
     expect(codes).toEqual(['loudness', 'silence', 'words']);
@@ -401,4 +440,166 @@ describe('checks', () => {
     expect(renderTargetSize('1:1')).toEqual([1080, 1080]);
     expect(renderTargetSize('16:9')).toEqual([1920, 1080]);
   });
+});
+
+describe('round 1', () => {
+  const codes = (row) => row.warnings.map((w) => w.code);
+
+  it('O2: a gap in the voice fails the silence check even under music', async () => {
+    const row = await renderOnce(await newProject({ narration: 'short' }));
+    expect(row.status).toBe('done');
+    expect(codes(row)).toContain('silence');
+    expect(row.settings.checks.longestSilence).toBeGreaterThan(3);
+  }, 240_000);
+
+  it('O1: a scene whose narration does not fit is sped up to 1.15 and then runs on, with a warning, never cut silently', async () => {
+    const row = await renderOnce(await newProject({ narration: 'long' }));
+    expect(row.status).toBe('done');
+    const s2 = row.settings.narrationPlan.find((p) => p.sceneId === 's2');
+    expect(s2.tempo).toBeCloseTo(1.15, 6);
+    expect(codes(row)).toContain('narration_overrun');
+    expect(row.warnings.find((w) => w.code === 'narration_overrun').message).toMatch(/Dream/);
+  }, 240_000);
+
+  it('Om4 and Om5: the script words are frozen at start, and a transcript that does not match is a words warning (re-heard once under music)', async () => {
+    const ctx = await newProject();
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(render).toBeTruthy();
+    // The script changes after the start: the render still checks the words it was started with.
+    await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: [{ id: 's1', title: 'x', visual: 'y', lines: [{ speaker: 'narrator', text: 'Completely different words here' }] }], source: 'brief' });
+    transcribe.mockResolvedValueOnce({ text: 'nothing alike', words: [{ w: 'nothing', start: 0, end: 1 }, { w: 'alike', start: 1, end: 2 }] });
+    await runWorkerJob('render', {});
+    const [row] = await storyDb().select('story_renders', { id: render.id });
+    expect(row.settings.scriptWords).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);
+    // First hearing failed on words with music to lower: the mix is made again and heard again (the mock now matches).
+    expect(transcribe).toHaveBeenCalledTimes(2);
+    expect(row.settings.checks).toMatchObject({ retried: true, coverage: 1 });
+    // Without music there is nothing to change: heard once, saved as a warning.
+    const quiet = await newProject({ music: false });
+    transcribe.mockClear();
+    transcribe.mockResolvedValueOnce({ text: 'nothing alike', words: [{ w: 'nothing', start: 0, end: 1 }] });
+    const row2 = await renderOnce(quiet);
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    expect(codes(row2)).toContain('words');
+    expect(row2.settings.checks.retried).toBe(false);
+  }, 300_000);
+
+  it('Om5: a talking line cut off by its shot (the clip speaks past the shot) is a warning', async () => {
+    const userId = randomUUID();
+    const [project] = await storyDb().insert('story_projects', {
+      user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '9:16',
+      audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
+    // c1 speaks for 4 s; its shot is 3 s (an economy clip made at 4 s for a 3 s shot).
+    await storyDb().insert('story_shots', [
+      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,' },
+      { project_id: project.id, ord: 1, scene_id: 's2', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.tk1.url, clip_key: media.tk1.key, line: 'a baker dreamed big.' },
+    ]);
+    const row = await renderOnce({ userId, project });
+    const cut = row.warnings.filter((w) => w.code === 'line_cut');
+    expect(cut).toHaveLength(1);
+    expect(cut[0].message).toMatch(/shot 1/);
+  }, 240_000);
+
+  it('F1: no render while the voice or music is missing or still being made', async () => {
+    const queued = await newProject();
+    await enqueue({ projectId: queued.project.id, kind: 'narration', payload: {} });
+    await expect(startRender({ userId: queued.userId, projectId: queued.project.id })).rejects.toMatchObject({ status: 409, code: 'audio_not_ready' });
+
+    const noVoice = await newProject();
+    await storyDb().update('story_projects', { id: noVoice.project.id }, { narration_url: null, narration_key: null, narration_segments: null });
+    await expect(startRender({ userId: noVoice.userId, projectId: noVoice.project.id })).rejects.toMatchObject({ status: 409, code: 'audio_not_ready' });
+
+    const noMusic = await newProject();
+    await storyDb().update('story_projects', { id: noMusic.project.id }, { music_url: null, music_key: null });
+    await expect(startRender({ userId: noMusic.userId, projectId: noMusic.project.id })).rejects.toMatchObject({ status: 409, code: 'audio_not_ready' });
+    expect(await renders(noMusic.project.id)).toHaveLength(0);
+  });
+
+  it('F3: /status ends a queued render that a dead request left with no job', async () => {
+    const ctx = await newProject();
+    const [row] = await storyDb().insert('story_renders', { project_id: ctx.project.id, version: 1, status: 'queued', settings: {} });
+    await raw.query(`update story_renders set created_at = now() - interval '1 minute' where id = $1`, [row.id]);
+    const status = await getProjectStatus({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(status.render).toMatchObject({ id: row.id, status: 'failed' });
+  });
+
+  it('O6: music shorter than the video is looped to the end', async () => {
+    const ctx = await newProject({ musicFile: 'music5', narration: 'fill' });
+    const row = await renderOnce(ctx);
+    // The last second of the final mix still has the music under it (it plays from 11 to 12 s with no voice).
+    const r = spawnSync(FF, ['-hide_banner', '-nostats', '-ss', '11.6', '-i', localPathFor(row.file_url), '-vn', '-af', 'volumedetect', '-f', 'null', '-'], { encoding: 'utf8' });
+    const mean = Number(/mean_volume:\s*(-?[\d.]+)/.exec(r.stderr)[1]);
+    expect(mean).toBeGreaterThan(-60);
+    expect(row.settings.music).toBe(true);
+  }, 240_000);
+
+  it('Om3 and Fm5: footage is fitted by default, a trim past its end is clamped, and an inset that is not a picture or clip is refused', async () => {
+    const ctx = await newProject();
+    const [footage, voice] = await storyDb().insert('story_assets', [
+      { user_id: ctx.userId, kind: 'video_clip', url: media.c4.url, storage_key: media.c4.key, name: 'mine' },
+      { user_id: ctx.userId, kind: 'voice_track', url: media.short.url, storage_key: media.short.key, name: 'voice', mime: 'audio/wav' },
+    ]);
+    await storyDb().update('story_shots', { id: ctx.shots[1].id }, { source: 'footage', footage_asset_id: footage.id, footage: { trimStart: 30 } });
+    const row = await renderOnce(ctx);
+    expect(row.status).toBe('done');
+    expect(row.settings.shots[1]).toMatchObject({ source: 'footage', fit: 'contain', trimStart: 30 });
+    const m = measure(localPathFor(row.file_url));
+    expect(Math.abs(m.duration - 12)).toBeLessThanOrEqual(0.1);
+
+    await storyDb().update('story_shots', { id: ctx.shots[2].id }, { inset_asset_id: voice.id });
+    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toMatchObject({ status: 422 });
+  }, 240_000);
+
+  it('Fm9: a frozen file that is gone at run time fails cleanly', async () => {
+    const ctx = await newProject();
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    const settings = (await storyDb().select('story_renders', { id: render.id }))[0].settings;
+    settings.shots[0].url = '/api/mock/storage/story/gone/missing.mp4';
+    await storyDb().update('story_renders', { id: render.id }, { settings });
+    await runWorkerJob('render', {});
+    const [row] = await storyDb().select('story_renders', { id: render.id });
+    expect(row).toMatchObject({ status: 'failed', error: 'Something changed while the video was being made. Make it again.' });
+  });
+
+  it('F4: a failed upload is tried once more inside the run, so the checked file is not thrown away', async () => {
+    const ctx = await newProject();
+    globalThis.__putFailures = 1;
+    try {
+      const row = await renderOnce(ctx);
+      expect(row.status).toBe('done');
+      expect(transcribe).toHaveBeenCalledTimes(1);
+    } finally {
+      globalThis.__putFailures = 0;
+    }
+  }, 240_000);
+
+  it('F2: old render work dirs left by killed runs are removed at the start of a run', async () => {
+    const stale = path.join(os.tmpdir(), `story-render-stale-${randomUUID()}`);
+    mkdirSync(stale);
+    const old = (Date.now() - 20 * 60_000) / 1000;
+    utimesSync(stale, old, old);
+    await renderOnce(await newProject());
+    expect(existsSync(stale)).toBe(false);
+  }, 240_000);
+
+  it('T24: a playlist dressed as an mp3 voice track is never followed: the render fails cleanly', async () => {
+    const ctx = await newProject();
+    // ID3 header, then an HLS playlist pointing at a local file (a way to read other files on the machine).
+    const target = path.join(dir, 'secret.wav');
+    ff(['-f', 'lavfi', '-i', 'sine=f=440:d=3', target]);
+    const body = Buffer.concat([Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]), Buffer.from(`#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:3,\nfile://${target}\n#EXT-X-ENDLIST\n`)]);
+    const stored = await putObject({ key: `test-fixtures/${randomUUID()}.mp3`, body });
+    const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'voice_track', url: stored.url, storage_key: stored.key, name: 'mine', mime: 'audio/mpeg' });
+    await storyDb().update('story_projects', { id: ctx.project.id }, {
+      narration_url: asset.url, narration_key: null, narration_segments: null,
+      audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'generated', prompt: '', assetId: null }, voiceTrackAssetId: asset.id },
+    });
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    await runWorkerJob('render', {});
+    const [row] = await storyDb().select('story_renders', { id: render.id });
+    expect(row.status).toBe('failed');
+    expect(row.error).toBe('Your voice recording could not be read. Upload it again as an mp3, wav or m4a file.');
+  }, 240_000);
 });

@@ -454,6 +454,16 @@ describe('a full mock sequence through the tools', () => {
     status = await use(client, 'get_status', { project_id: projectId });
     expect(status.data.shots).toMatchObject({ total: quote.data.quote.shot_ids.length, with_clip: quote.data.quote.shot_ids.length });
 
+    // The tools have no voice or music step: a render before the narration exists is refused (Task 20 round 1, F1).
+    const early = await use(client, 'render', { project_id: projectId });
+    expect(early.isError).toBe(true);
+    expect(early.data.error).toBe('audio_not_ready');
+    // Made on the maker's Voice and sound step: no music, and the narration (the first one is included).
+    const { setAudioPlan, generateNarration } = await import('../../lib/story/audio.js');
+    await setAudioPlan({ userId: user.id, projectId, plan: { music: { type: 'none' } } });
+    await generateNarration({ userId: user.id, projectId, user });
+    expect(await runWorkerJob('narration', {})).toMatchObject({ claimed: true, outcome: 'done' });
+
     const render = await use(client, 'render', { project_id: projectId });
     expect(render.isError, render.text).toBe(false);
     expect(render.data.status_text).toMatch(/get_status|get_result/);

@@ -613,7 +613,7 @@ describe('which stored files count as an upload', () => {
 describe('downloads fit inside the worker window', () => {
   it("the customer's own recording is downloaded for at most 120 s and 20 MB, and a download that fails says why", async () => {
     downloadToFile.mockRejectedValueOnce(new ProviderError('failed', 'That download took too long.'));
-    await expect(sliceUrl({ url: 'https://abc.public.blob.vercel-storage.com/story-audio/u/a.mp3', lines: [{ sceneId: 's1', lineIndex: 0, text: 'Hi.' }] })).rejects.toMatchObject({ code: 'failed' });
+    await expect(sliceUrl({ url: 'https://abc.public.blob.vercel-storage.com/story-audio/u/a.mp3', ext: 'mp3', lines: [{ sceneId: 's1', lineIndex: 0, text: 'Hi.' }] })).rejects.toMatchObject({ code: 'failed' });
     const opts = downloadToFile.mock.calls[0][1];
     expect(opts.timeoutMs).toBeGreaterThan(0);
     expect(opts.timeoutMs).toBeLessThanOrEqual(120_000);

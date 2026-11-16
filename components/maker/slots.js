@@ -54,7 +54,8 @@ function MakeVideo({ project, render, refresh }) {
       await startRender(project.id);
       refresh?.();
     } catch (err) {
-      setError(describeError(err));
+      // A refusal the server explains (audio_not_ready, shots_not_ready, render_busy) is shown in its own words.
+      setError({ ...describeError(err), server: err?.serverMessage || '' });
       if (err?.status === 409) refresh?.();
     } finally {
       setBusy(false);
@@ -64,15 +65,15 @@ function MakeVideo({ project, render, refresh }) {
     <Card className={styles.slot} data-slot="finish" data-media-card="">
       <span className={styles.slotIcon} data-tile="slot"><Icon name="film" /></span>
       <h3>Your finished video</h3>
-      {render?.status === 'done' && render.file_url ? (
+      {render?.status === 'done' && render.url ? (
         <p>
-          Version {render.version} is ready. <a href={render.file_url} target="_blank" rel="noreferrer">Watch your video</a>
+          Version {render.version} is ready. <a href={render.url} target="_blank" rel="noreferrer">Watch your video</a>
         </p>
       ) : (
         <p>{render ? RENDER_TEXT[render.status] || '' : 'Put your clips, voice, music and captions together into one video.'}</p>
       )}
       {render?.status === 'failed' && render.error ? <p>{render.error}</p> : null}
-      {error ? <p role="alert">{error.message || error.title}</p> : null}
+      {error ? <p role="alert">{error.server || error.message || error.title}</p> : null}
       <Button onClick={start} disabled={busy || Boolean(working)}>
         {render?.status === 'done' ? 'Make it again' : render?.status === 'failed' ? 'Try again' : 'Make my video'}
       </Button>
