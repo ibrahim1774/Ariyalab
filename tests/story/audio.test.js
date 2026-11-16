@@ -695,6 +695,94 @@ describe('round 1: the audio worker', () => {
   });
 });
 
+describe('round 2: the worker route and the kick', () => {
+  it('B1: one job per kind per invocation, so a later job is never started inside the window and killed', async () => {
+    vi.stubEnv('CRON_SECRET', 'worker-secret');
+    const a = await newProject({ funds: 20 });
+    const b = await newProject({ funds: 20 });
+    await start(a, 'narration');
+    await start(b, 'narration');
+    const { default: handler } = await import('../../pages/api/story/worker/audio.js');
+    const out = makeRes();
+    await handler(makeReq({ method: 'POST', headers: { authorization: 'Bearer worker-secret' } }), out);
+    expect(out.body).toMatchObject({ ok: true, narration: 1, music: 0 });
+    expect(synthesize).toHaveBeenCalledTimes(1);
+    expect((await jobs(b.project.id, 'narration'))[0].status).toBe('queued');
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('STORY_MOCK', '1');
+  });
+
+  it('B3: one kind throwing does not stop the other from running', async () => {
+    vi.stubEnv('CRON_SECRET', 'worker-secret');
+    const ctx = await newProject({ funds: 20 });
+    await start(ctx, 'music');
+    const db = storyDb();
+    const realRpc = db.rpc.bind(db);
+    const spy = vi.spyOn(db, 'rpc').mockImplementation(async (fn, params) => {
+      if (fn === 'story_claim_jobs' && params?.p_kinds?.includes('narration')) throw new Error('boom');
+      return realRpc(fn, params);
+    });
+    const { default: handler } = await import('../../pages/api/story/worker/audio.js');
+    const out = makeRes();
+    await handler(makeReq({ method: 'POST', headers: { authorization: 'Bearer worker-secret' } }), out);
+    spy.mockRestore();
+    expect(out.statusCode).toBe(200);
+    expect(out.body).toMatchObject({ music: 1, narration: 0 });
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('STORY_MOCK', '1');
+  });
+
+  it('B4: runCron kicks the worker before its own work', async () => {
+    const order = [];
+    vi.stubGlobal('fetch', vi.fn(async () => { order.push('kick'); return { ok: true }; }));
+    vi.stubEnv('APP_URL', 'https://app.example.test');
+    vi.stubEnv('CRON_SECRET', 's3');
+    vi.stubEnv('STORY_MOCK', '');
+    const ctx = await newProject({ funds: 20 });
+    // start() kicks too; only the cron's own kick is under test.
+    await start(ctx, 'music');
+    order.length = 0;
+    const db = storyDb();
+    const realRpc = db.rpc.bind(db);
+    const spy = vi.spyOn(db, 'rpc').mockImplementation(async (fn, params) => { order.push(fn); return realRpc(fn, params); });
+    await runCron({ now: new Date(clock), deadline: Date.now() + 45_000 });
+    spy.mockRestore();
+    expect(order[0]).toBe('kick');
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('STORY_MOCK', '1');
+  });
+
+  it('B5: starting a generation sends the kick (awaited, capped), not left to be dropped', async () => {
+    const sent = [];
+    vi.stubGlobal('fetch', vi.fn(async (url) => { sent.push(url); return { ok: true }; }));
+    vi.stubEnv('APP_URL', 'https://app.example.test');
+    vi.stubEnv('CRON_SECRET', 's3');
+    vi.stubEnv('STORY_MOCK', '');
+    const ctx = await newProject({ funds: 20 });
+    await start(ctx, 'music');
+    expect(sent).toEqual(['https://app.example.test/api/story/worker/audio']);
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+    vi.stubEnv('ANTHROPIC_API_KEY', '');
+    vi.stubEnv('STORY_MOCK', '1');
+  });
+
+  it('B6: in mock mode outside the tests the kick runs the worker in-process, no secret needed', async () => {
+    const { kickWorker, AUDIO_WORKER_PATH } = await import('../../lib/story/workers.js');
+    const ctx = await newProject({ funds: 20 });
+    vi.stubEnv('NODE_ENV', 'development');
+    await start(ctx, 'music');
+    expect(await kickWorker(AUDIO_WORKER_PATH)).toBe(true);
+    vi.stubEnv('NODE_ENV', 'test');
+    expect((await audioOf(ctx)).music.status).toBe('ready');
+    expect(providerMusic).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('round 1: sources, slicing failures, attention, blocked', () => {
   it('A5: a retry after a source switch is a normal priced make, not a retry', async () => {
     const ctx = await newProject({ funds: 100 });

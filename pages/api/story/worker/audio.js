@@ -8,17 +8,16 @@ import { workerAuthorized } from '../../../../lib/story/workers.js';
  */
 export const config = { maxDuration: 300 };
 
-const WORK_MS = 285_000;
 const KINDS = ['narration', 'music'];
 
-async function work(kind, deadline) {
-  let ran = 0;
-  // A job starts only with enough time left (RUNNER_CONFIG.syncMinSeconds); runWorkerJob says claimed:false otherwise.
-  for (;;) {
-    const out = await runWorkerJob(kind, { deadline });
-    if (!out.claimed) return ran;
-    ran += 1;
-  }
+/*
+ * At most ONE job per kind per invocation, claimed at the start: a second job would start with less than
+ * the whole window left and could be killed mid-call at maxDuration, after the provider was paid. Provider
+ * timeouts stay under the window (voice 180 s, music 270 s). The cron kicks again every minute for the rest.
+ */
+async function work(kind) {
+  const out = await runWorkerJob(kind, {});
+  return out.claimed ? 1 : 0;
 }
 
 export default async function handler(req, res) {
@@ -28,8 +27,10 @@ export default async function handler(req, res) {
   }
   if (!workerAuthorized(req.headers.authorization)) return res.status(401).json({ error: 'unauthorized' });
   try {
-    const deadline = Date.now() + WORK_MS;
-    const [narration, music] = await Promise.all(KINDS.map((k) => work(k, deadline)));
+    // allSettled: one kind failing must not cut off the other's provider call.
+    const results = await Promise.allSettled(KINDS.map((k) => work(k)));
+    results.forEach((r, i) => { if (r.status === 'rejected') console.error(`[worker/audio] ${KINDS[i]} failed:`, r.reason?.message || r.reason); });
+    const [narration, music] = results.map((r) => (r.status === 'fulfilled' ? r.value : 0));
     return res.status(200).json({ ok: true, narration, music });
   } catch (err) {
     console.error('[worker/audio] failed:', err?.message || err);

@@ -264,6 +264,27 @@ describe('round 1', () => {
   });
 });
 
+describe('round 2', () => {
+  it('B2: a blur save and Make the music share one save, and the button stays locked until the make settles', async () => {
+    let finishSave;
+    let finishMake;
+    client.saveAudioPlan.mockImplementation(() => new Promise((r) => { finishSave = () => r(view({ plan: { music: { type: 'generated', prompt: 'Calm', assetId: null } } })); }));
+    client.makeMusic.mockImplementation(() => new Promise((r) => { finishMake = () => r({ audio: view({ music: { status: 'pending' } }), charged: 0 }); }));
+    await open(view());
+    const box = screen.getByRole('textbox', { name: /What should it sound like/ });
+    fireEvent.change(box, { target: { value: 'Calm' } });
+    fireEvent.blur(box);
+    fireEvent.click(screen.getByRole('button', { name: 'Make the music' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Make the music' })).toBeDisabled());
+    await act(async () => { finishSave(); });
+    await waitFor(() => expect(client.makeMusic).toHaveBeenCalledTimes(1));
+    expect(client.saveAudioPlan).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: 'Make the music' })).toBeDisabled();
+    await act(async () => { finishMake(); });
+    expect(await screen.findByText('Composing your music')).toBeInTheDocument();
+  });
+});
+
 describe('captions', () => {
   it('previews the three styles, saves a pick, and switches them off together', async () => {
     client.saveAudioPlan.mockResolvedValue(view({ plan: { captions: { on: true, style: 'bold_pop' } } }));

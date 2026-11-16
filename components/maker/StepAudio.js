@@ -115,6 +115,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
       const next = await getAudio(project.id);
       if (!alive.current) return;
       setAudio(next);
+      saved.current = { prompt: next.plan.music.prompt || '', audio: next };
       setLoadError(null);
       if (!promptTouched.current) setPrompt(next.plan.music.prompt || '');
     } catch (err) {
@@ -141,7 +142,11 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
     setError(null);
     try {
       const out = await fn();
-      if (out && alive.current) setAudio(out.audio || out);
+      if (out && alive.current) {
+        const next = out.audio || out;
+        setAudio(next);
+        saved.current = { prompt: next.plan.music.prompt || '', audio: next };
+      }
       await refresh?.();
     } catch (err) {
       setError(err);
@@ -154,24 +159,41 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
 
   const savePlan = (patch, kind = 'plan') => run(kind, () => saveAudioPlan(project.id, patch));
   const typed = () => prompt.replace(/\s+/g, ' ').trim();
-  // Saves the description when it changed. Throws when the save fails, and then the customer's text stays as it is.
+  const saving = useRef(null);
+  const saved = useRef({ prompt: null, audio: null }); // the last view the server gave and the description it holds
+  // Saves the description when it changed; a save already under way is shared, never repeated. Throws when the
+  // save fails, and then the customer's text stays as it is.
   async function persistPrompt() {
-    if (!audio || typed() === (audio.plan.music.prompt || '')) return null;
-    const next = await saveAudioPlan(project.id, { music: { prompt: typed() } });
-    promptTouched.current = false;
-    return next;
+    while (saving.current) await saving.current.catch(() => {});
+    if (!audio || typed() === (saved.current.prompt ?? (audio.plan.music.prompt || ''))) return null;
+    const pending = saveAudioPlan(project.id, { music: { prompt: typed() } });
+    saving.current = pending;
+    try {
+      const next = await pending;
+      promptTouched.current = false;
+      saved.current = { prompt: next.plan.music.prompt || '', audio: next };
+      return next;
+    } finally {
+      saving.current = null;
+    }
   }
-  const commitPrompt = () => run('prompt', persistPrompt);
+  // The blur save has its own error handling and does not touch the busy state of a make.
+  const commitPrompt = async () => {
+    try {
+      const next = await persistPrompt();
+      if (next && alive.current) setAudio(next);
+    } catch (err) {
+      setError(err);
+    }
+  };
   const makeTrack = (kind, retry) => run(kind, async () => {
     // A description that cannot be saved stops the make: it would be charged for the old words.
-    let current = audio;
     if (kind === 'music') {
-      const saved = await persistPrompt();
-      if (saved) {
-        setAudio(saved);
-        current = saved;
-      }
+      const next = await persistPrompt();
+      if (next) setAudio(next);
     }
+    // The newest view: this save's, or the blur save's that this make waited for.
+    const current = (kind === 'music' && saved.current.audio) || audio;
     const track = current[kind];
     const price = retry ? track.retry_credits : track.credits;
     return (kind === 'music' ? makeMusic : makeNarration)(project.id, { retry, expectedCredits: Number.isInteger(price) ? price : undefined });
