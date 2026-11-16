@@ -3,6 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestDb } from '../helpers/db.js';
 import { useRegexOnlyModeration, useTestAccounts } from '../helpers/storyEnv.js';
 import { setStoryDb, storyDb } from '../../lib/story/db.js';
+import { setPricingDb } from '../../lib/pricing.js';
 import { ConflictError, NotFoundError, ValidationError } from '../../lib/story/errors.js';
 import { ModerationError } from '../../lib/moderation.js';
 import {
@@ -22,10 +23,12 @@ let raw;
 beforeAll(async () => {
   raw = await createTestDb();
   setStoryDb(raw);
+  setPricingDb(raw);
 }, 60_000);
 
 afterAll(async () => {
   setStoryDb(null);
+  setPricingDb(null);
   await raw?.close();
 });
 
@@ -318,7 +321,7 @@ describe('duplicateProject', () => {
     expect(copiedRef.beat_sheet).toHaveLength(1);
   });
 
-  it('shares files with the source until it expires, then drops them', async () => {
+  it('shares files with the source (the copy gets a fresh retention date) until it expires, then drops them', async () => {
     const userId = userA();
     const src = await createProject({ userId, input: BRIEF });
     await storyDb().update('story_projects', { id: src.id }, {
@@ -327,7 +330,11 @@ describe('duplicateProject', () => {
     await seedChildren(src);
     await storyDb().update('story_shots', { project_id: src.id }, { still_key: 'k/s.png', clip_key: 'k/c.mp4' });
     const live = await duplicateProject({ userId, id: src.id });
-    expect(live).toMatchObject({ files_expire_at: '2026-12-14T00:00:00.000Z', narration_key: 'k/n.mp3' });
+    expect(live).toMatchObject({ narration_key: 'k/n.mp3' });
+    // Fresh: now + retentionDays (30 by default), not the source's date (ledger ruling, Task 27).
+    const fresh = Date.parse(live.files_expire_at) - Date.now();
+    expect(fresh).toBeGreaterThan(29 * 86_400_000);
+    expect(fresh).toBeLessThanOrEqual(30 * 86_400_000);
     const liveShots = await storyDb().select('story_shots', { project_id: live.id }, { order: 'ord' });
     expect(liveShots.map((s) => [s.still_key, s.clip_key])).toEqual([['k/s.png', null], ['k/s.png', null]]);
 

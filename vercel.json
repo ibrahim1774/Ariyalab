@@ -23,6 +23,10 @@
     {
       "path": "/api/cron/story-holds",
       "schedule": "*/10 * * * *"
+    },
+    {
+      "path": "/api/cron/story-cleanup",
+      "schedule": "45 4 * * *"
     }
   ],
   "functions": {

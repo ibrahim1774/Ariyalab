@@ -20,7 +20,8 @@
 -- story_project_file_keys(project) -> every storage key the project's rows name: narration/music/thumbnail, shot
 --   stills and clips, cast pictures (image_key and every "key" in candidates and sheet), renders, the project's
 --   references (storage_key and frames) and any "key" in its jobs' results.
--- story_keys_in_use(keys, project) -> the keys of `keys` that must NOT be deleted: any story_assets.storage_key (brand
+-- story_keys_in_use(keys, project) -> the keys of `keys` that must NOT be deleted: any story_assets.storage_key (or the
+--   object an asset's url points at when it has no storage_key) (brand
 --   kit and own files never expire with a project; own-picture cast rows reuse that key as image_key), or a key named
 --   by a project other than `project` whose status is not 'expired' (duplicates share keys: refcount).
 -- story_expire_project(project) -> true when the project was marked expired now.
@@ -127,6 +128,9 @@ as $$
   live as (select id from story_projects where status <> 'expired' and id is distinct from p_project),
   used as (
     select a.storage_key as k from story_assets a where a.storage_key = any (p_keys)
+    -- An asset row with no storage_key still owns the object its url points at.
+    union all select w.k from wanted w
+      where exists (select 1 from story_assets a where a.storage_key is null and right(a.url, length(w.k) + 1) = '/' || w.k)
     union all select unnest(array[p.narration_key, p.music_key, p.thumbnail_key]) from story_projects p
       join live on live.id = p.id
       where p.narration_key = any (p_keys) or p.music_key = any (p_keys) or p.thumbnail_key = any (p_keys)

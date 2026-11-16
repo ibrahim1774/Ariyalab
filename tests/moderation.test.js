@@ -101,6 +101,25 @@ describe('screenImage', () => {
     expect(err.reason).toBe(MODERATION_UNAVAILABLE);
   });
 
+  it('fails closed (unavailable) and aborts the call when the check outlives timeoutMs (assets path)', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => 'image/jpeg' },
+      arrayBuffer: async () => new ArrayBuffer(8),
+    }));
+    let signal = null;
+    create.mockImplementation((_params, opts) => {
+      signal = opts?.signal || null;
+      return new Promise(() => {}); // never answers
+    });
+    const started = Date.now();
+    const err = await screenImage('https://example.com/slow.jpg', { timeoutMs: 50 }).catch((e) => e);
+    expect(Date.now() - started).toBeLessThan(2000);
+    expect(err).toBeInstanceOf(ModerationError);
+    expect(err.reason).toBe(MODERATION_UNAVAILABLE);
+    expect(signal?.aborted).toBe(true);
+  });
+
   it('rejects when the image cannot be fetched', async () => {
     vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('boom')));
     const err = await screenImage('https://example.com/a.jpg').catch((e) => e);
