@@ -26,6 +26,7 @@ const { generateCast } = await import('../../lib/story/cast.js');
 const { _setMcpRateLimit } = await import('../../lib/mcp/server.js');
 const draftRoute = await import('../../pages/api/story/worker/draft.js');
 const { draftHandler } = await import('../../lib/story/draftJobs.js');
+const { ProviderError } = await import('../../lib/providers/errors.js');
 const { sceneSig } = await import('../../lib/story/storyboard.js');
 const { quoteGeneration } = await import('../../lib/story/shots.js');
 const { RIGHTS_STATEMENT } = await import('../../lib/story/referenceRules.js');
@@ -910,23 +911,68 @@ describe('round 2', () => {
     expect((await draftJob(projectId)).allowance_returned_at).toBeTruthy();
   });
 
-  it('S2: a write or revise run again after it saved does not write again', async () => {
+  it('S2/T1: a retry of a draft that died after saving does not write again, and shows the saved version as ready', async () => {
     const user = newUser();
     const client = await connect(await tokenFor(user));
     const projectId = await projectWithScript(client);
     const versions = async () => (await storyDb().select('story_scripts', { project_id: projectId })).length;
     expect(await versions()).toBe(1);
+    // A first attempt never skips: running the finished write's job again is not a retry, so it is script_changed.
     const written = await draftJob(projectId);
-    expect(await draftHandler.run(written)).toMatchObject({ script_version: 1, already_saved: true });
+    expect(await draftHandler.run({ ...written, attempts: 1 })).toEqual({ error: { code: 'script_changed', message: 'The script changed while this was waiting. Ask again.' } });
 
     await use(client, 'set_script', { project_id: projectId, instruction: 'Make the opening funnier' });
     const revise = await draftJob(projectId);
-    expect(revise.payload).toMatchObject({ task: 'revise', baseVersion: 1 });
-    expect(await draftHandler.run(revise)).toMatchObject({ script_version: 2 });
-    // The retry of a run that died after saving: done, nothing written again.
-    expect(await draftHandler.run(revise)).toMatchObject({ script_version: 2, already_saved: true });
+    // The run saves v2 and dies before the runner records it; the sweep puts it back; the retry finds its own v2.
+    await draftHandler.run({ ...revise, attempts: 1 });
     expect(await versions()).toBe(2);
+    await raw.query(`update story_jobs set status = 'running', attempts = 1, started_at = now() - interval '6 minutes', run_after = null where id = $1`, [revise.id]);
+    await sweep({ now: new Date() });
+    expect((await draftJob(projectId)).status).toBe('queued');
+    // Past the retry backoff.
+    await raw.query(`update story_jobs set run_after = null where id = $1`, [revise.id]);
+    expect(await runDrafts()).toBe(1);
+    expect(await versions()).toBe(2);
+    expect((await draftJob(projectId)).result).toMatchObject({ script_version: 2, already_saved: true });
+    const status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.script).toEqual({ task: 'revise', status: 'ready' });
     expect(modelCalls.story_script).toBe(2);
+  });
+
+  it('T1: a revise queued before the customer edited a scene is applied to the latest version', async () => {
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    await use(client, 'set_script', { project_id: projectId, instruction: 'Make the opening funnier' });
+    const { data } = await use(client, 'get_project', { project_id: projectId });
+    const scene = data.summary.script.scenes[0];
+    const edited = await use(client, 'set_script', { project_id: projectId, scene_id: scene.id, patch: { title: 'Edited while waiting' } });
+    expect(edited.data.script.version).toBe(2);
+    expect(await runDrafts()).toBe(1);
+    const latest = (await storyDb().select('story_scripts', { project_id: projectId }, { order: '-version', limit: 1 }))[0];
+    expect(latest).toMatchObject({ version: 3, source: 'revision', instruction: 'Make the opening funnier' });
+    // Applied on top of the edit: the edited title is still there (the mock keeps titles it does not change).
+    expect(latest.scenes[0].title).toBe('Edited while waiting');
+    const status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.script).toEqual({ task: 'revise', status: 'ready' });
+  });
+
+  it('T1: any other skip ends as script_changed and gives the count back', async () => {
+    accounts.set({ paid: false });
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const { data } = await use(client, 'create_project', { title: 'Forced', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = data.project.id;
+    await use(client, 'write_script', { project_id: projectId });
+    expect(await usage(user.id, 'script_write')).toBe(1);
+    const job = await draftJob(projectId);
+    // A version carrying this job's id before its first attempt ran.
+    await storyDb().insert('story_scripts', { project_id: projectId, version: 1, scenes: [SCENE], source: 'brief', draft_job_id: job.id });
+    expect(await runDrafts()).toBe(1);
+    expect(await storyDb().select('story_scripts', { project_id: projectId })).toHaveLength(1);
+    const status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.script).toMatchObject({ status: 'failed', error: 'script_changed', message: 'The script changed while this was waiting. Ask again.' });
+    expect(await usage(user.id, 'script_write')).toBe(0);
   });
 
   it('S3: a killed draft is retried after the worker limit, not 10 minutes; a retried plan takes one storyboard build count', async () => {
@@ -1006,5 +1052,66 @@ describe('round 2', () => {
     expect(again.isError, again.text).toBe(false);
     expect(again.data.previous_attempt).toMatchObject({ task: 'shots', status: 'failed' });
     expect(again.data.drafting).toEqual({ task: 'shots', status: 'queued' });
+  });
+});
+
+describe('round 3: the storyboard build count across retries', () => {
+  const usage = async (userId) => Number((await raw.query(
+    `select coalesce(sum(count), 0)::int as n from story_usage where user_id = $1 and action like 'shots_build%'`, [userId],
+  )).rows[0].n);
+  const planJob = async (projectId) => (await storyDb().select('story_jobs', { project_id: projectId, kind: 'script' }, { order: '-created_at', limit: 1 }))[0];
+
+  async function queuedPlan() {
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    const out = await use(client, 'generate_storyboard', { project_id: projectId });
+    expect(out.data.drafting).toEqual({ task: 'shots', status: 'queued' });
+    // A second build counted today, so a double give-back would show.
+    await raw.query(`update story_usage set count = count + 1 where user_id = $1 and action like 'shots_build%'`, [user.id]);
+    expect(await usage(user.id)).toBe(2);
+    return { user, projectId };
+  }
+
+  it('T2: two failures before the model was asked give the count back exactly once, by the job', async () => {
+    const { user, projectId } = await queuedPlan();
+    const job = await planJob(projectId);
+    // Fails before the model each time (the shots are busy): the service keeps the count, the job gives it back once.
+    await storyDb().insert('story_shots', { project_id: projectId, ord: 0, scene_id: 's9', description: 'x', seconds: 3, quality: 'standard', status: 'still_pending' });
+    const results = [];
+    for (const attempts of [1, 2]) {
+      const result = await draftHandler.run({ ...job, attempts });
+      expect(result.error?.code).toBe('shots_busy');
+      expect(result.model_asked).toBeUndefined();
+      results.push(result);
+    }
+    // The service gave nothing back itself.
+    expect(await usage(user.id)).toBe(2);
+    // The hooks may run more than once: the count goes back exactly once.
+    for (const result of results) await draftHandler.onDone(job, result);
+    await draftHandler.onFail(job);
+    expect(await usage(user.id)).toBe(1);
+  });
+
+  it('T2: a plan that failed after the model was asked keeps the count, on every later hook', async () => {
+    const { user, projectId } = await queuedPlan();
+    const job = await planJob(projectId);
+    const real = mockFn('story_shots');
+    registerMock('story_shots', () => {
+      throw new ProviderError('failed', 'The model is down.');
+    });
+    try {
+      await expect(draftHandler.run({ ...job, attempts: 1 })).rejects.toThrow();
+    } finally {
+      registerMock('story_shots', real);
+    }
+    expect((await planJob(projectId)).payload.model_asked).toBe(true);
+    // The retry fails early this time; the earlier attempt asked the model, so nothing goes back.
+    await storyDb().insert('story_shots', { project_id: projectId, ord: 0, scene_id: 's9', description: 'x', seconds: 3, quality: 'standard', status: 'still_pending' });
+    const retry = await draftHandler.run({ ...(await planJob(projectId)), attempts: 2 });
+    expect(retry.error?.code).toBe('shots_busy');
+    await draftHandler.onDone(job, retry);
+    await draftHandler.onFail(job);
+    expect(await usage(user.id)).toBe(2);
   });
 });
