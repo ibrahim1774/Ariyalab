@@ -1,0 +1,61 @@
+/* The Brand kit page: the brand text on the left, the files on the right; one column on a phone. */
+.page { max-width: 1180px; margin: 0 auto; display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.header { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin: 4px 0 6px; }
+.title { font-size: clamp(26px, 3.6vw, 36px); line-height: 1.1; }
+.sub { margin: 6px 0 0; color: var(--text-dim); max-width: 62ch; font-size: 15px; }
+.layout { display: grid; grid-template-columns: minmax(0, 420px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.card { display: flex; flex-direction: column; gap: 10px; padding: 16px; min-width: 0; }
+.h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; }
+.icon { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--accent-tint); color: var(--accent-deep); }
+.form { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; }
+.field input, .field textarea { width: 100%; font: inherit; font-weight: 400; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); color: var(--text); resize: vertical; }
+.field input:focus-visible, .field textarea:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.hint { margin: 0; color: var(--text-dim); font-size: 13px; line-height: 1.4; font-weight: 400; }
+.colors { display: flex; flex-direction: column; gap: 8px; margin: 0; padding: 0; border: 0; min-width: 0; }
+.colors legend { padding: 0; margin-bottom: 6px; font-size: 14px; font-weight: 500; }
+.colors ul { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.colors > button { align-self: flex-start; }
+.color { display: inline-flex; align-items: center; gap: 8px; padding: 4px 10px 4px 4px; border: 1px solid var(--glass-border); border-radius: var(--radius-pill); background: var(--surface-0); font-size: 12px; }
+.color input[type='color'] { width: 28px; height: 28px; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; }
+.color code { font-size: 12px; color: var(--text-dim); }
+.actions { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; }
+.saved { font-size: 13px; color: var(--success); }
+.wait { height: 112px; border-radius: 14px; overflow: hidden; }
+.file { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.files { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.sections { display: flex; flex-direction: column; gap: 14px; }
+.section { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--glass-border); border-radius: 18px; background: var(--surface-0); box-shadow: var(--shadow-sm); min-width: 0; }
+.sectionHead { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.sectionHead h3 { margin: 0; font-size: 15px; }
+.emptyRow { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border: 1px dashed var(--border-strong); border-radius: 14px; background: repeating-linear-gradient(135deg, var(--accent-tint) 0 8px, transparent 8px 16px); }
+.emptyIcon { flex: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--surface); color: var(--accent-deep); }
+.emptyText { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: 14px; }
+.emptyText small { color: var(--text-dim); font-size: 12px; line-height: 1.35; }
+.grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
+.item { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.thumbBox { border: 1px solid var(--glass-border); }
+.itemName { font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.itemActions, .confirm { display: flex; flex-wrap: wrap; gap: 2px 10px; }
+.link { padding: 0; border: 0; background: none; color: var(--text-dim); font: inherit; font-size: 12px; text-decoration: underline; cursor: pointer; }
+.link:hover:not(:disabled) { color: var(--accent-deep); }
+.link:disabled { text-decoration: none; cursor: default; }
+.link:focus-visible, .danger:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 6px; }
+.danger { padding: 0; border: 0; background: none; color: var(--error); font: inherit; font-size: 12px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.inUse { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 14px; background: var(--error-bg); color: var(--text); font-size: 14px; }
+.inUse ul { margin: 2px 0 0; padding-left: 18px; }
+.inUse a { color: inherit; text-decoration: underline; }
+
+@media (max-width: 960px) {
+  .layout { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .card { padding: 12px; }
+  .actions button, .sectionHead button { min-height: 44px; }
+  .field input, .field textarea { min-height: 44px; }
+  .link, .danger { min-height: 44px; display: inline-flex; align-items: center; }
+  .grid { grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); }
+  .emptyRow { flex-wrap: wrap; }
+  .emptyRow > button { min-height: 44px; }
+}

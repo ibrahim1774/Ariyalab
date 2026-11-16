@@ -806,6 +806,35 @@ describe('round 3', () => {
     expect(codes(row)).not.toContain('narration_gap');
   }, 240_000);
 
+  it('a playlist saved as a .png picture inset fails cleanly, and its segment is never read', async () => {
+    const ctx = await newProject();
+    const target = path.join(dir, 'secret-inset.ts');
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=24:duration=2', '-pix_fmt', 'yuv420p', '-f', 'mpegts', target]);
+    const key = `test-fixtures/${randomUUID()}.png`;
+    mkdirSync(path.dirname(mockStoragePath(key)), { recursive: true });
+    // A playlist whose segment is a real video: opened by content it would play, so only a forced image demuxer refuses it.
+    writeFileSync(mockStoragePath(key), `#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:2,\nfile://${target}\n#EXT-X-ENDLIST\n`);
+    const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'product_photo', url: `/api/mock/storage/${key}`, storage_key: key, name: 'pip', mime: 'image/png' });
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { inset_asset_id: asset.id });
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    await runWorkerJob('render', {});
+    const [row] = await storyDb().select('story_renders', { id: render.id });
+    expect(row).toMatchObject({ status: 'failed', error: 'One of your picture-in-picture files could not be read. Pick another file for that shot.' });
+  }, 240_000);
+
+  it('a picture inset whose type is only known by its extension is still opened with its own demuxer', async () => {
+    const ctx = await newProject();
+    const png = readFileSync(path.join(process.cwd(), 'tests/fixtures/still.png'));
+    const key = `test-fixtures/${randomUUID()}.png`;
+    mkdirSync(path.dirname(mockStoragePath(key)), { recursive: true });
+    writeFileSync(mockStoragePath(key), png);
+    const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'logo', url: `/api/mock/storage/${key}`, storage_key: key, name: 'logo' });
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { inset_asset_id: asset.id, inset: { x: 0.7, y: 0.2, w: 0.3 } });
+    const row = await renderOnce(ctx);
+    expect(row.status).toBe('done');
+    expect(row.settings.shots[0].inset).toMatchObject({ image: true, mime: null, w: 0.3 });
+  }, 240_000);
+
   it('R3 and R4: a playlist saved as an .mp4 video inset fails cleanly, with the inset wording', async () => {
     const ctx = await newProject();
     const target = path.join(dir, 'secret-inset.mp4');

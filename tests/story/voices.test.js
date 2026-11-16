@@ -655,7 +655,7 @@ describe('/api/story/voices and /api/story/assets', () => {
     expect((await call(assets, { method: 'POST' })).statusCode).toBe(401);
     const userId = await newUser();
     expect((await call(voices, { method: 'PUT', userId })).statusCode).toBe(405);
-    expect((await call(assets, { method: 'DELETE', userId })).statusCode).toBe(405);
+    expect((await call(assets, { method: 'PUT', userId })).statusCode).toBe(405); // DELETE is the asset delete (Task 23)
   });
 
   it('GET lists the clones with the consent statement, the price and the limits; POST clones and returns 201', async () => {

@@ -2,12 +2,12 @@ import { useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
-import { pickCast, regenCast, retryCast, startCast } from '../../lib/story/client';
+import { pickCast, regenCast, retryCast, setCastImage, startCast } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import { usePricing } from './PricingContext';
-import { AssetPickerSlot } from './slots';
+import AssetPicker from './AssetPicker';
 import { EmptyState, Skeleton, StyleNote, Tile } from './Tiles';
 import styles from './Steps.module.css';
 
@@ -30,13 +30,14 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const regenCost = Number.isInteger(cast.regen_credits) ? cast.regen_credits : (cast.regens_used || 0) >= pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
   const retryCost = Number.isInteger(cast.retry_credits) ? cast.retry_credits : (cast.regens_used || 0) > pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
 
-  async function run(kind, fn) {
+  async function run(kind, fn, { rethrow = false } = {}) {
     setBusy(kind);
     setError(null);
     try {
       await fn();
       await refresh?.();
     } catch (err) {
+      if (rethrow) throw err;
       setError(err);
       // A changed price or a state that moved on: show the current one.
       if (err?.status === 409) await refresh?.();
@@ -95,6 +96,15 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
         </div>
       )}
 
+      {cast.asset_id && cast.image_url && cast.status !== 'pending' && (
+        <div className={styles.candidates} data-own-image="">
+          <div className={`${styles.candidate} ${styles.candidateChosen}`} data-media-card="">
+            <img src={cast.image_url} alt={`${cast.name}, your own picture`} loading="lazy" />
+            <span className={styles.pickButton} aria-label={`${cast.name} uses your own picture`}>Your picture</span>
+          </div>
+        </div>
+      )}
+
       {candidates.length > 0 && cast.status !== 'pending' && (
         <div className={styles.candidates}>
           {candidates.map((c, i) => {
@@ -133,7 +143,16 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             <Button type="submit" variant="ghost" size="sm" disabled={busy === 'regen' || !note.trim()}>
               {busy === 'regen' ? 'Making new pictures…' : regenCost > 0 ? `Regenerate (${regenCost} credits)` : 'Regenerate'}
             </Button>
-            <AssetPickerSlot label="Use my own image" />
+            <AssetPicker
+              kinds={['mascot', 'product', 'logo']}
+              uploadKind="mascot"
+              label="Use my own image"
+              title={`Use your own picture for ${cast.name}`}
+              selectedId={cast.asset_id}
+              disabled={Boolean(busy)}
+              returnTo={returnTo}
+              onPick={(a) => run('own', () => setCastImage(projectId, cast.id, a.id), { rethrow: true })}
+            />
           </div>
           <p className={styles.hint}>
             {left} regeneration{left === 1 ? '' : 's'} included for {cast.name}, then {pricing.castRegen} credits each.

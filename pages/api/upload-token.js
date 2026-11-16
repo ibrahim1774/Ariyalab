@@ -3,6 +3,7 @@ import { getUserFromRequest } from '../../lib/supabaseServer';
 import { storyDb } from '../../lib/story/db.js';
 import { REFERENCE_LIMITS, VIDEO_EXTENSION, VIDEO_TYPES } from '../../lib/story/referenceRules.js';
 import { AUDIO_LIMITS, audioExtension } from '../../lib/story/voiceRules.js';
+import { ASSET_LIMITS, brandPrefix, imageExtension, videoExtension } from '../../lib/story/assetRules.js';
 
 /*
  * Issues short-lived client upload tokens for @vercel/blob/client.
@@ -34,6 +35,11 @@ import { AUDIO_LIMITS, audioExtension } from '../../lib/story/voiceRules.js';
  * {"surface":"story-audio"}: it needs a session, the pathname must be story-audio/<userId>/<name>.<mp3|wav|m4a>
  * (the caller's own folder), and the token allows those audio types up to 20 MB. POST /api/story/assets then checks
  * the stored file again (size, first bytes, length and codec) before it is used.
+ *
+ * Story pictures and clips (Task 23: a logo, product picture, mascot, screen recording or clip) send clientPayload
+ * {"surface":"story-brand"}: it needs a session, the pathname must be story-brand/<userId>/<name>.<png|jpg|jpeg|webp|mp4|mov>
+ * (the caller's own folder), and the token allows only the type of that extension: a picture up to 5 MB, a clip up to
+ * 200 MB. POST /api/story/assets then checks the stored file again (size, first bytes, what it decodes as) before it is used.
  */
 
 const ANON_SURFACE = 'anon-image';
@@ -54,6 +60,10 @@ const AUDIO_UPLOAD_LIMITS = {
   maximumSizeInBytes: AUDIO_LIMITS.maxBytes,
 };
 const AUDIO_TOKEN_TTL_MS = 15 * 60 * 1000;
+const BRAND_SURFACE = 'story-brand';
+const BRAND_IMAGE_LIMITS = { allowedContentTypes: ['image/png', 'image/jpeg', 'image/webp'], maximumSizeInBytes: ASSET_LIMITS.imageMaxBytes };
+const BRAND_VIDEO_LIMITS = { allowedContentTypes: ['video/mp4', 'video/quicktime'], maximumSizeInBytes: ASSET_LIMITS.videoMaxBytes };
+const BRAND_TOKEN_TTL_MS = 15 * 60 * 1000;
 const SIGNED_IN_LIMITS = {
   allowedContentTypes: ['video/*', 'image/*'],
   maximumSizeInBytes: 1024 * 1024 * 1024,
@@ -94,6 +104,16 @@ function checkAudioUpload(userId, pathname) {
   if (!name || name.includes('/') || name.includes('..') || !audioExtension(name)) throw new Error('Upload not allowed.');
 }
 
+/** -> the limits for story-brand/<userId>/<name>.<ext> of the signed-in user; throws for any other pathname. */
+function checkBrandUpload(userId, pathname) {
+  const prefix = brandPrefix(userId);
+  const name = typeof pathname === 'string' && pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
+  if (!name || name.includes('/') || name.includes('..')) throw new Error('Upload not allowed.');
+  if (imageExtension(name)) return BRAND_IMAGE_LIMITS;
+  if (videoExtension(name)) return BRAND_VIDEO_LIMITS;
+  throw new Error('Upload not allowed.');
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -108,6 +128,10 @@ export default async function handler(req, res) {
     if (surface === STORY_SURFACE) {
       if (!session) return res.status(401).json({ error: 'Authentication required.' });
       limits = STORY_LIMITS;
+      storyUser = session.user.id;
+    } else if (surface === BRAND_SURFACE) {
+      if (!session) return res.status(401).json({ error: 'Authentication required.' });
+      limits = BRAND_SURFACE;
       storyUser = session.user.id;
     } else if (surface === AUDIO_SURFACE) {
       if (!session) return res.status(401).json({ error: 'Authentication required.' });
@@ -131,11 +155,15 @@ export default async function handler(req, res) {
           await checkStoryUpload(storyUser, pathname, clientPayload);
           return { ...STORY_LIMITS, validUntil: Date.now() + STORY_TOKEN_TTL_MS, addRandomSuffix: true };
         }
+        if (limits === BRAND_SURFACE) {
+          return { ...checkBrandUpload(storyUser, pathname), validUntil: Date.now() + BRAND_TOKEN_TTL_MS, addRandomSuffix: true };
+        }
         if (limits === AUDIO_UPLOAD_LIMITS) {
           checkAudioUpload(storyUser, pathname);
           return { ...AUDIO_UPLOAD_LIMITS, validUntil: Date.now() + AUDIO_TOKEN_TTL_MS, addRandomSuffix: true };
         }
-        // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix), story-audio/ to audio uploads.
+        // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix), story-audio/ to audio uploads,
+        // story-brand/ to picture and clip uploads.
         // The pathname is also checked decoded once, so "story-uploads%2F..." cannot slip past. A name that is not
         // valid percent-encoding (a stray "%", as in "50% off.jpg") is an ordinary name: only its raw form is checked.
         if (typeof pathname !== 'string') throw new Error('Upload not allowed.');
@@ -145,7 +173,7 @@ export default async function handler(req, res) {
         } catch {
           // not encoded: the raw form is the name
         }
-        if (forms.some((p) => /^(story-uploads|story-audio)\//i.test(p.replace(/^\/+/, '')))) throw new Error('Upload not allowed.');
+        if (forms.some((p) => /^(story-uploads|story-audio|story-brand)\//i.test(p.replace(/^\/+/, '')))) throw new Error('Upload not allowed.');
         return {
           ...(limits || ANON_LIMITS),
           ...(limits === SIGNED_IN_LIMITS ? {} : { validUntil: Date.now() + ANON_TOKEN_TTL_MS }),

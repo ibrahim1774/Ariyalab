@@ -65,6 +65,9 @@ export function describeError(err, { returnTo } = {}) {
   if (code === 'upload_failed') {
     return { ...out, title: 'The upload did not finish', message: server || 'Check your connection and try again.', action: { label: 'Try again', retry: true } };
   }
+  if (code === 'asset_in_use') {
+    return { ...out, title: 'This file is in use', message: server || 'Take it out of the video that uses it first, then delete it.' };
+  }
   if (code === 'quote_changed') {
     return { ...out, title: 'The price changed', message: server || 'Check the new total below, then confirm again.', refresh: true };
   }
