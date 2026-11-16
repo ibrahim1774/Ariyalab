@@ -785,3 +785,30 @@ describe('round 3', () => {
     expect((await storyDb().select('story_projects', { id: project.id }))[0].gen_claim_id).toBe(claim);
   });
 });
+
+// ---------------------------------------------------------------- round 4
+
+describe('round 4', () => {
+  it('J1: a Generate card for some of the shots is open, and pressing it generates exactly those shots', async () => {
+    const { userId, user, project, shots } = await genProject();
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('get_quote', { shot_ids: [shots[1].id] }) });
+    const [card] = sent.body.confirms;
+    expect(card.confirm.body.shotIds).toEqual([shots[1].id]);
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('open');
+    const res = await confirmVia({ projectId: project.id, confirmId: card.id });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.queued).toEqual([shots[1].id]);
+    expect(res.body.charged).toBe(card.quote.credits);
+  });
+
+  it('J2: a character or picture still being made is a plain refusal, not a card', async () => {
+    const castP = await newProject({ cast: { status: 'pending', regens_used: 0 } });
+    expect(await runTool({ userId: castP.userId, user: castP.user, chatProjectId: castP.project.id, name: 'regenerate_character', input: { cast_id: castP.cast.id } }))
+      .toMatchObject({ ok: false, error: 'conflict', message: expect.stringMatching(/still being made/) });
+    const pic = await genProject();
+    await storyDb().update('story_shots', { id: pic.shots[0].id }, { status: 'still_pending' });
+    expect(await runTool({ userId: pic.userId, user: pic.user, chatProjectId: pic.project.id, name: 'make_picture', input: { shot_id: pic.shots[0].id } }))
+      .toMatchObject({ ok: false, error: 'conflict', message: expect.stringMatching(/still being made/) });
+  });
+});
