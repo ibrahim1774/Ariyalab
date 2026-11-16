@@ -1,162 +1,65 @@
 # Ariya Lab
 
-A luxury, minimal AI motion-control SaaS built on **Next.js 14** (Pages Router) and the **Replicate** API.
+Ariya Lab is an animated story video maker. You describe a product, an offer or an idea, and it turns that into a short animated video with a script, a cast of characters, a storyboard, generated clips, narration, music and captions.
 
-Upload a character image + a motion reference video, and Ariya Lab generates a finished MP4 of your character performing the reference motion — wrapped in a dark, premium UI. Internally the app calls top-rated image and video generation models via Replicate (model IDs are kept in `lib/replicate.js` and never surface in the user-facing UI).
+Built with Next.js 14 (pages router), Supabase (auth and the database), Stripe (plans and top-ups) and Vercel (hosting, Blob storage, cron).
 
----
+## The maker
 
-## Quick start
+Customers start at `/app` and make a video in the maker at `/app/p/[id]`. Each step saves to the project, so they can leave and come back.
 
-1. Create a Replicate API token at <https://replicate.com/account/api-tokens>.
-2. Install dependencies:
-   ```bash
-   npm install
-   ```
-3. Configure the environment:
-   ```bash
-   cp .env.example .env.local
-   # then edit .env.local and set REPLICATE_API_TOKEN
-   ```
-4. Run the dev server:
-   ```bash
-   npm run dev
-   ```
-5. Open <http://localhost:3000>.
+1. **Chat**: talk through the idea; the assistant turns it into a brief.
+2. **Brief**: purpose, offer, audience and tone. The brand kit (`/app/brand`) fills these in by default. A reference video (an Instagram, TikTok or Facebook link, or an upload) can be analysed so the story follows its structure.
+3. **Style**: the look of the animation.
+4. **Length**: how many seconds, and narrated or with characters speaking.
+5. **Script**: written by Claude, scene by scene. It can be revised with an instruction or edited by hand.
+6. **Cast**: one character per role, with picture options to pick from (or the customer's own picture).
+7. **Storyboard**: the shot list and a still for each shot.
+8. **Generate**: the clips, at the quoted price.
+9. **Voice, music and captions**: a preset or cloned voice (or the customer's own recording), made-for-you or uploaded music, caption style.
+10. **Video**: everything put together into the final mp4, ready to download.
 
-To build for production:
+Slow work runs in the background as jobs (`lib/story/runner.js`): a cron tick every minute and worker routes for narration, music, reference analysis, drafting and the render.
+
+The older single-purpose tools (face swap, image to video and others) are still available from `/app/tools`.
+
+## Credits and plans
+
+Everything is paid in credits. A video costs a one-time project fee (charged when the cast is started) plus the clips, priced per second by quality. The price is always shown first, and the customer confirms the exact number before anything is charged; credits are held while work runs and settled when it finishes. The first still of each shot, the first few narration and music makes and the render are included.
+
+Plans (Starter, Creator, Studio; monthly or yearly) grant credits each period, and top-up packs add more. Plan data is in `lib/pricingConstants.js`; prices can be changed at runtime from the admin page, which writes the `pricing_config` table.
+
+## Use it from Claude
+
+The app is also an MCP server, so customers can make videos by talking to Claude, on their own account and credits. Setup for customers is in [docs/connector.md](docs/connector.md). The connector URL is `APP_URL` + `/api/mcp`.
+
+## Setup
 
 ```bash
-npm run build
-npm run start
+npm install
+cp .env.example .env.local   # then fill in the values
+npm run dev                  # http://localhost:3000
 ```
 
----
+Every variable is described in `.env.example`. The ones the maker needs:
 
-## Deploying on Vercel
+- `APP_URL` (required): the one public URL of the app. Stripe return URLs, the OAuth consent check and the Claude connector all use it.
+- `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, and `SUPABASE_SERVICE_ROLE_KEY` (server only).
+- `CRON_SECRET`: shared by the cron and the worker routes.
+- `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
+- `ANTHROPIC_API_KEY`, `KIE_API_KEY`, `KIE_WEBHOOK_SECRET`, `GROQ_API_KEY`, `APIFY_TOKEN`, `FISH_API_KEY`, `GOOGLE_AI_API_KEY`, and `REPLICATE_API_TOKEN` for the older tools.
+- `BLOB_READ_WRITE_TOKEN` (or all five `R2_*` values for Cloudflare R2).
 
-1. Push the repo to GitHub and import it in the Vercel dashboard.
-2. In **Project → Settings → Environment Variables**, add:
-   - `REPLICATE_API_TOKEN` — your token from Replicate.
-   - (Optional, for the future billing phase) `STRIPE_SECRET_KEY` — your Stripe secret.
-   Set scope to **Production, Preview, and Development**.
-3. Trigger a deploy. Vercel's serverless functions support the 100 MiB upload limit Replicate's SDK enforces.
+Set `STORY_MOCK=1` to run the whole maker with local fixtures and no provider calls (no credits spent at any provider). Database changes are in `supabase/migrations`.
 
-> **Note on duration:** the roop model has no hard duration cap, but quality and runtime degrade past ~60 seconds. Trim long clips before uploading. Replicate's prediction timeout is 60 minutes.
+## Tests
 
----
-
-## How it works
-
-### User flow
-
-1. **Upload** — drop in a source video and a reference face photo, check the consent box, hit *Create face swap*.
-2. **Processing** — the UI shows a gold progress ring while the backend polls Replicate every 3 s.
-3. **Result** — on completion the finished MP4 plays inline and can be downloaded with one click.
-
-### Backend flow
-
-1. **Browser uploads each file directly to Vercel Blob** via [`@vercel/blob/client`](https://vercel.com/docs/storage/vercel-blob/client-upload). The client hits `/api/upload-token` for a short-lived token, then PUTs the file straight to `*.blob.vercel-storage.com`. This bypasses Vercel's 4.5 MB serverless request-body limit. See [lib/uploader.js](lib/uploader.js) and [pages/api/upload-token.js](pages/api/upload-token.js).
-2. `POST /api/swap` receives a tiny JSON body `{ videoUrl, faceUrl }` and creates a Replicate prediction against `arabyai-replicate/roop_face_swap` (pinned version). Replicate fetches both URLs server-side. The returned `prediction.id` is stored on the in-memory job.
-3. The client receives `{ jobId, predictionId, status }`.
-4. The client polls `GET /api/status?jobId=...` every 3 s. The server calls `replicate.predictions.get(predictionId)`, normalizes the status (`succeeded → complete`, `failed/canceled → error`, else `processing`), and on completion stores the prediction's output URL as `resultUrl`.
-5. `GET /api/jobs` returns the in-memory list for the History tab.
-
-### Enabling Vercel Blob (one-time)
-
-1. Open your Vercel project → **Storage** tab → **Create Database** → **Blob**.
-2. Vercel auto-adds `BLOB_READ_WRITE_TOKEN` to the project env vars (Production + Preview + Development).
-3. For local dev, run `vercel env pull .env.local` to fetch the token onto disk.
-
-### Enabling Stripe billing (one-time)
-
-Just paste your **Stripe secret key** into Vercel — that's it. The app creates the Products + Prices in your Stripe account automatically the first time someone clicks a paid plan, using `lookup_key` so we never duplicate.
-
-1. **Vercel → Settings → Environment Variables** (Production + Preview + Development):
-   - `STRIPE_SECRET_KEY` — from <https://dashboard.stripe.com/apikeys>
-   - `APP_URL` *(required)* — the one canonical public URL (for example `https://ariyalab.com`). Stripe return URLs, the OAuth consent Origin check and the Claude connector URL (`APP_URL/api/mcp`) all use it; the MCP OAuth server refuses to run without it.
-2. Pull locally with `vercel env pull .env.local`.
-
-Webhook: `APP_URL/api/stripe-webhook` with `STRIPE_WEBHOOK_SECRET`; the events and the full launch order are in `docs/go-live.md`. Legacy plans: `/api/entitlement` reads subscription status directly from Stripe each time. Period rollovers (monthly/yearly resets) are detected by comparing `subscription.current_period_start` to the cached `periodStart` on `Customer.metadata`.
-
-### Plans + caps
-
-| Tier | Price | Cap | Window |
-|---|---|---|---|
-| Monthly | $9 / mo | 10 generations / mo | 1-day free trial included |
-| Yearly | $69 / yr | 100 generations / yr | 1-day free trial included |
-| Top-up pack S | $15 one-time | +9 generations | Stackable, never expires |
-| Top-up pack M | $50 one-time | +30 generations | Stackable, never expires |
-| Top-up pack L | $100 one-time | +60 generations | Stackable, never expires |
-
-Free-trial state lives in httpOnly cookies. Paid subscription state + usage counters live on the **Stripe Customer's `metadata`** — no separate database. The `/api/swap` route gates on `getEntitlement()` from `lib/entitlement.js` and returns **402** with `{ error: 'paywall' }` when the user is over cap or has no entitlement; the UI then renders `<Paywall />`.
-
----
-
-## Tips for the best face-swap results
-
-- **Source face photo**: front-facing, well-lit, no sunglasses or heavy occlusion. JPG/PNG.
-- **Target video**: keep clips short (≤30 s for the snappiest results), single dominant face per frame, stable lighting. MP4/MOV/WEBM up to 100 MB.
-- **Resolution**: 720p–1080p is the sweet spot. Higher resolutions cost more Replicate credits and don't materially improve identity transfer.
-
----
-
-## File structure
-
-```
-ariyalab/
-├── .env.example
-├── .gitignore
-├── README.md
-├── next.config.js
-├── package.json
-├── components/
-│   ├── AppHead.js
-│   ├── Navbar.js / Navbar.module.css
-│   ├── UploadZone.js / UploadZone.module.css
-│   ├── Processing.js / Processing.module.css
-│   ├── Result.js / Result.module.css
-│   └── JobHistory.js / JobHistory.module.css
-├── lib/
-│   ├── replicate.js
-│   └── jobs.js
-├── pages/
-│   ├── _app.js
-│   ├── index.js
-│   └── api/
-│       ├── swap.js
-│       ├── status.js
-│       └── jobs.js
-└── styles/
-    ├── globals.css
-    └── Home.module.css
+```bash
+npm test
 ```
 
----
+Vitest, with an in-memory Postgres (PGlite) that runs the real migrations and every provider in mock mode. Nothing reaches a real provider, Stripe or Supabase. `tests/e2e/mockPipeline.test.js` drives a whole video through the routes, from the brief to the finished render. Each run uses its own temp folder for mock storage and fixtures and removes it at the end.
 
-## Production checklist
+## Going live
 
-Ship-hardening items intentionally left out of the demo:
-
-- [ ] Replace the in-memory store in `lib/jobs.js` with Supabase / Postgres.
-- [ ] Add user auth (NextAuth, Clerk, or Supabase Auth) and scope jobs per user.
-- [ ] Add Stripe billing (checkout + webhook + credit gate on `/api/swap`).
-- [ ] Switch polling for **Replicate webhooks** (`webhook` + `webhook_events_filter` on `predictions.create`).
-- [ ] Add rate limiting (per-IP + per-user) on `/api/swap`.
-- [ ] Validate MIME types (don't trust extensions).
-- [ ] Burn a watermark on free-tier outputs.
-- [ ] Wire up Sentry on server + client.
-- [ ] Add a Terms of Service + log consent (IP, timestamp, hashed identity) per submission.
-
----
-
-## Tech stack
-
-- **Next.js 14** (Pages Router)
-- **React 18**
-- **CSS Modules** — no Tailwind, no styled-components
-- **Replicate** (`replicate` JS SDK) — <https://replicate.com/docs>
-- **Model**: [`arabyai-replicate/roop_face_swap`](https://replicate.com/arabyai-replicate/roop_face_swap)
-- **formidable** — multipart parsing inside API routes
-- **uuid** — job IDs
-- In-memory job store (swap for Supabase / Postgres in prod — see `lib/jobs.js`)
+The launch order (provider accounts, migrations, Stripe, deploy, prices, smoke tests) and the runbook are in [docs/go-live.md](docs/go-live.md).
