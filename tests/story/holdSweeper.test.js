@@ -152,6 +152,37 @@ describe('stale story-hold sweeper (backstop)', () => {
     });
   });
 
+  it('O6 / F-I7 (Fable S1): a cast round whose request died after the hold is reset and its hold given back', async () => {
+    const user = await account();
+    const p = await project(user);
+    const h = await hold(user, p, 20, { ageMinutes: 60 * 24 * 30 });
+    await db.query(
+      `insert into public.story_cast (project_id, name, status, hold_id, hold_credits, round_credits, updated_at)
+       values ($1, 'Mia', 'draft', $2, 20, 20, now() - interval '30 days')`,
+      [p, h]
+    );
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    await sweepStaleHolds(); // the real recoveries, the cast's included
+    err.mockRestore();
+    expect(await holdRemaining(h)).toEqual({ remaining: 0, status: 'closed' });
+    expect(await available(user)).toBe(1000);
+  });
+
+  it('F-M1 (Fable S2): holds without a project at the head of the list never use up the run (filtered and paged in SQL)', async () => {
+    const user = await account(100000);
+    const p = await project(user);
+    for (let i = 0; i < 6; i += 1) {
+      const h = await hold(user, null, 5, { ageMinutes: 9000 - i });
+      await db.query(`select public.credit_legacy_hold_open($1, $2, 'video', 5, 'image-to-video')`, [h, user]);
+    }
+    const kept = await hold(user, p, 5, { ageMinutes: 8000 });
+    await db.query(`insert into public.story_cast (project_id, name, status, hold_id, hold_credits) values ($1, 'k', 'ready', $2, 5)`, [p, kept]);
+    const orphan = await hold(user, p, 150, { ageMinutes: 600 });
+    await sweepStaleHolds({ limit: 2, pageSize: 1, recover: noRecover });
+    expect(await holdRemaining(orphan)).toEqual({ remaining: 0, status: 'closed' });
+    expect((await holdRemaining(kept)).remaining).toBe(5);
+  });
+
   it('the cron needs CRON_SECRET', async () => {
     const res = { statusCode: 200, headers: {}, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; }, setHeader() {} };
     await storyHoldsCron({ method: 'GET', headers: { authorization: 'Bearer wrong' } }, res);
