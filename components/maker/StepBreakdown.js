@@ -130,8 +130,8 @@ export default function StepBreakdown({ project, onNext, refresh, returnTo }) {
       <>
         <p className={steps.srOnly} role="status" aria-live="polite">{WAIT.status}</p>
         <ol className={styles.beats} aria-label="Beats, being made">
-          {[1, 2, 3].map((n) => (
-            <li key={n} className={styles.beatWait}><Skeleton status={n === 1 ? WAIT.status : `Beat ${n}`} line={n === 1 ? WAIT.line : null} /></li>
+          {[1, 2].map((n) => (
+            <li key={n} className={styles.beatWait}><Skeleton status={n === 1 ? WAIT.status : 'The next beat'} line={n === 1 ? WAIT.line : null} /></li>
           ))}
         </ol>
       </>

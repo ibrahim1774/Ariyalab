@@ -59,7 +59,7 @@ describe('StepReference', () => {
     renderReference();
     expect(screen.getByRole('heading', { name: /Start from a video/ })).toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /Upload a file/ })).toBeChecked();
-    expect(screen.getByText(/MP4, up to 100 MB and 3 minutes/)).toBeInTheDocument();
+    expect(screen.getByText(/MP4 or MOV, up to 100 MB and 3 minutes/)).toBeInTheDocument();
     linkTab();
     expect(screen.getByLabelText(/Link to the video/)).toBeInTheDocument();
     expect(screen.getByText(/Instagram, TikTok or Facebook/)).toBeInTheDocument();
@@ -112,7 +112,8 @@ describe('StepReference', () => {
   });
 
   it('checks an upload\'s type, size and length in the browser before creating anything', async () => {
-    expect(await checkVideoFile({ name: 'a.mov', type: 'video/quicktime', size: 10 }, { readDuration: async () => 10 })).toBe(REFERENCE_MESSAGES.notVideo);
+    expect(await checkVideoFile({ name: 'a.webm', type: 'video/webm', size: 10 }, { readDuration: async () => 10 })).toBe(REFERENCE_MESSAGES.notVideo);
+    expect(await checkVideoFile({ name: 'a.mov', type: 'video/quicktime', size: 10 }, { readDuration: async () => 10 })).toBeNull();
     expect(await checkVideoFile({ name: 'a.mp4', type: 'video/mp4', size: 101 * 1024 * 1024 }, { readDuration: async () => 10 })).toBe(REFERENCE_MESSAGES.tooBig);
     expect(await checkVideoFile({ name: 'a.mp4', type: 'video/mp4', size: 1000 }, { readDuration: async () => 181 })).toBe(REFERENCE_MESSAGES.tooLong);
     expect(await checkVideoFile({ name: 'a.mp4', type: 'video/mp4', size: 1000 }, { readDuration: async () => null })).toBeNull();
@@ -214,6 +215,12 @@ describe('StepBreakdown', () => {
     await act(async () => { vi.advanceTimersByTime(3100); });
     expect(await screen.findAllByRole('listitem', { name: /^Beat \d/ })).toHaveLength(3);
     expect(client.getReference.mock.calls.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('R7: the waiting state shows at most two short skeletons, not three tall empty cards', async () => {
+    await openBreakdown(ref({ status: 'pending', beats: [], hook: null, structure: null, mood: null, mode: null }));
+    await screen.findAllByText(/Watching your video shot by shot/);
+    expect(document.querySelectorAll('[data-skeleton]').length).toBeLessThanOrEqual(2);
   });
 
   it('a failed analysis says why and offers another video or carrying on without it', async () => {

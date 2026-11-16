@@ -3,7 +3,7 @@ import { useRef, useState } from 'react';
 import Button from '../ui/Button';
 import Card from '../ui/Card';
 import { startAnalysis, uploadReference } from '../../lib/story/client';
-import { REFERENCE_LIMITS, REFERENCE_MESSAGES, RIGHTS_STATEMENT, isAllowedReferenceLink } from '../../lib/story/referenceRules';
+import { REFERENCE_LIMITS, REFERENCE_MESSAGES, RIGHTS_STATEMENT, VIDEO_EXTENSION, VIDEO_TYPES, isAllowedReferenceLink } from '../../lib/story/referenceRules';
 import ErrorNotice from './ErrorNotice';
 import { Icon } from './Tiles';
 import styles from './Reference.module.css';
@@ -31,13 +31,13 @@ export function readVideoDuration(file) {
 }
 
 /**
- * The browser's own checks, the same rules the server applies: an MP4, at most 100 MB and 3 minutes.
+ * The browser's own checks, the same rules the server applies: an MP4 or MOV, at most 100 MB and 3 minutes.
  * -> the message to show, or null when the file may be sent (the server checks again).
  */
 export async function checkVideoFile(file, { readDuration = readVideoDuration } = {}) {
   if (!file) return REFERENCE_MESSAGES.source;
-  const isMp4 = file.type ? file.type === 'video/mp4' : /\.mp4$/i.test(file.name || '');
-  if (!isMp4) return REFERENCE_MESSAGES.notVideo;
+  const isVideo = file.type ? VIDEO_TYPES.includes(file.type) : VIDEO_EXTENSION.test(file.name || '');
+  if (!isVideo) return REFERENCE_MESSAGES.notVideo;
   if (file.size > REFERENCE_LIMITS.maxBytes) return REFERENCE_MESSAGES.tooBig;
   const seconds = await readDuration(file);
   if (seconds && seconds > REFERENCE_LIMITS.maxSeconds) return REFERENCE_MESSAGES.tooLong;
@@ -131,7 +131,7 @@ export default function StepReference({ ensureProject, onStarted, returnTo, read
         {mode === 'upload' ? (
           <div className={styles.source}>
             <label className={`${styles.drop} ${file ? styles.dropFilled : ''}`}>
-              <input className={styles.fileInput} type="file" accept="video/mp4,.mp4" aria-label="Choose a video file" disabled={Boolean(busy)} onChange={pickFile} />
+              <input className={styles.fileInput} type="file" accept="video/mp4,video/quicktime,.mp4,.mov" aria-label="Choose a video file" disabled={Boolean(busy)} onChange={pickFile} />
               <span className={styles.dropIcon}><Icon name="upload" size={20} /></span>
               {file ? (
                 <span className={styles.dropText}>
@@ -141,7 +141,7 @@ export default function StepReference({ ensureProject, onStarted, returnTo, read
               ) : (
                 <span className={styles.dropText}>
                   <strong>Choose a video</strong>
-                  <small>MP4, up to 100 MB and 3 minutes</small>
+                  <small>MP4 or MOV, up to 100 MB and 3 minutes</small>
                 </span>
               )}
             </label>

@@ -13,7 +13,7 @@ import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { setCreditsDb } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
 import { ProviderError } from '../../lib/providers/errors.js';
-import { MOCK_STORAGE_PREFIX, mockStoragePath } from '../../lib/providers/storage.js';
+import { MOCK_STORAGE_PREFIX, mockStoragePath, putObject } from '../../lib/providers/storage.js';
 import { registerMock } from '../../lib/providers/mock.js';
 import { fetchReference } from '../../lib/providers/fetchVideo.js';
 import { transcribe } from '../../lib/providers/stt.js';
@@ -24,7 +24,7 @@ import { storyScriptMock } from '../../lib/story/mocks.js';
 import { checkScriptRules, writeScript } from '../../lib/story/script.js';
 import {
   ANALYSIS, mergeCuts, shotsFromCuts, framePlan, normaliseBeats, saidBetween, parseSceneTimes,
-  startAnalysis, getReference,
+  startAnalysis, getReference, uploadKey,
 } from '../../lib/story/analyze.js';
 import { REFERENCE_MESSAGES, RIGHTS_STATEMENT, isAllowedReferenceLink } from '../../lib/story/referenceRules.js';
 import { buildScriptSystem, REFERENCE_GUIDANCE } from '../../lib/story/prompts/script.js';
@@ -59,6 +59,10 @@ vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getUserFromRequest: vi.fn(async () => globalThis.__analyzeSession ?? null),
 }));
+vi.mock('../../lib/providers/storage.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, putObject: vi.fn((...args) => real.putObject(...args)) };
+});
 vi.mock('@vercel/blob/client', () => ({
   handleUpload: vi.fn(async ({ body, onBeforeGenerateToken }) => {
     const options = await onBeforeGenerateToken(body.payload.pathname, body.payload.clientPayload, false);
@@ -109,6 +113,9 @@ beforeAll(async () => {
   // long.mp4: 181 s, tiny and low rate.
   FX.long = out('long.mp4');
   ffmpeg(['-f', 'lavfi', '-i', 'color=c=gray:s=64x64:r=1:d=181', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', FX.long]);
+  // phone.mov: a QuickTime file (ftyp qt) of the single-shot video.
+  FX.mov = out('phone.mov');
+  ffmpeg(['-i', FX.single, '-c', 'copy', '-f', 'mov', FX.mov]);
   // big.mp4: a real mp4 head, padded (sparse) to 101 MB.
   FX.big = out('big.mp4');
   copyFileSync(FX.single, FX.big);
@@ -260,10 +267,10 @@ describe('link allowlist', () => {
     for (const ok of [
       'https://www.instagram.com/reel/abc/', 'https://instagram.com/p/abc', 'https://m.facebook.com/watch/?v=1',
       'https://www.facebook.com/ads/library/?id=123', 'https://fb.watch/xyz/', 'https://www.tiktok.com/@a/video/1', 'HTTPS://TIKTOK.COM/@a/video/1',
-      'https://instagram.com./reel/abc',
+      'https://instagram.com./reel/abc', 'https://vm.tiktok.com/ZM123/', 'https://vt.tiktok.com/ZS9/',
     ]) expect(isAllowedReferenceLink(ok), ok).toBe(true);
     for (const bad of [
-      'https://www.youtube.com/watch?v=1', 'https://youtu.be/1', 'https://vm.tiktok.com/abc', 'https://instagram.com.evil.com/x',
+      'https://www.youtube.com/watch?v=1', 'https://youtu.be/1', 'https://www.vm.tiktok.com/abc', 'https://m.vt.tiktok.com/abc', 'https://instagram.com.evil.com/x',
       'https://instagram.com@evil.com/x', 'https://evil.com/?u=instagram.com', 'ftp://instagram.com/x', 'javascript:alert(1)',
       'instagram.com/reel/abc', 'https://web.facebook.com/x', '', null,
     ]) expect(isAllowedReferenceLink(bad), String(bad)).toBe(false);
@@ -420,7 +427,7 @@ describe('what is refused before any job exists', () => {
     const ctx = await newProject();
     accounts.set({ paid: false });
     await refused(ctx, start(ctx, { type: 'link', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }), /Upload the file instead/);
-    await refused(ctx, start(ctx, { type: 'link', url: 'https://vm.tiktok.com/ZM123/' }), /Upload the file instead/);
+    await refused(ctx, start(ctx, { type: 'link', url: 'https://www.vm.tiktok.com/ZM123/' }), /Upload the file instead/);
     expect(fetchReference).not.toHaveBeenCalled();
   });
 
@@ -689,7 +696,7 @@ describe('uploads', () => {
     const res = makeRes();
     await route(makeReq({ method: 'POST', body: body(`story-uploads/${ctx.project.id}/clip.mp4`) }), res);
     expect(res.statusCode).toBe(200);
-    expect(res.body.options.allowedContentTypes).toEqual(['video/mp4']);
+    expect(res.body.options.allowedContentTypes).toEqual(['video/mp4', 'video/quicktime']);
     expect(res.body.options.maximumSizeInBytes).toBe(100 * 1024 * 1024);
     const wrongPath = makeRes();
     await route(makeReq({ method: 'POST', body: body(`story-uploads/${randomUUID()}/clip.mp4`) }), wrongPath);
@@ -751,5 +758,114 @@ describe('the adapted script', () => {
     const lines = script.scenes.flatMap((s) => s.lines).map((l) => norm(l.text));
     expect(lines.some((l) => l.includes(norm(TRANSCRIPT)))).toBe(false);
     expect(script.violations.map((v) => v.rule)).not.toContain('reference_copy');
+  });
+});
+
+// ---------------------------------------------------------------- round 1
+
+describe('round 1', () => {
+  const TRANSCRIPT = 'Once upon a time, a baker dreamed big.';
+  const copyLine = (out) => { out.scenes[1].lines[0].text = TRANSCRIPT; return out; };
+  const dashTwo = (out) => {
+    const lines = out.scenes.flatMap((sc) => sc.lines);
+    lines[2].text = `${lines[2].text.replace(/[.]$/, '')} — really.`;
+    lines[3].text = `${lines[3].text.replace(/[.]$/, '')} — truly.`;
+    return out;
+  };
+
+  it('R1: a copy-free retry is kept even with more other warnings', async () => {
+    const { ctx } = await analysed(FX.multi);
+    registerMock('story_script', (input) => (input.messages.length === 1 ? copyLine(storyScriptMock(input)) : dashTwo(storyScriptMock(input))));
+    const script = await writeScript({ userId: ctx.userId, projectId: ctx.project.id });
+    const rules = script.violations.map((v) => v.rule);
+    expect(rules).not.toContain('reference_copy');
+    expect(rules.filter((r) => r === 'dash').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('R1: a model script that still copies after the retry is not saved (422) and the count comes back', async () => {
+    const { ctx } = await analysed(FX.multi);
+    accounts.set({ paid: false });
+    registerMock('story_script', (input) => copyLine(storyScriptMock(input)));
+    const err = await writeScript({ userId: ctx.userId, projectId: ctx.project.id }).then(() => null, (e) => e);
+    expect(err?.status).toBe(422);
+    expect(err?.code).toBe('script_blocked');
+    expect(await storyDb().select('story_scripts', { project_id: ctx.project.id })).toHaveLength(0);
+    const { rows } = await raw.query(`select coalesce(sum(count), 0)::int as n from story_usage where user_id = $1 and action like 'script_write%'`, [ctx.userId]);
+    expect(rows[0].n).toBe(0);
+  });
+
+  it('R1: 4-word runs match an unpunctuated transcript, but runs of only common words do not', () => {
+    const reference = 'once upon a time a baker dreamed big and the town loved his bread i want to be there';
+    const flag = (text) => checkScriptRules([{ id: 's1', title: 'A', visual: 'A shop.', lines: [{ speaker: 'narrator', text }] }], { reference }).map((v) => v.rule);
+    expect(flag('Every morning the town loved his warm rolls.')).toContain('reference_copy');
+    expect(flag('I want to be there for my sister.')).not.toContain('reference_copy');
+    expect(flag('Nobody believed this would work.')).not.toContain('reference_copy');
+  });
+
+  it('R2: a TikTok share link (vm./vt.) is accepted and analysed', async () => {
+    const ctx = await newProject();
+    await start(ctx, { type: 'link', url: 'https://vm.tiktok.com/ZM123/' });
+    await work();
+    const [ref] = await refsOf(ctx.project.id);
+    expect(ref.status).toBe('ready');
+    expect(ref.platform).toBe('tiktok');
+  });
+
+  it('R3: thumbnails are stored with a deadline signal, and the model leaves room for storage', async () => {
+    putObject.mockClear();
+    await analysed(FX.multi);
+    const calls = putObject.mock.calls.filter(([a]) => /\/reference\//.test(a.key));
+    expect(calls).toHaveLength(3);
+    calls.forEach(([a]) => expect(a.signal).toBeInstanceOf(AbortSignal));
+    expect(ANALYSIS.reserve.llm).toBeGreaterThanOrEqual(ANALYSIS.storageMs * 2);
+    expect(ANALYSIS.storageMs).toBeGreaterThan(0);
+  });
+
+  it('R4: a QuickTime (.mov) upload is accepted', async () => {
+    const ctx = await newProject();
+    const up = upload(ctx, FX.mov, 'phone.mov');
+    await start(ctx, { type: 'upload', url: up.url });
+    await work();
+    expect((await refsOf(ctx.project.id))[0].status).toBe('ready');
+    const { default: route } = await import('../../pages/api/upload-token.js');
+    globalThis.__analyzeSession = { user: { id: ctx.userId } };
+    const res = makeRes();
+    await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname: `story-uploads/${ctx.project.id}/phone.mov`, clientPayload: JSON.stringify({ surface: 'story-reference', projectId: ctx.project.id }) } } }), res);
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('R5: only our own Blob store counts as an upload', () => {
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', 'vercel_blob_rw_AbC123xyz_secretpart');
+    const pid = randomUUID();
+    expect(uploadKey(pid, `https://abc123xyz.public.blob.vercel-storage.com/story-uploads/${pid}/a-1.mp4`, { mock: false })).toBe(`story-uploads/${pid}/a-1.mp4`);
+    expect(uploadKey(pid, `https://someoneelse.public.blob.vercel-storage.com/story-uploads/${pid}/a-1.mp4`, { mock: false })).toBeNull();
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '');
+    expect(uploadKey(pid, `https://abc123xyz.public.blob.vercel-storage.com/story-uploads/${pid}/a-1.mp4`, { mock: false })).toBeNull();
+    vi.stubEnv('BLOB_READ_WRITE_TOKEN', '');
+  });
+
+  it('R6: the plain signed-in upload surface refuses the story-uploads/ prefix', async () => {
+    const { default: route } = await import('../../pages/api/upload-token.js');
+    globalThis.__analyzeSession = { user: { id: randomUUID() } };
+    const bad = makeRes();
+    await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname: `story-uploads/${randomUUID()}/x.mp4`, clientPayload: '' } } }), bad);
+    expect(bad.statusCode).toBe(400);
+    const ok = makeRes();
+    await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname: 'uploads/x.mp4', clientPayload: '' } } }), ok);
+    expect(ok.statusCode).toBe(200);
+  });
+
+  it('R8: a run whose reference already has the paid marker refuses without calling anything', async () => {
+    const ctx = await newProject();
+    accounts.set({ paid: false });
+    await start(ctx, { type: 'link', url: 'https://www.instagram.com/reel/abc/' });
+    const [ref] = await refsOf(ctx.project.id);
+    await storyDb().update('story_references', { id: ref.id }, { provider_started_at: new Date().toISOString() });
+    await work();
+    expect(fetchReference).not.toHaveBeenCalled();
+    expect(completeJSON).not.toHaveBeenCalled();
+    expect((await refsOf(ctx.project.id))[0].status).toBe('failed');
+    expect((await jobsOf(ctx.project.id))[0].status).toBe('failed');
+    expect(await usage(ctx.userId)).toBe(1);
   });
 });

@@ -1,7 +1,7 @@
 import { handleUpload } from '@vercel/blob/client';
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { storyDb } from '../../lib/story/db.js';
-import { REFERENCE_LIMITS } from '../../lib/story/referenceRules.js';
+import { REFERENCE_LIMITS, VIDEO_EXTENSION, VIDEO_TYPES } from '../../lib/story/referenceRules.js';
 
 /*
  * Issues short-lived client upload tokens for @vercel/blob/client.
@@ -23,8 +23,9 @@ import { REFERENCE_LIMITS } from '../../lib/story/referenceRules.js';
  * Story reference videos (Task 22) send clientPayload
  * {"surface":"story-reference","projectId":"<id>"}: they need a session,
  * the project must be the caller's, the pathname must be
- * story-uploads/<projectId>/<name>.mp4, and the token allows video/mp4 up to
- * 100 MB only. The analyze action then checks the size, the magic bytes and
+ * story-uploads/<projectId>/<name>.mp4 (or .mov), and the token allows video/mp4
+ * and video/quicktime up to 100 MB only. No other surface may write under
+ * story-uploads/. The analyze action then checks the size, the magic bytes and
  * the length again on the server, and only accepts uploads under that
  * project's prefix.
  */
@@ -37,7 +38,7 @@ const ANON_LIMITS = {
 const ANON_TOKEN_TTL_MS = 5 * 60 * 1000;
 const STORY_SURFACE = 'story-reference';
 const STORY_LIMITS = {
-  allowedContentTypes: ['video/mp4'],
+  allowedContentTypes: [...VIDEO_TYPES],
   maximumSizeInBytes: REFERENCE_LIMITS.maxBytes,
 };
 const STORY_TOKEN_TTL_MS = 15 * 60 * 1000;
@@ -69,7 +70,7 @@ async function checkStoryUpload(userId, pathname, clientPayload) {
   if (typeof projectId !== 'string' || !UUID.test(projectId)) throw new Error('Upload not allowed.');
   const prefix = `story-uploads/${projectId}/`;
   const name = typeof pathname === 'string' && pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
-  if (!name || name.includes('/') || name.includes('..') || !/\.mp4$/i.test(name)) throw new Error('Upload not allowed.');
+  if (!name || name.includes('/') || name.includes('..') || !VIDEO_EXTENSION.test(name)) throw new Error('Upload not allowed.');
   const rows = await storyDb().select('story_projects', { id: projectId, user_id: userId }, { columns: ['id'], limit: 1 });
   if (!rows.length) throw new Error('Upload not allowed.');
 }
@@ -107,6 +108,8 @@ export default async function handler(req, res) {
           await checkStoryUpload(storyUser, pathname, clientPayload);
           return { ...STORY_LIMITS, validUntil: Date.now() + STORY_TOKEN_TTL_MS, addRandomSuffix: true };
         }
+        // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix).
+        if (typeof pathname !== 'string' || pathname.replace(/^\/+/, '').startsWith('story-uploads/')) throw new Error('Upload not allowed.');
         return {
           ...(limits || ANON_LIMITS),
           ...(limits === SIGNED_IN_LIMITS ? {} : { validUntil: Date.now() + ANON_TOKEN_TTL_MS }),
