@@ -1,7 +1,7 @@
 // Task 20: the finished video. Renders real mp4s from ffmpeg-made fixtures (mock storage, mock transcription).
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg';
@@ -16,8 +16,8 @@ import { putObject, localPathFor, mockStoragePath } from '../../lib/providers/st
 import { transcribe } from '../../lib/providers/stt.js';
 import { runWorkerJob, sweep, enqueue } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
-import { setAudioPlan } from '../../lib/story/audio.js';
-import { startRender, renderTargetSize, _configureRender } from '../../lib/story/render.js';
+import { setAudioPlan, checkedAudioExt } from '../../lib/story/audio.js';
+import { startRender, renderTargetSize, _configureRender, planNarration } from '../../lib/story/render.js';
 import { captionFilterAvailable } from '../../lib/story/captions.js';
 import { run as runChecks, scriptWordsOf, wordCoverage } from '../../lib/story/checks.js';
 import { getProjectStatus } from '../../lib/story/status.js';
@@ -41,7 +41,28 @@ vi.mock('../../lib/providers/storage.js', async (importOriginal) => {
 });
 vi.mock('../../lib/story/captions.js', async (importOriginal) => {
   const real = await importOriginal();
-  return { ...real, captionFilterAvailable: vi.fn(real.captionFilterAvailable) };
+  return {
+    ...real,
+    captionFilterAvailable: vi.fn(real.captionFilterAvailable),
+    captionPngs: vi.fn(async (args) => {
+      if (globalThis.__pngCalls !== undefined) {
+        globalThis.__pngCalls += 1;
+        if (globalThis.__pngCalls > 1) throw new Error('no text support');
+      }
+      return real.captionPngs(args);
+    }),
+  };
+});
+// Every ffmpeg call the render makes, to see how each input is opened.
+vi.mock('../../lib/story/checks.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    runFfmpeg: vi.fn(async (args, opts) => {
+      (globalThis.__ffCalls ||= []).push(args);
+      return real.runFfmpeg(args, opts);
+    }),
+  };
 });
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -110,6 +131,18 @@ beforeAll(async () => {
   narration('narration.wav', 5.7, 5.5); // each line fills its scene (6 s of shots)
   narration('short.wav', 2.2, 2.7); // short lines: the voice has a long gap once placed at the scenes
   narration('long.wav', 5.7, 8); // s2 is longer than its 6 s even sped up
+  // s1's line has a 1 s pause inside it (2.5 s, 1 s of silence, 2.2 s): a gap inside one speech span.
+  ff([
+    '-filter_complex',
+    'sine=f=220:d=2.5,volume=0.5,adelay=200|200[a];anullsrc=r=44100:cl=mono,atrim=0:1[g];sine=f=220:d=2.2,volume=0.5,apad=pad_dur=0.3[b];sine=f=260:d=5.5,volume=0.5,apad=pad_dur=0.5[c];[a][g][b][c]concat=n=4:v=0:a=1[out]',
+    '-map', '[out]', '-ac', '1', '-ar', '44100', 'gappy.wav',
+  ]);
+  // A talking clip whose speech (0.4 to 3.8 s) runs past a 3 s shot.
+  ff([
+    '-f', 'lavfi', '-i', 'testsrc2=size=540x960:rate=24:duration=4',
+    '-f', 'lavfi', '-i', "sine=f=300:d=4,volume='between(t,0.4,3.8)':eval=frame",
+    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', 'tk2.mp4',
+  ]);
   // A talking clip whose speech (0.3 to 2.6 s) ends before a 3 s shot does.
   ff([
     '-f', 'lavfi', '-i', 'testsrc2=size=540x960:rate=24:duration=4',
@@ -125,10 +158,11 @@ beforeAll(async () => {
   ]);
   // A one-second gap, for the silence check.
   ff(['-filter_complex', 'sine=f=300:d=1[a];anullsrc=r=44100:cl=mono,atrim=0:1[g];sine=f=300:d=1[b];[a][g][b]concat=n=3:v=0:a=1[out]', '-map', '[out]', 'gap.wav']);
-  for (const n of ['c1', 'c2', 'c3', 'c4', 'tk1']) media[n] = await store(`${n}.mp4`, 'mp4');
+  for (const n of ['c1', 'c2', 'c3', 'c4', 'tk1', 'tk2']) media[n] = await store(`${n}.mp4`, 'mp4');
   media.narration = await store('narration.wav', 'wav');
   media.short = await store('short.wav', 'wav');
   media.long = await store('long.wav', 'wav');
+  media.gappy = await store('gappy.wav', 'wav');
   media.music = await store('music.wav', 'wav');
   media.music5 = await store('music5.wav', 'wav');
 }, 120_000);
@@ -162,12 +196,12 @@ const segs = (a, b) => [
   { sceneId: 's1', lineIndex: 0, text: 'Once upon a time,', start: 0.2, end: 0.2 + a },
   { sceneId: 's2', lineIndex: 1, text: 'a baker dreamed big.', start: 0.5 + a, end: 0.5 + a + b },
 ];
-const NARRATIONS = { fill: segs(5.7, 5.5), short: segs(2.2, 2.7), long: segs(5.7, 8) };
+const NARRATIONS = { fill: segs(5.7, 5.5), short: segs(2.2, 2.7), long: segs(5.7, 8), gappy: segs(5.7, 5.5) };
 const SEGMENTS = NARRATIONS.fill;
 
 async function newProject({ style = 'serif_accent', captions = true, music = true, clips = ['c1', 'c2', 'c3', 'c4'], ready = true, narration = 'fill', musicFile = 'music' } = {}) {
   const userId = randomUUID();
-  const track = { fill: media.narration, short: media.short, long: media.long }[narration];
+  const track = { fill: media.narration, short: media.short, long: media.long, gappy: media.gappy }[narration];
   const [project] = await storyDb().insert('story_projects', {
     user_id: userId, title: 'Render test', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
     narration_url: track.url, narration_key: track.key, narration_seconds: 12, narration_segments: NARRATIONS[narration],
@@ -406,8 +440,8 @@ describe('render', () => {
     expect(status.render).toMatchObject({ id: res.body.render.id, status: 'queued', version: 1 });
     expect(status.renders.map((r) => r.version)).toEqual([1]);
     // Fm4: a public shape, never job ids, storage keys or the frozen settings.
-    expect(Object.keys(status.render).sort()).toEqual(['created_at', 'error', 'finished_at', 'id', 'status', 'url', 'version', 'warnings']);
-    expect(Object.keys(res.body.render).sort()).toEqual(['created_at', 'error', 'finished_at', 'id', 'status', 'url', 'version', 'warnings']);
+    expect(Object.keys(status.render).sort()).toEqual(['created_at', 'duration_seconds', 'error', 'finished_at', 'id', 'status', 'url', 'version', 'warnings']);
+    expect(Object.keys(res.body.render).sort()).toEqual(['created_at', 'duration_seconds', 'error', 'finished_at', 'id', 'status', 'url', 'version', 'warnings']);
   });
 });
 
@@ -463,11 +497,19 @@ describe('checks', () => {
 describe('round 1', () => {
   const codes = (row) => row.warnings.map((w) => w.code);
 
-  it('O2: a gap in the voice fails the silence check even under music', async () => {
-    const row = await renderOnce(await newProject({ narration: 'short' }));
+  it('N1: a pause inside a line fails the silence check even under music', async () => {
+    const row = await renderOnce(await newProject({ narration: 'gappy' }));
     expect(row.status).toBe('done');
     expect(codes(row)).toContain('silence');
-    expect(row.settings.checks.longestSilence).toBeGreaterThan(3);
+    expect(row.settings.checks.longestSilence).toBeGreaterThan(0.6);
+  }, 240_000);
+
+  it('N1: a gap between scenes is fine under music, and fails only when the whole mix is silent there', async () => {
+    const withMusic = await renderOnce(await newProject({ narration: 'short' }));
+    expect(codes(withMusic)).not.toContain('silence');
+    const bare = await renderOnce(await newProject({ narration: 'short', music: false }));
+    expect(codes(bare)).toContain('silence');
+    expect(bare.settings.checks.longestSilence).toBeGreaterThan(3);
   }, 240_000);
 
   it('O1: a scene whose narration does not fit is sped up to 1.15 and then runs on, with a warning, never cut silently', async () => {
@@ -477,6 +519,94 @@ describe('round 1', () => {
     expect(s2.tempo).toBeCloseTo(1.15, 6);
     expect(codes(row)).toContain('narration_overrun');
     expect(row.warnings.find((w) => w.code === 'narration_overrun').message).toMatch(/Dream/);
+    // N3: the speech past the video's end is said too.
+    expect(row.warnings.some((w) => w.code === 'narration_overrun' && /last words are cut off/.test(w.message))).toBe(true);
+  }, 240_000);
+
+  it('N2: an uncut narration longer than the video is a warning too', async () => {
+    const ctx = await newProject({ narration: 'long' });
+    // No narrator lines in the script, so the track cannot be cut: it plays from 0 as one stretch.
+    await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: [{ id: 's1', title: 'Morning', visual: 'v', lines: [{ speaker: 'Maya', text: 'Hi.' }] }], source: 'brief' });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { narration_segments: null });
+    const row = await renderOnce(ctx);
+    expect(row.status).toBe('done');
+    expect(row.warnings.some((w) => w.code === 'narration_overrun' && /last words are cut off/.test(w.message))).toBe(true);
+  }, 240_000);
+
+  it('N4: a scene that starts late because the one before ran on blames that one', () => {
+    const { warnings } = planNarration({
+      segments: [
+        { sceneId: 's1', lineIndex: 0, text: 'a', start: 0, end: 8 },
+        { sceneId: 's2', lineIndex: 0, text: 'b', start: 8.3, end: 14.2 },
+      ],
+      shots: [{ sceneId: 's1', seconds: 6 }, { sceneId: 's2', seconds: 6 }],
+      totalSeconds: 12,
+      titles: { s1: 'Morning', s2: 'Dream' },
+    });
+    const messages = warnings.filter((w) => w.code === 'narration_overrun').map((w) => w.message);
+    expect(messages[0]).toMatch(/"Morning" is longer than its shots/);
+    // Dream would fit its own shots (5.9 s sped up to 5.13 s in 6 s); it only starts late.
+    expect(messages[1]).toMatch(/"Morning" runs on/);
+    expect(messages[1]).toMatch(/"Dream" starts late/);
+  });
+
+  it('N7: our own narration and music are opened as plain files, a customer upload with its forced demuxer', async () => {
+    globalThis.__ffCalls = [];
+    const row = await renderOnce(await newProject());
+    const narr = localPathFor(media.narration.url);
+    const opens = globalThis.__ffCalls.filter((a) => a.includes(narr));
+    expect(opens.length).toBeGreaterThan(0);
+    for (const a of opens) {
+      const i = a.indexOf(narr);
+      expect(a.slice(Math.max(0, i - 4), i)).toEqual(expect.arrayContaining(['-protocol_whitelist', 'file', '-i']));
+      expect(a.slice(Math.max(0, i - 4), i)).not.toContain('-f');
+    }
+    expect(row.status).toBe('done');
+    globalThis.__ffCalls = undefined;
+    expect(checkedAudioExt({ mime: 'audio/mpeg' })).toBe('mp3');
+    expect(checkedAudioExt({ mime: 'Audio/MPEG' })).toBeNull();
+    expect(checkedAudioExt({ mime: 'audio/mpeg; x=1' })).toBeNull();
+  }, 240_000);
+
+  it('N5: captions that fail to draw part way are a captions_missing warning', async () => {
+    globalThis.__pngCalls = 0;
+    try {
+      captionFilterAvailable.mockResolvedValueOnce(false);
+      const row = await renderOnce(await newProject());
+      expect(row.status).toBe('done');
+      expect(codes(row)).toContain('captions_missing');
+    } finally {
+      globalThis.__pngCalls = undefined;
+    }
+  }, 240_000);
+
+  it('N8: a clip whose sound runs the whole clip (music or ambience) gives no speech window and no line_cut', async () => {
+    const userId = randomUUID();
+    const [project] = await storyDb().insert('story_projects', {
+      user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '9:16',
+      audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
+    await storyDb().insert('story_shots', [
+      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,' },
+    ]);
+    const row = await renderOnce({ userId, project });
+    expect(codes(row)).not.toContain('line_cut');
+  }, 240_000);
+
+  it('N9: a playlist dressed as footage is never followed: the render fails cleanly', async () => {
+    const ctx = await newProject();
+    const target = path.join(dir, 'secret.mp4');
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=24:duration=2', '-pix_fmt', 'yuv420p', target]);
+    const key = `test-fixtures/${randomUUID()}.mp4`;
+    mkdirSync(path.dirname(mockStoragePath(key)), { recursive: true });
+    writeFileSync(mockStoragePath(key), `#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:2,\nfile://${target}\n#EXT-X-ENDLIST\n`);
+    const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'video_clip', url: `/api/mock/storage/${key}`, storage_key: key, name: 'mine', mime: 'video/mp4' });
+    await storyDb().update('story_shots', { id: ctx.shots[1].id }, { source: 'footage', footage_asset_id: asset.id });
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    await runWorkerJob('render', {});
+    const [row] = await storyDb().select('story_renders', { id: render.id });
+    expect(row).toMatchObject({ status: 'failed', error: 'One of your clips has no picture. Pick another clip for that shot.' });
   }, 240_000);
 
   it('Om4 and Om5: the script words are frozen at start, and a transcript that does not match is a words warning (re-heard once under music)', async () => {
@@ -509,9 +639,9 @@ describe('round 1', () => {
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });
     await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
-    // c1 speaks for 4 s; its shot is 3 s (an economy clip made at 4 s for a 3 s shot).
+    // tk2 speaks from 0.4 to 3.8 s; its shot is 3 s (an economy clip made at 4 s for a 3 s shot).
     await storyDb().insert('story_shots', [
-      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,' },
+      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.tk2.url, clip_key: media.tk2.key, line: 'Once upon a time,' },
       { project_id: project.id, ord: 1, scene_id: 's2', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.tk1.url, clip_key: media.tk1.key, line: 'a baker dreamed big.' },
     ]);
     const row = await renderOnce({ userId, project });
