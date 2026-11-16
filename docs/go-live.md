@@ -255,7 +255,6 @@ Each of these spends real money; run one only after approving it and its cost.
 
 ## 10. Hardening list (known, not blocking)
 
-- `lib/story/analyze.js` runs ffmpeg on reference media without a protocol whitelist or forced demuxer.
 - `pages/api/upload-token.js` signed-in limits allow image/* and video/* up to 1 GB on any allowed path (the server
   re-checks on registration).
 - Audio handlers: putObject has no deadline signal; the own-recording download timeout (10 min) exceeds the worker

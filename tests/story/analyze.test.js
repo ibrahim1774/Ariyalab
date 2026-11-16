@@ -68,6 +68,14 @@ vi.mock('../../lib/providers/storage.js', async (importOriginal) => {
   const real = await importOriginal();
   return { ...real, putObject: vi.fn((...args) => real.putObject(...args)) };
 });
+// Every ffmpeg the analysis spawns is recorded (and still run), to check how it opens its inputs.
+vi.mock('node:child_process', async (importOriginal) => {
+  const real = await importOriginal();
+  return {
+    ...real,
+    spawn: vi.fn((bin, args, opts) => { (globalThis.__spawned ||= []).push(args); return real.spawn(bin, args, opts); }),
+  };
+});
 vi.mock('@vercel/blob/client', () => ({
   handleUpload: vi.fn(async ({ body, onBeforeGenerateToken }) => {
     const options = await onBeforeGenerateToken(body.payload.pathname, body.payload.clientPayload, false);
@@ -387,6 +395,37 @@ describe('analysis of a fixture reference', () => {
     expect(ref.status).toBe('ready');
     expect(transcribe).toHaveBeenCalledTimes(1);
     expect(ref.beat_sheet.length).toBe(3); // reference-silent.mp4: three 4 s scenes
+  });
+
+  it('final review I3: every ffmpeg input is opened with the file protocol only and a forced demuxer', async () => {
+    const check = () => {
+      const runs = globalThis.__spawned || [];
+      expect(runs.length).toBeGreaterThan(3);
+      for (const args of runs) {
+        const inputs = args.flatMap((a, i) => (a === '-i' ? [i] : []));
+        expect(inputs.length, args.join(' ')).toBeGreaterThan(0);
+        for (const i of inputs) {
+          const before = args.slice(0, i);
+          const at = before.lastIndexOf('-protocol_whitelist');
+          expect(at, args.join(' ')).toBeGreaterThanOrEqual(0);
+          expect(before[at + 1]).toBe('file');
+          const f = before.lastIndexOf('-f');
+          expect(f, args.join(' ')).toBeGreaterThan(at);
+          expect(['mov', 'mp3']).toContain(before[f + 1]);
+        }
+      }
+    };
+    globalThis.__spawned = [];
+    await analysed(FX.multi);
+    check();
+    // A link with a separate sound track (an mp3 in mock mode) is read with its own demuxer.
+    globalThis.__spawned = [];
+    const ctx = await newProject();
+    await start(ctx, { type: 'link', url: 'https://www.instagram.com/reel/x/?[[mock:silent-reel]]' });
+    await work();
+    expect((await refsOf(ctx.project.id))[0].status).toBe('ready');
+    check();
+    globalThis.__spawned = null;
   });
 
   it('a brand kit clip used as the reference is not deleted', async () => {
