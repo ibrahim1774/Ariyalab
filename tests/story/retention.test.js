@@ -49,6 +49,7 @@ async function project(userId, { expired = true, status = 'finished' } = {}) {
   );
   return rows[0].id;
 }
+const expiresAt = async (id) => (await db.query('select files_expire_at from public.story_projects where id = $1', [id])).rows[0].files_expire_at;
 const status = async (id) => (await db.query('select status from public.story_projects where id = $1', [id])).rows[0].status;
 
 describe('retention cleanup', () => {
@@ -146,7 +147,7 @@ describe('retention cleanup', () => {
     expect(summary.orphans).toBe(2);
   });
 
-  it('a delete that fails leaves the project unexpired for the next run', async () => {
+  it('a delete that fails keeps the project due: the next run deletes what is left', async () => {
     const user = randomUUID();
     const p = await project(user);
     await db.query('update public.story_projects set narration_key = $2 where id = $1', [p, `story/${p}/n.mp3`]);
@@ -154,7 +155,73 @@ describe('retention cleanup', () => {
     const summary = await runRetention({ list, del: async () => { throw new Error('blob down'); } });
     err.mockRestore();
     expect(summary.failed).toBeGreaterThanOrEqual(1);
+    expect(await status(p)).toBe('expired');
+    expect(await expiresAt(p)).not.toBeNull();
+    await run();
+    expect(deleted).toContain(`story/${p}/n.mp3`);
+    expect(await expiresAt(p)).toBeNull();
+  });
+
+  it('O5: a file stored after the cleanup (a fresh window) survives the next run', async () => {
+    const user = randomUUID();
+    const p = await project(user);
+    await db.query('update public.story_projects set narration_key = $2 where id = $1', [p, `story/${p}/n.mp3`]);
+    await run();
+    expect(await expiresAt(p)).toBeNull();
+    // A render that was already under way lands later: the runner sets files_expire_at only when it is null.
+    const late = `story/${p}/render/late.mp4`;
+    await db.query("insert into public.story_renders (project_id, version, storage_key) values ($1, 1, $2)", [p, late]);
+    await db.query("update public.story_projects set files_expire_at = now() + interval '30 days' where id = $1 and files_expire_at is null", [p]);
+    put(late);
+    deleted.length = 0;
+    await run();
+    expect(deleted).not.toContain(late);
+  });
+
+  it('F-M2 (Fable R1): a job started during the run keeps the project files (checked before each delete)', async () => {
+    const user = randomUUID();
+    const p = await project(user);
+    const still = `story/${p}/still/a.png`;
+    await db.query(`insert into public.story_shots (project_id, ord, still_key, still_url, status) values ($1, 0, $2, 'u', 'still_ready')`, [p, still]);
+    put(still);
+    let started = false;
+    const racing = async (args) => {
+      if (!started && args.prefix.startsWith('story/')) {
+        started = true;
+        await db.query(`insert into public.story_jobs (project_id, user_id, kind, status, cost_credits, payload) values ($1, $2, 'clip', 'queued', 33, $3::jsonb)`, [p, user, JSON.stringify({ stillKey: still })]);
+      }
+      return list(args);
+    };
+    await runRetention({ list: racing, del });
+    expect(deleted).toEqual([]);
+    expect(await expiresAt(p)).not.toBeNull(); // still due: tried again once the job is done
+  });
+
+  it('F-M2: a project with a running job is not even marked expired', async () => {
+    const user = randomUUID();
+    const p = await project(user);
+    await db.query(`insert into public.story_jobs (project_id, user_id, kind, status) values ($1, $2, 'render', 'running')`, [p, user]);
+    const { rows } = await db.query('select public.story_expire_project($1) as ok', [p]);
+    expect(rows[0].ok).toBe(false);
     expect(await status(p)).toBe('finished');
+  });
+
+  it('F-M2 (Fable R2): a copy that names a shared key before the delete keeps it', async () => {
+    const user = randomUUID();
+    const src = await project(user);
+    const still = `story/${src}/still/a.png`;
+    await db.query(`insert into public.story_shots (project_id, ord, still_key, still_url, status) values ($1, 0, $2, 'u', 'still_ready')`, [src, still]);
+    put(still);
+    let copy = null;
+    const racing = async (args) => {
+      if (!copy) {
+        ({ rows: [copy] } = await db.query(`insert into public.story_projects (user_id, files_expire_at) values ($1, now() + interval '30 days') returning id`, [user]));
+        await db.query(`insert into public.story_shots (project_id, ord, still_key, still_url, status) values ($1, 0, $2, 'u', 'still_ready')`, [copy.id, still]);
+      }
+      return list(args);
+    };
+    await runRetention({ list: racing, del });
+    expect(deleted).not.toContain(still);
   });
 
   it('the cron needs CRON_SECRET', async () => {

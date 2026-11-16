@@ -352,3 +352,33 @@ describe('duplicateProject', () => {
     await expect(duplicateProject({ userId: userA(), id: src.id })).rejects.toBeInstanceOf(NotFoundError);
   });
 });
+
+describe('expired projects (Task 27 round 1, F-M3)', () => {
+  it('refuse every paid start with a clear message; a copy works', async () => {
+    const { generateCast, regenerateCharacter } = await import('../../lib/story/cast.js');
+    const { startGeneration, rerollShot } = await import('../../lib/story/shots.js');
+    const { startRender } = await import('../../lib/story/render.js');
+    const { generateStills } = await import('../../lib/story/storyboard.js');
+    const { generateNarration, generateMusic } = await import('../../lib/story/audio.js');
+    const userId = userA();
+    const p = await createProject({ userId, input: BRIEF });
+    await storyDb().update('story_projects', { id: p.id }, { status: 'expired' });
+    const starts = [
+      () => generateCast({ userId, projectId: p.id }),
+      () => regenerateCharacter({ userId, projectId: p.id, castId: randomUUID() }),
+      () => startGeneration({ userId, projectId: p.id, confirmTotal: 0 }),
+      () => rerollShot({ userId, projectId: p.id, shotId: randomUUID() }),
+      () => startRender({ userId, projectId: p.id }),
+      () => generateStills({ userId, projectId: p.id }),
+      () => generateNarration({ userId, projectId: p.id }),
+      () => generateMusic({ userId, projectId: p.id }),
+    ];
+    for (const start of starts) {
+      const err = await start().catch((e) => e);
+      expect(err).toBeInstanceOf(ConflictError);
+      expect(err.message).toBe("This video's files were removed. Make a copy to continue.");
+    }
+    const copy = await duplicateProject({ userId, id: p.id });
+    expect(copy.status).toBe('draft');
+  });
+});

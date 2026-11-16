@@ -15,8 +15,8 @@
 --   Holds without a project (old tools, voice clones) are never touched here. A repeat is harmless (a closed hold or
 --   an empty remainder gives 0).
 --
--- story_retention_due(limit) -> projects whose files_expire_at has passed, not yet 'expired', with no queued or
---   running job, oldest expiry first.
+-- story_retention_due(limit) -> projects whose files_expire_at has passed (also ones already marked 'expired' whose
+--   deletes did not finish), with no queued or running job, oldest expiry first.
 -- story_project_file_keys(project) -> every storage key the project's rows name: narration/music/thumbnail, shot
 --   stills and clips, cast pictures (image_key and every "key" in candidates and sheet), renders, the project's
 --   references (storage_key and frames) and any "key" in its jobs' results.
@@ -24,7 +24,11 @@
 --   object an asset's url points at when it has no storage_key) (brand
 --   kit and own files never expire with a project; own-picture cast rows reuse that key as image_key), or a key named
 --   by a project other than `project` whose status is not 'expired' (duplicates share keys: refcount).
--- story_expire_project(project) -> true when the project was marked expired now.
+-- story_expire_project(project) -> true when the project is (now) 'expired' and its files may be deleted; false when
+--   a job is queued or running (paid starts are refused on an expired project, lib/story/projects.js).
+-- story_project_busy(project) -> true while a job of the project is queued or running (checked before each delete).
+-- story_retention_done(project) -> clears files_expire_at once every delete succeeded, so a file stored later (a job
+--   that was already running) starts a fresh retention window instead of being deleted on the next run.
 
 create or replace function public.story_release_orphan_hold(p_hold uuid, p_min_age_minutes integer default 30)
 returns integer
@@ -78,7 +82,7 @@ security definer
 set search_path = public, pg_temp
 as $$
   select p.* from story_projects p
-   where p.files_expire_at is not null and p.files_expire_at < now() and p.status <> 'expired'
+   where p.files_expire_at is not null and p.files_expire_at < now()
      and not exists (select 1 from story_jobs j where j.project_id = p.id and j.status in ('queued', 'running'))
    order by p.files_expire_at, p.id
    limit greatest(coalesce(p_limit, 0), 0);
@@ -154,8 +158,38 @@ security definer
 set search_path = public, pg_temp
 as $$
 begin
+  perform 1 from story_projects where id = p_project for update;
+  if not found then
+    return false;
+  end if;
+  if exists (select 1 from story_jobs where project_id = p_project and status in ('queued', 'running')) then
+    return false;
+  end if;
   update story_projects set status = 'expired', updated_at = now()
-   where id = p_project and status <> 'expired' and files_expire_at is not null and files_expire_at < now();
+   where id = p_project and files_expire_at is not null and files_expire_at < now();
+  return found;
+end
+$$;
+
+create or replace function public.story_project_busy(p_project uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+  select exists (select 1 from story_jobs where project_id = p_project and status in ('queued', 'running'));
+$$;
+
+create or replace function public.story_retention_done(p_project uuid)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  update story_projects set files_expire_at = null, updated_at = now()
+   where id = p_project and status = 'expired' and files_expire_at is not null and files_expire_at < now();
   return found;
 end
 $$;
@@ -173,7 +207,7 @@ begin
       where n.nspname = 'public'
         and p.proname = any (array[
           'story_release_orphan_hold', 'story_retention_due', 'story_json_keys', 'story_project_file_keys',
-          'story_keys_in_use', 'story_expire_project'
+          'story_keys_in_use', 'story_expire_project', 'story_project_busy', 'story_retention_done'
         ])
   loop
     execute format('revoke all on function %s from public', fn);
