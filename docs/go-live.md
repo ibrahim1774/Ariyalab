@@ -70,7 +70,7 @@ Apply in this exact order. Every migration is additive (new `credit_` / `story_`
 | 16 | `20261116000100_story_mcp_drafts.sql` | Before the MCP code deploys. |
 | 17 | `20261116000200_story_mcp_draft_versions.sql` | Before the MCP code deploys. |
 | 18 | `20261116000300_story_assets.sql` | Before asset DELETE works. |
-| 19 | `20261116000400_billing_v2.sql` | Yearly subscriptions and invoice-grant tables, their functions, and the closed-hold guard (replaces `credit_charge_closed_hold`, same signature). Before deploying the v2 billing code. |
+| 19 | `20261116000400_billing_v2.sql` | Yearly subscriptions, yearly periods and priced plan lines (plan changes credited by money), their functions, and the closed-hold guard (replaces `credit_charge_closed_hold`, same signature). Before deploying the v2 billing code. |
 | 20 | `20261116000500_story_cleanup.sql` | Stale-hold sweeper and retention functions. Before the `story-holds` and `story-cleanup` crons run. |
 
 Checks on the real database after applying (they cannot be tested in the in-memory database):
@@ -103,6 +103,8 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
 - Webhook endpoint `APP_URL/api/stripe-webhook`, subscribed to exactly these events (the handlers in
   `pages/api/stripe-webhook.js`):
   - `invoice.payment_succeeded`
+  - `invoice.paid` (credits only; it also fires for an invoice with nothing to charge, such as a downgrade whose
+    unused time goes to the customer balance)
   - `checkout.session.completed`
   - `charge.refunded`
   - `charge.dispute.created`
@@ -124,38 +126,55 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
 - Configure the portal in the Stripe dashboard: the v2 Starter, Creator and Studio prices (monthly and yearly) as the
   products customers may switch between, **upgrades invoiced immediately** (proration "always invoice") and
   **downgrades at the end of the period**: in the portal's subscription-update settings, schedule both
-  `decreasing_item_amount` and `shortening_interval` changes at the period end. The code does not rely on this (flips
-  between intervals and plans never grant the same paid time twice), it is defence in depth. **The portal configuration is account-wide: the Stripe account is shared
-  with haelabs.live**, so check that its settings suit haelabs too (or create a separate portal configuration and pass
-  it), and that haelabs' promotion codes are restricted to haelabs' products before `allow_promotion_codes` checkouts
-  go live here.
-- How a plan change is credited:
-  - An upgrade is granted only when its proration invoice is paid (also when paid from the customer balance): the
-    difference between the new monthly credits and the highest level already granted this period, **prorated by the
-    time left in the period** when the invoice was paid. With prorations left for the next cycle invoice, nothing is
-    granted for that period. A downgrade grants nothing; the lower allotment starts at renewal.
-  - Monthly to yearly (also a switch invoice with no "unused time" line whose period start moved): the year starts
-    with that invoice; its first month is granted at once (`yearly:<sub>:<YYYY-MM-DD>:m0`), the cron grants the other
-    eleven (12 per paid year).
-  - An upgrade is measured from the highest level already granted for the moment it happens (any window: the
-    monthly period, a yearly month, an earlier upgrade, a switch), so a downgrade followed by an upgrade back, or
-    flips between monthly and yearly, grant nothing new. A switch into yearly grants month 0 only for the part of the
-    month no earlier grant covers, and nothing when nothing was paid. A late upgrade webhook is measured on the
-    period its invoice line names.
-  - Yearly to a dearer yearly price: the current month's difference is prorated (or, if that month has not been
-    granted yet, the cron grants it at the new level), later months at the new level.
-- Renewals are granted at the plan the invoice paid for (its own line), not the subscription's plan at that moment.
-- Yearly v2 plans: the invoice grants the first month, `/api/cron/grant-yearly` grants each following month
-  (`yearly:<subscription>:<YYYY-MM>`).
-- Refunds and disputes: a **full** refund or dispute of a yearly invoice reverses month 0 and every month granted so
-  far and stops the remaining months; a **partial** one reverses that share of each month granted so far and of each
-  later month as it is granted (the months continue). A refund or dispute of an upgrade invoice reverses its share of
-  the upgrade grant, takes the same share of the upgrade's step back from every month the cron granted at the raised
-  level since the upgrade, and lowers a yearly plan's monthly level by the strict rule: the level before the year's
-  first upgrade plus each upgrade's step times the share of it still paid for (refunding an earlier upgrade lowers
-  the level even when a later one is still paid). It never stops the year.
-- Verify on the first test-mode upgrade that the proration invoice lines carry `proration` and the price (the code
-  reads both the 2024-06-20 shape and the newer `parent` / `pricing` shape).
+  `decreasing_item_amount` and `shortening_interval` changes at the period end. This is defence in depth only: the
+  code credits every plan change by the money it moves (below), however the portal is set. **The portal configuration
+  is account-wide: the Stripe account is shared with haelabs.live**, so check that its settings suit haelabs too (or
+  create a separate portal configuration and pass it), and that haelabs' promotion codes are restricted to haelabs'
+  products before `allow_promotion_codes` checkouts go live here.
+- How subscription invoices are credited (`lib/grants.js grantForInvoice`; first, renewal and plan-change invoices,
+  read line by line):
+  - A **period line** (not a proration) gives the plan's allotment for the plan that line paid for: a monthly plan its
+    monthly credits at once (`invoice:<id>`, rollover rule); a yearly plan starts a yearly period worth 12 months of
+    credits, released month by month (month 0 at once, then `/api/cron/grant-yearly`, `yearly:<subscription>:<YYYY-MM>`).
+    Coupons do not change the allotment.
+  - A **plan change is credited by money.** Each proration line is worth its amount at its own price's rate (the
+    price's credits for one period / the price's amount; a yearly price's period is 12 months): a charge
+    `floor(amount x rate)`, unused time given back `-ceil(|amount| x rate)`. Proration by time is Stripe's; the code
+    never measures time for a change.
+    - Monthly lines are netted per invoice: a positive net is granted at once (`upgrade:<invoice>`), a negative net is
+      clawed back at once (`downgrade:<invoice>`, reason `plan_change`).
+    - Yearly lines add to or take from the **entitlement** of the yearly period they name (its line's period end). A
+      period never gives more than its entitlement: anything above it is clawed back at once
+      (`period:<sub>:<end>:claw:<n>`). The cron gives each month the plan's monthly level, or less when the money left
+      is short (spread over the months left), and keeps the monthly level in reserve for each month still to come;
+      what those months can never release (a paid yearly upgrade's step for the current month) is granted with the
+      invoice (`period:<sub>:<end>:up:<invoice>`). By the last month the whole entitlement is out.
+    - A yearly period the subscription leaves (unused time credited with nothing new charged on it) ends there: no
+      later month, and what it gave above the money kept is clawed back.
+  - It does not matter whether the invoice is paid by card, from the customer balance, or not at all (a negative
+    total): money given back to the balance was clawed back when it was given, and the balance then pays later
+    invoices like money. So upgrades, downgrades, interval switches and loops of them all come to "credits = money kept
+    x rate", within a credit per line (rounding always favours the business). Prorations left for the next renewal
+    invoice (`create_prorations`) are credited on that invoice the same way.
+  - Grants are applied before clawbacks within one invoice. A clawback takes what is available; credits already spent
+    cannot be taken back (as with refunds), so a customer who spends a month's credits and then downgrades with
+    proration keeps what was spent while the unused time goes to their balance. The portal setting above (downgrades
+    at the period end, no proration) is what closes that; check it before go-live.
+  - A line in another currency than its price (currency options, adaptive pricing) is skipped and logged: v2 prices
+    are USD only.
+- Refunds and disputes take back, of each invoice, the share of money returned (refunded plus disputed, over what the
+  invoice cost): the same share of a monthly renewal grant and of a plan change's net grant (cumulative per grant), and
+  of the invoice's part of each yearly period's entitlement, then the period gives back anything above the lowered
+  entitlement at once (the month's step a yearly upgrade granted with its invoice loses its share at once too). The
+  clawback is worked out from what was already given and taken, never from a marker written first, so a retry after a
+  failure finishes the job. A partial refund of a yearly invoice takes nothing yet when what was given is still under
+  the money kept; the later months are smaller (spread) and the year gives exactly the money kept. A full refund or
+  dispute of the invoice that started a yearly period stops it. Refunding a plan change does not change the
+  subscription in Stripe: when you refund an upgrade by hand, also move the subscription back (without proration), or
+  Stripe will later credit unused time of a plan that was never paid for.
+- Verify on the first test-mode plan changes (upgrade, downgrade, monthly to yearly and back) that the invoice lines
+  carry `proration`, the price, `amount` and `period` (the code reads the 2024-06-20 shape and the newer `parent` /
+  `pricing` shape), and that the interval change bills the new period as a full line.
 - Several yearly months that come due at once (the cron was down for over a month, or the customer linked their
   account late) are granted one after the other, and the plan rollover rule (at most one month carried over) caps
   the total. Keep the cron running; grant the difference by hand from /admin if it happens.

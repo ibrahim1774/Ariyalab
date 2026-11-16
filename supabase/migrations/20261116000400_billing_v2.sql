@@ -1,10 +1,11 @@
 -- Task 27 (billing v2 plans, yearly grants, billing hardening). Applies after 20261116000300_story_assets.sql.
--- Additive: two new credit_ tables, five new functions, and a replacement body for credit_charge_closed_hold
+-- Additive: three new credit_ tables, eight new functions, and a replacement body for credit_charge_closed_hold
 -- (same signature, same privileges). Touches no shared (haelabs) table.
 --
 -- credit_yearly_subs: one row per yearly billing-v2 subscription (lib/grants.js). Written when its invoice is paid
 --   and on customer.subscription.* events; read by the yearly cron (pages/api/cron/grant-yearly.js), which grants
 --   months 1..11 of the current period under ref yearly:<sub_id>:<YYYY-MM>. Month 0 is the invoice's own grant.
+--   credits: the monthly level the cron releases (bounded by the period's entitlement, credit_yearly_periods).
 --   status: the Stripe subscription status, or 'canceled' (deleted), 'refunded' (the period's invoice was refunded or
 --   disputed: no more months), 'switched' (moved to a monthly price).
 --
@@ -12,13 +13,23 @@
 --   invoice (the period's own invoice, or a monthly->yearly switch). The period, plan and the invoice that paid it
 --   (period_invoice_id) move only forward; a 'refunded' period stays refunded until a new period.
 -- credit_yearly_sync(sub, status, credits): customer.subscription.* events: status, and credits only LOWERED.
--- credit_yearly_raise(sub, plan, credits): a PAID upgrade: credits only raised.
+-- credit_yearly_raise(sub, plan, credits): a PAID change to a dearer yearly price: credits only raised.
 --
--- credit_invoice_grants: which ledger grants a paid invoice funded, for refund and dispute clawback.
---   kind 'yearly': a yearly period (month 0 and every yearly:<sub>:<YYYY-MM> month of period_start's year);
---   kind 'upgrade': the upgrade grant(s) in refs. credit_invoice_grants_record(invoice, kind, sub, period_start, refs)
---   inserts it or adds refs.
---
+-- Plan changes are credited by MONEY (lib/grants.js grantForInvoice):
+-- credit_plan_lines: every priced line of ours on a paid subscription invoice (idempotent on the line). A proration
+--   charge is worth floor(amount x rate), a proration credit (unused time given back) -ceil(|amount| x rate), with
+--   rate = the price's credits for one period / its amount; a period line (non-proration) is the price's allotment.
+--   kind 'month' (monthly v2 or legacy price: credited at once) or 'year' (a yearly v2 price: counts toward the yearly
+--   period named by the line's period end).
+-- credit_yearly_periods: one row per yearly period of a v2 subscription, keyed by (sub_id, period_end). What the
+--   period may give (its entitlement) is the sum of its year lines less the refunded share of each invoice's part;
+--   the cron releases it month by month and never past it, and anything given above it is clawed back at once.
+-- credit_period_state(user, customer, refs, prefix): what a period gave so far (its month refs, plus refs under
+--   <prefix>: for catch-ups and clawbacks; parked grants count too).
+-- credit_period_apply(...): one grant or clawback for a period under a per-period advisory lock, applied only when
+--   the period still stands at the total the caller computed from (else 'stale': re-read and retry), so the cron, a
+--   webhook and a retry of either can never both act on the same state.
+
 -- credit_charge_closed_hold: now returns at once (charging nothing) when, under the account lock, the hold already
 --   has a settle or spend row: closes the race where a late success and the reconciler both charge a closed hold.
 
@@ -93,29 +104,182 @@ as $$
    where sub_id = p_sub;
 $$;
 
-create table public.credit_invoice_grants (
-  invoice_id text primary key,
-  kind text not null check (kind in ('yearly', 'upgrade')),
+create table public.credit_yearly_periods (
   sub_id text not null,
-  period_start timestamptz,
-  refs text[] not null default '{}',
-  created_at timestamptz not null default now()
+  period_end timestamptz not null,
+  period_start timestamptz not null,
+  customer_id text not null,
+  invoice_id text not null,
+  month0_ref text not null,
+  ended_at timestamptz,
+  created_at timestamptz not null default now(),
+  primary key (sub_id, period_end)
 );
 
-alter table public.credit_invoice_grants enable row level security;
+create index credit_yearly_periods_invoice_idx on public.credit_yearly_periods (invoice_id);
 
-create function public.credit_invoice_grants_record(
-  p_invoice text, p_kind text, p_sub text, p_period_start timestamptz, p_refs text[]
+alter table public.credit_yearly_periods enable row level security;
+
+create table public.credit_plan_lines (
+  line_key text primary key,
+  invoice_id text not null,
+  sub_id text not null,
+  kind text not null check (kind in ('month', 'year')),
+  period_end timestamptz,
+  amount_cents integer not null,
+  credits integer not null,
+  created_at timestamptz not null default now(),
+  check (kind = 'month' or period_end is not null)
+);
+
+create index credit_plan_lines_invoice_idx on public.credit_plan_lines (invoice_id);
+create index credit_plan_lines_period_idx on public.credit_plan_lines (sub_id, period_end) where kind = 'year';
+
+alter table public.credit_plan_lines enable row level security;
+
+create function public.credit_yearly_period_record(
+  p_sub text, p_end timestamptz, p_start timestamptz, p_customer text, p_invoice text, p_month0_ref text
 )
 returns void
 language sql
 security definer
 set search_path = public, pg_temp
 as $$
-  insert into credit_invoice_grants as g (invoice_id, kind, sub_id, period_start, refs)
-  values (p_invoice, p_kind, p_sub, p_period_start, coalesce(p_refs, '{}'))
-  on conflict (invoice_id) do update
-    set refs = array(select distinct unnest(g.refs || excluded.refs));
+  insert into credit_yearly_periods (sub_id, period_end, period_start, customer_id, invoice_id, month0_ref)
+  values (p_sub, p_end, p_start, p_customer, p_invoice, p_month0_ref)
+  on conflict (sub_id, period_end) do nothing;
+$$;
+
+-- A period left before its end (switched to monthly, or to a new yearly period): no month starting after p_at.
+create function public.credit_yearly_period_end(p_sub text, p_end timestamptz, p_at timestamptz)
+returns void
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  update credit_yearly_periods set ended_at = least(coalesce(ended_at, p_at), p_at)
+   where sub_id = p_sub and period_end = p_end;
+$$;
+
+create function public.credit_plan_line_record(
+  p_key text, p_invoice text, p_sub text, p_kind text, p_period_end timestamptz, p_amount integer, p_credits integer
+)
+returns void
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  insert into credit_plan_lines (line_key, invoice_id, sub_id, kind, period_end, amount_cents, credits)
+  values (p_key, p_invoice, p_sub, p_kind, p_period_end, p_amount, p_credits)
+  on conflict (line_key) do nothing;
+$$;
+
+create function public.credit_period_state(p_user uuid, p_customer text, p_refs text[], p_prefix text)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  v_granted integer;
+  v_present text[];
+  v_claws integer;
+  v_ups integer;
+  v_parked integer;
+  v_parked_refs text[];
+  v_parked_ups integer;
+begin
+  select coalesce(sum(case when op = 'clawback' then -amount else amount end), 0)::integer,
+         coalesce(array_agg(distinct ref) filter (where op <> 'clawback' and ref = any(p_refs)), '{}'),
+         (count(*) filter (where op = 'clawback'))::integer,
+         (count(*) filter (where op <> 'clawback' and left(ref, length(p_prefix) + 4) = p_prefix || ':up:'))::integer
+    into v_granted, v_present, v_claws, v_ups
+    from credit_ledger
+   where p_user is not null and user_id = p_user and currency = 'video'
+     and ((op in ('grant', 'renew') and reason in ('plan_renewal', 'plan_upgrade')
+           and (ref = any(p_refs) or left(ref, length(p_prefix) + 1) = p_prefix || ':'))
+       or (op = 'clawback' and left(ref, length(p_prefix) + 1) = p_prefix || ':'));
+  select coalesce(sum(amount), 0)::integer,
+         coalesce(array_agg(ref) filter (where ref = any(p_refs)), '{}'),
+         (count(*) filter (where left(ref, length(p_prefix) + 4) = p_prefix || ':up:'))::integer
+    into v_parked, v_parked_refs, v_parked_ups
+    from credit_pending_grants
+   where stripe_customer_id = p_customer and claimed_by is null and reason in ('plan_renewal', 'plan_upgrade')
+     and (ref = any(p_refs) or left(ref, length(p_prefix) + 1) = p_prefix || ':');
+  return jsonb_build_object(
+    'granted', v_granted + v_parked,
+    'present', to_jsonb(v_present || v_parked_refs),
+    'claws', v_claws,
+    'ups', v_ups + v_parked_ups
+  );
+end
+$$;
+
+-- p_kind: 'claw' (ref <prefix>:claw:<n>), 'up' (a catch-up grant: p_ref <prefix>:up:<invoice> for the invoice that
+-- paid it, so its refund can reverse it; else <prefix>:up:<n>) or 'month' (p_ref, one of
+-- p_refs: granted like credit_renew_plan, but the rollover cap is the plan's monthly allotment p_cap, so a smaller
+-- month never expires more than one month of plan credits). Returns {status: 'applied'|'stale'|'present', granted}.
+create function public.credit_period_apply(
+  p_user uuid, p_customer text, p_refs text[], p_prefix text, p_expect integer,
+  p_kind text, p_amount integer, p_reason text, p_ref text default null, p_cap integer default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  s jsonb;
+  a credit_accounts;
+  v_ref text;
+  v_target integer;
+  v_granted integer;
+begin
+  if p_user is null or p_amount is null or p_amount <= 0 or coalesce(p_prefix, '') = ''
+     or p_kind is null or p_kind not in ('claw', 'up', 'month') then
+    raise exception 'invalid_period_apply';
+  end if;
+  perform pg_advisory_xact_lock(hashtext('credit_period:' || p_prefix));
+  s := credit_period_state(p_user, p_customer, p_refs, p_prefix);
+  v_granted := (s->>'granted')::integer;
+  if p_kind = 'month' and (p_ref is null or not (p_ref = any(p_refs))) then
+    raise exception 'invalid_period_apply';
+  end if;
+  if p_kind = 'month' and (s->'present') ? p_ref then
+    return jsonb_build_object('status', 'present', 'granted', v_granted);
+  end if;
+  if v_granted <> p_expect then
+    return jsonb_build_object('status', 'stale', 'granted', v_granted);
+  end if;
+  if p_kind = 'claw' then
+    v_ref := p_prefix || ':claw:' || ((s->>'claws')::integer + 1);
+    perform credit_clawback(p_user, 'video', p_amount, p_reason, v_ref, 'plan');
+    return jsonb_build_object('status', 'applied', 'granted', v_granted - p_amount, 'ref', v_ref);
+  end if;
+  if p_kind = 'up' then
+    v_ref := coalesce(p_ref, p_prefix || ':up:' || ((s->>'ups')::integer + 1));
+    if left(v_ref, length(p_prefix) + 4) <> p_prefix || ':up:' then
+      raise exception 'invalid_period_apply';
+    end if;
+    if exists (select 1 from credit_ledger
+                where user_id = p_user and currency = 'video' and reason = 'plan_upgrade' and ref = v_ref) then
+      return jsonb_build_object('status', 'present', 'granted', v_granted);
+    end if;
+    perform credit_grant(p_user, 'video', p_amount, 'plan', 'plan_upgrade', v_ref);
+    return jsonb_build_object('status', 'applied', 'granted', v_granted + p_amount, 'ref', v_ref);
+  end if;
+  a := credit_lock_account(p_user, 'video');
+  v_target := greatest(least(a.plan_balance, greatest(coalesce(p_cap, p_amount), p_amount)) + p_amount, a.held - a.topup_balance);
+  perform credit_apply(p_user, 'video', p_amount, 0, 0, 'plan_renewal', p_ref, null, 'renew', p_amount);
+  if a.plan_balance + p_amount > v_target then
+    perform credit_apply(
+      p_user, 'video', v_target - (a.plan_balance + p_amount), 0, 0,
+      'plan_expiry', p_ref, null, 'expire', a.plan_balance + p_amount - v_target
+    );
+  end if;
+  return jsonb_build_object('status', 'applied', 'granted', v_granted + p_amount, 'ref', p_ref);
+end
 $$;
 
 create or replace function public.credit_charge_closed_hold(
@@ -167,7 +331,8 @@ begin
       join pg_namespace n on n.oid = p.pronamespace
       where n.nspname = 'public'
         and p.proname = any (array[
-          'credit_yearly_record', 'credit_yearly_sync', 'credit_yearly_raise', 'credit_invoice_grants_record',
+          'credit_yearly_record', 'credit_yearly_sync', 'credit_yearly_raise', 'credit_yearly_period_record',
+          'credit_yearly_period_end', 'credit_plan_line_record', 'credit_period_state', 'credit_period_apply',
           'credit_charge_closed_hold'
         ])
   loop
@@ -184,15 +349,15 @@ begin
   end loop;
 
   if exists (select 1 from pg_roles where rolname = 'anon') then
-    revoke all on table public.credit_yearly_subs, public.credit_invoice_grants from anon;
+    revoke all on table public.credit_yearly_subs, public.credit_yearly_periods, public.credit_plan_lines from anon;
   end if;
   if exists (select 1 from pg_roles where rolname = 'authenticated') then
-    revoke all on table public.credit_yearly_subs, public.credit_invoice_grants from authenticated;
+    revoke all on table public.credit_yearly_subs, public.credit_yearly_periods, public.credit_plan_lines from authenticated;
   end if;
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    revoke all on table public.credit_yearly_subs, public.credit_invoice_grants from service_role;
+    revoke all on table public.credit_yearly_subs, public.credit_yearly_periods, public.credit_plan_lines from service_role;
     grant select, update on table public.credit_yearly_subs to service_role;
-    grant select on table public.credit_invoice_grants, public.credit_legacy_migrations to service_role;
+    grant select on table public.credit_yearly_periods, public.credit_plan_lines, public.credit_legacy_migrations to service_role;
   end if;
 end
 $$;

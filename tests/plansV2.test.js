@@ -416,9 +416,12 @@ describe('yearly grants', () => {
     expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: { id: chargeId } } })).statusCode).toBe(200);
     await grantYearlyMonths();
     const rows = await ledger(user.id);
-    // The month is still granted (months continue); the refunded share of it is taken off.
-    expect(rows.filter((r) => r.op === 'renew' && r.ref.startsWith('yearly:'))).toHaveLength(1);
-    expect(rows.some((r) => r.reason === 'stripe_refund' && r.ref.startsWith('yearly:'))).toBe(true);
+    // The month is still granted (months continue); the refunded share comes off the months still to come
+    // (round 4 money rule: the year gives what was kept, so this month is a little under 2600).
+    const months = rows.filter((r) => r.op === 'renew' && r.ref.startsWith('yearly:'));
+    expect(months).toHaveLength(1);
+    expect(months[0].amount).toBeLessThan(2600);
+    expect(months[0].amount).toBeGreaterThan(2500);
   });
 
   it('a refunded yearly invoice stops the later months', async () => {
@@ -443,16 +446,19 @@ describe('mid-period plan changes', () => {
     type: 'customer.subscription.updated',
     data: { object: { id: sub }, previous_attributes: { items: { data: [{ price: { id: `price_${oldKey}`, lookup_key: oldKey } }] } } },
   });
-  // The proration invoice Stripe issues for a switch (API 2024-06-20 line shape).
-  function prorationInvoice(customer, subId, { oldKey, newKey, paid }) {
+  // The proration invoice Stripe issues for a switch made with `left` of the period to go (API 2024-06-20 line
+  // shape): the unused time of the old price credited, the same time of the new price charged.
+  function prorationInvoice(customer, subId, { oldKey, newKey, left }) {
     const id = `in_${randomUUID().slice(0, 12)}`;
+    const cents = (key) => parseV2LookupKey(key).amountCents;
+    const lines = [
+      { proration: true, amount: -Math.round(cents(oldKey) * left), currency: 'usd', price: { id: `price_${oldKey}`, lookup_key: oldKey, currency: 'usd' } },
+      { proration: true, amount: Math.round(cents(newKey) * left), currency: 'usd', price: { id: `price_${newKey}`, lookup_key: newKey, currency: 'usd' } },
+    ];
+    const total = lines[0].amount + lines[1].amount;
     S.state.invoices.set(id, {
       id, customer, subscription: subId, status: 'paid', billing_reason: 'subscription_update', currency: 'usd',
-      amount_paid: paid,
-      lines: { data: [
-        { proration: true, amount: -2000, price: { id: `price_${oldKey}`, lookup_key: oldKey } },
-        { proration: true, amount: 2000 + paid, price: { id: `price_${newKey}`, lookup_key: newKey } },
-      ] },
+      total, amount_paid: Math.max(0, total), lines: { data: lines },
     });
     return id;
   }
@@ -469,7 +475,7 @@ describe('mid-period plan changes', () => {
     expect((await getBalance(user.id)).plan).toBe(1500);
   });
 
-  it('a paid upgrade invoice grants the allotment difference PRORATED by the time left, once per level per period', async () => {
+  it('a paid upgrade invoice grants the allotment difference PRORATED by the time left (priced by money), once', async () => {
     await setV2(true);
     const user = newUser();
     const customer = await linkedCustomer(user);
@@ -477,29 +483,30 @@ describe('mid-period plan changes', () => {
     const sub = newSub(customer, STARTER_M, { start: t0, end: t0 + 30 * DAY });
     await deliver(invoiceEvent(paidInvoice(customer, sub)));
     S.state.subs.get(sub).items.data[0].price = { id: `price_${STUDIO_M}`, lookup_key: STUDIO_M };
-    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3500 });
+    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, left: 0.5 });
     expect((await deliver(invoiceEvent(inv))).statusCode).toBe(200);
     const row = (await ledger(user.id)).at(-1);
-    expect(row).toMatchObject({ op: 'grant', reason: 'plan_upgrade', ref: `upgrade:${sub}:${t0}:5400`, bucket: 'plan' });
-    expect(row.amount).toBeGreaterThanOrEqual(1950);
-    expect(row.amount).toBeLessThanOrEqual(1952); // ceil(3900 x 15/30), a second or two of drift
-    // A repeat delivery, or a second invoice for the same level, grants nothing more.
+    expect(row).toMatchObject({ op: 'grant', reason: 'plan_upgrade', ref: `upgrade:${inv}`, bucket: 'plan' });
+    // floor(4950 x 5400/9900) - ceil(1450 x 1500/2900) = 2700 - 750 = 1950 = (5400 - 1500) x 15/30.
+    expect(row.amount).toBe(1950);
+    // A repeat delivery grants nothing more.
     await deliver(invoiceEvent(inv));
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3500 })));
+    await deliver({ ...invoiceEvent(inv), type: 'invoice.paid' });
     expect((await ledger(user.id)).filter((r) => r.reason === 'plan_upgrade')).toHaveLength(1);
   });
 
-  it('a downgrade (net credit, nothing paid) grants nothing', async () => {
+  it('a downgrade (net credit, nothing paid) grants nothing and takes back the time credited (round 4 money rule)', async () => {
     await setV2(true);
     const user = newUser();
     const customer = await linkedCustomer(user);
     const sub = newSub(customer, STUDIO_M);
     await deliver(invoiceEvent(paidInvoice(customer, sub)));
     S.state.subs.get(sub).items.data[0].price = { id: `price_${CREATOR_M}`, lookup_key: CREATOR_M };
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STUDIO_M, newKey: CREATOR_M, paid: 0 })));
+    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STUDIO_M, newKey: CREATOR_M, left: 0.5 })));
     await deliver(updated(sub, STUDIO_M));
     expect((await ledger(user.id)).filter((r) => r.reason === 'plan_upgrade')).toHaveLength(0);
-    expect((await getBalance(user.id)).plan).toBe(5400);
+    // Half a Studio month given back as money (-2700), half a Creator month charged from it (+1300).
+    expect((await getBalance(user.id)).plan).toBe(5400 - 2700 + 1300);
   });
 
   it('ignores subscriptions that are not this app\'s', async () => {

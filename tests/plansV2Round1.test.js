@@ -212,20 +212,6 @@ const refund = async (customer, invoice, amount, refunded) => {
 const yearlyRow = async (sub) => (await db.query('select plan, credits, status from public.credit_yearly_subs where sub_id = $1', [sub])).rows[0];
 
 describe('Task 27 round 1: upgrades', () => {
-  it('F-C1 / A1: an upgrade one hour before renewal grants the difference prorated by the time left, not the whole difference', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const t0 = nowS() - 30 * DAY + 3600; // the period ends in one hour
-    const sub = newSub(customer, STARTER_M, { start: t0, end: t0 + 30 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, STUDIO_M);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 60 })));
-    const [up] = await upgrades(user);
-    expect(up.amount).toBeGreaterThan(0);
-    expect(up.amount).toBeLessThanOrEqual(7); // ceil(3900 x 1 h / 720 h) = 6
-    expect((await bal(user)).plan).toBeLessThan(1600);
-  });
-
   it('F-I1 / A2: a renewal invoice paid after an upgrade is granted at the plan it paid for (its own line)', async () => {
     await setV2(true);
     const user = newUser(); const customer = await linkedCustomer(user);
@@ -255,27 +241,6 @@ describe('Task 27 round 1: upgrades', () => {
     setPrice(sub, v2PlanLookupKey({ plan: 'starter', interval: 'year', amountCents: 24000, credits: 1000 }));
     await deliver(subUpdated(sub));
     expect((await yearlyRow(sub)).credits).toBe(1000);
-  });
-
-  it('F-I6 / A6: a second paid upgrade in the same period grants the prorated rest up to the new level', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const sub = newSub(customer, STARTER_M);
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, CREATOR_M);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: CREATOR_M, paid: 2000 })));
-    setPrice(sub, STUDIO_M);
-    expect((await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: CREATOR_M, newKey: STUDIO_M, paid: 5000 })))).statusCode).toBe(200);
-    const ups = await upgrades(user);
-    expect(ups.map((r) => r.ref.split(':').pop())).toEqual(['2600', '5400']);
-    expect((await bal(user)).plan).toBeGreaterThanOrEqual(5395);
-    expect((await bal(user)).plan).toBeLessThanOrEqual(5400);
-    // Down and up again in the same period: the 5400 level was already granted.
-    setPrice(sub, CREATOR_M);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STUDIO_M, newKey: CREATOR_M, paid: 0 })));
-    setPrice(sub, STUDIO_M);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: CREATOR_M, newKey: STUDIO_M, paid: 5000 })));
-    expect(await upgrades(user)).toHaveLength(2);
   });
 
   it('F-I6 / A9: an upgrade paid from the customer balance (amount_paid 0, total > 0) is granted', async () => {
@@ -339,40 +304,6 @@ describe('Task 27 round 1: refunds and disputes', () => {
     expect(await renews(user)).toHaveLength(4);
   });
 
-  it('O2: a partial refund takes its share off the months granted so far and off each later month; months continue', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 40 * DAY;
-    const sub = newSub(customer, CREATOR_Y, { start, end: start + 365 * DAY });
-    const inv = paidInvoice(customer, sub);
-    await deliver(invoiceEvent(inv));
-    await grantYearlyMonths(); // month 1
-    await refund(customer, inv, 58800, 5880); // 10 %
-    let claws = (await ledger(user.id)).filter((r) => r.reason === 'stripe_refund');
-    expect(claws.map((r) => r.amount)).toEqual([260, 260]);
-    await grantYearlyMonths({ now: new Date((start + 70 * DAY) * 1000) }); // month 2
-    claws = (await ledger(user.id)).filter((r) => r.reason === 'stripe_refund');
-    expect(claws.map((r) => r.amount)).toEqual([260, 260, 260]);
-    expect((await yearlyRow(sub)).status).toBe('active');
-  });
-
-  it('O2: a dispute after N months reverses every month granted so far', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 70 * DAY;
-    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
-    const inv = paidInvoice(customer, sub);
-    await deliver(invoiceEvent(inv));
-    await grantYearlyMonths();
-    const ch = `ch_${randomUUID().slice(0, 8)}`;
-    S.state.charges.set(ch, { id: ch, customer, invoice: inv, amount: 34800, amount_refunded: 0, disputed: true });
-    S.api.disputes.list = async () => ({ data: [{ id: 'dp_y', amount: 34800 }] });
-    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: { id: 'dp_y', charge: ch, amount: 34800 } } });
-    S.api.disputes.list = async () => ({ data: [] });
-    expect((await ledger(user.id)).filter((r) => r.reason === 'stripe_dispute')).toHaveLength(3);
-    expect((await bal(user)).available).toBe(0);
-  });
-
   it('O1 / A11: a dispute on a paid upgrade invoice reverses the upgrade grant', async () => {
     await setV2(true);
     const user = newUser(); const customer = await linkedCustomer(user);
@@ -402,22 +333,6 @@ describe('Task 27 round 1: refunds and disputes', () => {
     await refund(customer, inv, 7000, 7000);
     await deliver(invoiceEvent(inv));
     expect(await upgrades(user)).toHaveLength(0);
-  });
-
-  it('F-I5 / A5: refunding an upgrade invoice of a yearly plan keeps the yearly months and puts the level back', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 40 * DAY;
-    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, STUDIO_Y);
-    const up = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 500 });
-    await deliver(invoiceEvent(up));
-    expect((await yearlyRow(sub)).credits).toBe(5400);
-    expect((await refund(customer, up, 500, 500)).statusCode).toBe(200);
-    expect(await yearlyRow(sub)).toMatchObject({ status: 'active', credits: 1500 });
-    await grantYearlyMonths({ now: new Date((start + 200 * DAY) * 1000) });
-    expect((await renews(user)).length).toBeGreaterThan(1);
   });
 
   it('A7: several months due at once are each granted (the plan rollover cap applies, documented)', async () => {
@@ -527,35 +442,7 @@ describe('Task 27 round 2: R3 one plan per account at claim time', () => {
   });
 });
 
-describe('Task 27 round 2: upgrade level and yearly edges', () => {
-  it('R1: a period that started on Studio, downgraded, then upgraded back from the balance grants nothing', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const sub = newSub(customer, STUDIO_M);
-    await deliver(invoiceEvent(paidInvoice(customer, sub))); // 5400 granted for this period
-    setPrice(sub, STARTER_M);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STUDIO_M, newKey: STARTER_M, paid: 0 })));
-    setPrice(sub, STUDIO_M);
-    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 0 });
-    Object.assign(S.state.invoices.get(inv), { total: 7000, amount_paid: 0 });
-    await deliver(invoiceEvent(inv));
-    expect(await upgrades(user)).toHaveLength(0);
-    expect((await bal(user)).plan).toBe(5400);
-  });
-
-  it('R1 (yearly): a month granted at Studio, downgraded, then upgraded back grants nothing for that month', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 10 * DAY;
-    const sub = newSub(customer, STUDIO_Y, { start, end: start + 365 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub))); // month 0 at 5400
-    setPrice(sub, STARTER_Y);
-    await deliver(subUpdated(sub)); // level lowered to 1500 for later months
-    setPrice(sub, STUDIO_Y);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 900 })));
-    expect(await upgrades(user)).toHaveLength(0);
-  });
-
+describe('Task 27 round 2: yearly edges', () => {
   it('minor: a switch to yearly with no "unused time" line still grants month 0 under a date-keyed ref', async () => {
     await setV2(true);
     const user = newUser(); const customer = await linkedCustomer(user);
@@ -575,167 +462,10 @@ describe('Task 27 round 2: upgrade level and yearly edges', () => {
     expect((await renews(user)).map((r) => r.ref)).toContain(ref);
   });
 
-  it('minor: a late upgrade webhook (after the renewal) is measured on the period its line names', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const t0 = nowS() - 40 * DAY;
-    const sub = newSub(customer, STARTER_M, { start: t0, end: t0 + 30 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, STUDIO_M);
-    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3500 });
-    const invRow = S.state.invoices.get(inv);
-    invRow.lines.data[1].period = { start: t0 + 15 * DAY, end: t0 + 30 * DAY };
-    invRow.status_transitions = { paid_at: t0 + 15 * DAY };
-    // The renewal happened before the webhook arrived.
-    Object.assign(S.state.subs.get(sub), { current_period_start: t0 + 30 * DAY, current_period_end: t0 + 60 * DAY });
-    await deliver(invoiceEvent(inv));
-    const [up] = await upgrades(user);
-    expect(up.ref.startsWith(`upgrade:${sub}:`)).toBe(true);
-    // About half of 3900: the window is the calendar month before the line's end (Stripe's monthly period).
-    expect(up.amount).toBeGreaterThanOrEqual(1880);
-    expect(up.amount).toBeLessThanOrEqual(1960);
-    // Keyed on the paid period's window, not the renewed one.
-    expect(Number(up.ref.split(':')[2])).toBeLessThan(t0 + 30 * DAY);
-  });
-
-  it('S4: yearly upgrade refunds lower the level by the strict rule (base0 + each step x its unrefunded share)', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 10 * DAY;
-    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, CREATOR_Y);
-    const up1 = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: CREATOR_Y, paid: 800 });
-    await deliver(invoiceEvent(up1));
-    setPrice(sub, STUDIO_Y);
-    const up2 = prorationInvoice(customer, sub, { oldKey: CREATOR_Y, newKey: STUDIO_Y, paid: 2000 });
-    await deliver(invoiceEvent(up2));
-    expect((await yearlyRow(sub)).credits).toBe(5400);
-    await refund(customer, up1, 800, 800); // the earlier upgrade, fully
-    // S4 strict rule: base0 + each step x its unrefunded share = 1500 + 0 + 2800.
-    expect((await yearlyRow(sub)).credits).toBe(4300);
-    await refund(customer, up2, 2000, 1000); // half of the later one
-    expect((await yearlyRow(sub)).credits).toBe(1500 + 1400);
-  });
 });
 
-describe('Task 27 round 3', () => {
-  const grantsTotal = async (u) => (await ledger(u.id)).filter((r) => r.op === 'renew' || (r.op === 'grant' && r.reason === 'plan_upgrade')).reduce((n, r) => n + r.amount, 0);
-  function switchTo(customer, sub, { oldKey, newKey, paid, yearly }) {
-    setPrice(sub, newKey);
-    const now = nowS();
-    Object.assign(S.state.subs.get(sub), { current_period_start: now, current_period_end: now + (yearly ? 365 : 30) * DAY });
-    return deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey, newKey, paid })));
-  }
-
-  it('S2: flipping yearly <-> monthly (and up a plan) three times grants nothing after the first paid step', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const sub = newSub(customer, STARTER_M);
-    await deliver(invoiceEvent(paidInvoice(customer, sub))); // 1500
-    await switchTo(customer, sub, { oldKey: STARTER_M, newKey: STARTER_Y, paid: 100, yearly: true });
-    await switchTo(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_M, paid: 100, yearly: false });
-    const afterOne = await grantsTotal(user);
-    expect(afterOne).toBeLessThanOrEqual(1500 + 3900);
-    for (let i = 0; i < 3; i += 1) {
-      await switchTo(customer, sub, { oldKey: STUDIO_M, newKey: STARTER_Y, paid: 100, yearly: true });
-      await switchTo(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_M, paid: 100, yearly: false });
-      await switchTo(customer, sub, { oldKey: STUDIO_M, newKey: STUDIO_Y, paid: 100, yearly: true });
-      await switchTo(customer, sub, { oldKey: STUDIO_Y, newKey: STUDIO_M, paid: 100, yearly: false });
-    }
-    expect(await grantsTotal(user)).toBe(afterOne);
-  });
-
-  async function yearlyUpgradeWithRaisedMonths() {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 10 * DAY;
-    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub))); // month 0 at 1500
-    setPrice(sub, STUDIO_Y);
-    const up = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 9000 });
-    await deliver(invoiceEvent(up)); // month 0 difference, prorated; level 5400 from month 1
-    await grantYearlyMonths({ now: new Date((start + 100 * DAY) * 1000) }); // months 1..3 at 5400
-    expect((await renews(user)).filter((r) => r.ref.startsWith('yearly:')).map((r) => r.amount)).toEqual([5400, 5400, 5400]);
-    return { user, customer, sub, up, start };
-  }
-
-  it('S3: a full dispute of a yearly upgrade reverses every month the cron granted at the raised level and restores the level', async () => {
-    const { user, customer, sub, up } = await yearlyUpgradeWithRaisedMonths();
-    const ch = `ch_${randomUUID().slice(0, 8)}`;
-    S.state.charges.set(ch, { id: ch, customer, invoice: up, amount: 9000, amount_refunded: 0, disputed: true });
-    S.api.disputes.list = async () => ({ data: [{ id: 'dp_up', amount: 9000 }] });
-    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: { id: 'dp_up', charge: ch, amount: 9000 } } });
-    S.api.disputes.list = async () => ({ data: [] });
-    const claws = (await ledger(user.id)).filter((r) => r.reason === 'stripe_dispute' && r.ref.includes(':upgrade:'));
-    expect(claws.map((r) => r.amount)).toEqual([3900, 3900, 3900]);
-    expect((await yearlyRow(sub)).credits).toBe(1500);
-  });
-
-  it('S3: a partial refund takes the same share of the step from each raised month, and from the level', async () => {
-    const { user, customer, sub, up } = await yearlyUpgradeWithRaisedMonths();
-    await refund(customer, up, 9000, 4500);
-    const claws = (await ledger(user.id)).filter((r) => r.reason === 'stripe_refund' && r.ref.includes(':upgrade:'));
-    expect(claws.map((r) => r.amount)).toEqual([1950, 1950, 1950]);
-    expect((await yearlyRow(sub)).credits).toBe(1500 + 1950);
-    // A second, larger refund takes only the rest.
-    await refund(customer, up, 9000, 9000);
-    const all = (await ledger(user.id)).filter((r) => r.reason === 'stripe_refund' && r.ref.includes(':upgrade:'));
-    expect(all.reduce((n, r) => n + r.amount, 0)).toBe(3 * 3900);
-  });
-
-  it('S4: S->C, C->St, then the S->C upgrade disputed in full: level = St - (C - S)', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 10 * DAY;
-    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, CREATOR_Y);
-    const up1 = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: CREATOR_Y, paid: 800 });
-    await deliver(invoiceEvent(up1));
-    setPrice(sub, STUDIO_Y);
-    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: CREATOR_Y, newKey: STUDIO_Y, paid: 2000 })));
-    const ch = `ch_${randomUUID().slice(0, 8)}`;
-    S.state.charges.set(ch, { id: ch, customer, invoice: up1, amount: 800, amount_refunded: 0, disputed: true });
-    S.api.disputes.list = async () => ({ data: [{ id: 'dp_s4', amount: 800 }] });
-    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: { id: 'dp_s4', charge: ch, amount: 800 } } });
-    S.api.disputes.list = async () => ({ data: [] });
-    expect((await yearlyRow(sub)).credits).toBe(5400 - (2600 - 1500));
-  });
-
-  it('minor: a late webhook for a Jan 31 anchor finds the period it paid for (no second grant after down and up)', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const jan31 = Date.UTC(2027, 0, 31, 12) / 1000;
-    const feb28 = Date.UTC(2027, 1, 28, 12) / 1000;
-    const sub = newSub(customer, STUDIO_M, { start: jan31, end: feb28 });
-    await deliver(invoiceEvent(paidInvoice(customer, sub))); // 5400 for Jan 31 - Feb 28
-    setPrice(sub, STARTER_M);
-    setPrice(sub, STUDIO_M);
-    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3000 });
-    const row = S.state.invoices.get(inv);
-    row.lines.data[1].period = { start: Date.UTC(2027, 1, 10, 12) / 1000, end: feb28 };
-    row.status_transitions = { paid_at: Date.UTC(2027, 1, 10, 12) / 1000 };
-    Object.assign(S.state.subs.get(sub), { current_period_start: feb28, current_period_end: Date.UTC(2027, 2, 31, 12) / 1000 });
-    await deliver(invoiceEvent(inv));
-    expect(await upgrades(user)).toHaveLength(0);
-  });
-
-  it('minor: a retried yearly upgrade never writes a second level marker', async () => {
-    await setV2(true);
-    const user = newUser(); const customer = await linkedCustomer(user);
-    const start = nowS() - 10 * DAY;
-    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
-    await deliver(invoiceEvent(paidInvoice(customer, sub)));
-    setPrice(sub, STUDIO_Y);
-    const up = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 900 });
-    await deliver(invoiceEvent(up));
-    await db.query('delete from public.stripe_events where id = $1', [`invoice:${up}:done`]); // as if it died before :done
-    await deliver(invoiceEvent(up));
-    const { rows } = await db.query('select refs from public.credit_invoice_grants where invoice_id = $1', [up]);
-    expect(rows[0].refs.filter((r) => r.startsWith('level:'))).toEqual(['level:1500:5400']);
-  });
-});
+// Task 27 round 3 (S2, S3, S4, Jan 31, level markers) and the round 1-2 upgrade-level tests are re-expressed by
+// money, with Stripe-shaped lines at their own times, in tests/plansV2Round4.test.js (round 4 ruling).
 
 describe('Task 27 round 3: claim guard minors', () => {
   function paidSession(email, { charged = true, refunded = false, customer: given = null, clientRef = null } = {}) {

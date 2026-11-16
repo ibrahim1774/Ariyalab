@@ -16,7 +16,8 @@ import {
 /*
  * Stripe webhook handler.
  *
- * Subscribed to `invoice.payment_succeeded`. Fires Meta CAPI Purchase
+ * Subscribed to `invoice.payment_succeeded` (and `invoice.paid`, credits
+ * only: it also covers invoices with nothing to charge). Fires Meta CAPI Purchase
  * for any subscription invoice that actually moved money, except the
  * very first invoice on a non-trial signup — that case is already
  * reported by /api/checkout/confirm at checkout completion. This
@@ -46,7 +47,7 @@ import {
  * Setup:
  *   1. Stripe Dashboard → Webhooks → endpoint
  *      https://<host>/api/stripe-webhook subscribed to
- *      invoice.payment_succeeded, checkout.session.completed,
+ *      invoice.payment_succeeded, invoice.paid, checkout.session.completed,
  *      charge.refunded, charge.dispute.created,
  *      customer.subscription.updated, customer.subscription.deleted
  *   2. Add STRIPE_WEBHOOK_SECRET (whsec_…) to Vercel env vars.
@@ -111,6 +112,9 @@ export default async function handler(req, res) {
 
 const HANDLERS = {
   'invoice.payment_succeeded': handleInvoicePaymentSucceeded,
+  // Also fires for an invoice with nothing to charge (a downgrade's negative total, paid from or to the balance).
+  // Credits only (grantForInvoice is idempotent per invoice); the Purchase event stays on payment_succeeded.
+  'invoice.paid': (invoice, req) => handleInvoicePaymentSucceeded(invoice, req, { purchase: false }),
   'checkout.session.completed': handleCheckoutSessionCompleted,
   'charge.refunded': (charge) => handleRefundOrDispute({ charge }),
   'charge.dispute.created': (dispute) => handleRefundOrDispute({ dispute }),
@@ -136,7 +140,7 @@ async function handleRefundOrDispute(payment) {
   }
 }
 
-async function handleInvoicePaymentSucceeded(eventInvoice, req) {
+async function handleInvoicePaymentSucceeded(eventInvoice, req, { purchase = true } = {}) {
   // Re-read through the SDK: payload fields follow the webhook endpoint's
   // API version (newer versions drop invoice.subscription), the SDK's are
   // pinned.
@@ -166,6 +170,7 @@ async function handleInvoicePaymentSucceeded(eventInvoice, req) {
   // Credits (billing_v2 only; the legacy path rolls plan credits over
   // lazily in lib/entitlement.js). Includes the first invoice.
   await grantForInvoice(invoice, { subscription: sub });
+  if (!purchase) return;
 
   // First-invoice charge is reported by /api/checkout/confirm; skip
   // here to avoid double-firing Purchase. Purchase only when money moved.
