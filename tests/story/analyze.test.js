@@ -15,19 +15,20 @@ import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
 import { ProviderError } from '../../lib/providers/errors.js';
 import { MOCK_STORAGE_PREFIX, mockStoragePath, putObject } from '../../lib/providers/storage.js';
 import { registerMock } from '../../lib/providers/mock.js';
-import { fetchReference } from '../../lib/providers/fetchVideo.js';
+import { fetchReference, resolveReferenceUrl } from '../../lib/providers/fetchVideo.js';
+import { PROVIDER_CONFIG } from '../../lib/providers/config.js';
 import { transcribe } from '../../lib/providers/stt.js';
 import { completeJSON } from '../../lib/providers/llm.js';
 import { tick, runWorkerJob, runCron, WORKER_KINDS, ONE_SHOT_KINDS } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
-import { checkScriptRules, writeScript } from '../../lib/story/script.js';
+import { checkScriptRules, reviseScript, updateScene, writeScript } from '../../lib/story/script.js';
 import {
   ANALYSIS, mergeCuts, shotsFromCuts, framePlan, normaliseBeats, saidBetween, parseSceneTimes,
   startAnalysis, getReference, uploadKey,
 } from '../../lib/story/analyze.js';
-import { REFERENCE_MESSAGES, RIGHTS_STATEMENT, isAllowedReferenceLink } from '../../lib/story/referenceRules.js';
-import { buildScriptSystem, REFERENCE_GUIDANCE } from '../../lib/story/prompts/script.js';
+import { REFERENCE_MESSAGES, RIGHTS_STATEMENT, SHARE_HOSTS, isAllowedReferenceLink } from '../../lib/story/referenceRules.js';
+import { buildRetryMessage, buildScriptSystem, REFERENCE_GUIDANCE } from '../../lib/story/prompts/script.js';
 
 // Provider spies: each still runs its mock fixture unless a test asks it to fail.
 const failAt = (step) => globalThis.__analyzeFail?.at === step;
@@ -39,7 +40,11 @@ async function maybeFail(step) {
 }
 vi.mock('../../lib/providers/fetchVideo.js', async (importOriginal) => {
   const real = await importOriginal();
-  return { ...real, fetchReference: vi.fn(async (...args) => { await maybeFail('fetch'); const out = await real.fetchReference(...args); globalThis.__lastFetch = out; return out; }) };
+  return {
+    ...real,
+    fetchReference: vi.fn(async (...args) => { await maybeFail('fetch'); const out = await real.fetchReference(...args); globalThis.__lastFetch = out; return out; }),
+    resolveReferenceUrl: vi.fn((...args) => real.resolveReferenceUrl(...args)),
+  };
 });
 vi.mock('../../lib/providers/stt.js', async (importOriginal) => {
   const real = await importOriginal();
@@ -794,10 +799,11 @@ describe('round 1', () => {
     expect(rows[0].n).toBe(0);
   });
 
-  it('R1: 4-word runs match an unpunctuated transcript, but runs of only common words do not', () => {
+  it('R1 (round 2 rule): 6-word runs match an unpunctuated transcript, but runs of common words do not', () => {
     const reference = 'once upon a time a baker dreamed big and the town loved his bread i want to be there';
     const flag = (text) => checkScriptRules([{ id: 's1', title: 'A', visual: 'A shop.', lines: [{ speaker: 'narrator', text }] }], { reference }).map((v) => v.rule);
-    expect(flag('Every morning the town loved his warm rolls.')).toContain('reference_copy');
+    expect(flag('And the town loved his bread every day.')).toContain('reference_copy');
+    expect(flag('Every morning the town loved his warm rolls.')).not.toContain('reference_copy');
     expect(flag('I want to be there for my sister.')).not.toContain('reference_copy');
     expect(flag('Nobody believed this would work.')).not.toContain('reference_copy');
   });
@@ -867,5 +873,148 @@ describe('round 1', () => {
     expect((await refsOf(ctx.project.id))[0].status).toBe('failed');
     expect((await jobsOf(ctx.project.id))[0].status).toBe('failed');
     expect(await usage(ctx.userId)).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------- round 2
+
+describe('round 2', () => {
+  const TRANSCRIPT = 'Once upon a time, a baker dreamed big.';
+  const lineRules = (text, reference) => checkScriptRules([{ id: 's1', title: 'A', visual: 'A shop.', lines: [{ speaker: 'narrator', text }] }], { reference }).filter((v) => v.rule === 'reference_copy');
+  const ORDINARY = ['We met at the end of a long summer.', 'For the first time the shop felt alive.', 'A lot of people stopped to look.', 'Let me tell you what happened next.', 'The link in my bio has the menu.'];
+
+  it('N1: ordinary phrases pass against a reference that contains them, punctuated or not', () => {
+    const punctuated = 'At the end of the day we closed. For the first time a lot of people came. Let me tell you about it. Check the link in my bio for more.';
+    const bare = punctuated.replace(/[.]/g, '').toLowerCase();
+    for (const line of ORDINARY) {
+      expect(lineRules(line, punctuated), `${line} vs punctuated`).toHaveLength(0);
+      expect(lineRules(line, bare), `${line} vs unpunctuated`).toHaveLength(0);
+    }
+  });
+
+  it('N1: a real copied run of 6 or more words from an unpunctuated transcript is flagged, with the matched words', () => {
+    const bare = 'so the old baker kneaded dough every single morning before sunrise and sang to the bread';
+    const found = lineRules('Each day the old baker kneaded dough every single morning.', bare);
+    expect(found).toHaveLength(1);
+    expect(found[0].matched).toMatch(/the old baker kneaded dough every/);
+    // Run matching applies only without sentence breaks: the same text punctuated uses sentence matching only.
+    expect(lineRules('Each day the old baker kneaded dough every single morning.', 'So the old baker kneaded dough every single morning before sunrise and sang to the bread. He smiled.')).toHaveLength(0);
+  });
+
+  it('N1: a copied run from an unpunctuated transcript is still refused after the retry', async () => {
+    const { ctx, ref } = await analysed(FX.multi);
+    const bare = 'so the old baker kneaded dough every single morning before sunrise and sang to the bread';
+    await storyDb().update('story_references', { id: ref.id }, { transcript: { text: bare, words: [] } });
+    registerMock('story_script', (input) => {
+      const out = storyScriptMock(input);
+      out.scenes[1].lines[0].text = 'The old baker kneaded dough every single morning.';
+      return out;
+    });
+    const err = await writeScript({ userId: ctx.userId, projectId: ctx.project.id }).then(() => null, (e) => e);
+    expect(err?.status).toBe(422);
+  });
+
+  it('N1: the retry prompt names the matched words', async () => {
+    expect(buildRetryMessage([{ sceneId: null, rule: 'reference_copy', message: 'm', matched: 'once upon a time a baker dreamed big' }], [])).toContain('once upon a time a baker dreamed big');
+    const { ctx } = await analysed(FX.multi);
+    registerMock('story_script', (input) => {
+      const out = storyScriptMock(input);
+      if (input.messages.length === 1) out.scenes[1].lines[0].text = TRANSCRIPT;
+      return out;
+    });
+    await writeScript({ userId: ctx.userId, projectId: ctx.project.id });
+    const calls = completeJSON.mock.calls.filter(([a]) => a.name === 'story_script');
+    expect(calls).toHaveLength(2);
+    const retry = calls[1][0].messages.at(-1).content;
+    expect(retry).toContain('once upon a time a baker dreamed big');
+  });
+
+  it('N2: a line the customer saved through updateScene survives a revise without a 422', async () => {
+    const { ctx } = await analysed(FX.multi);
+    const script = await writeScript({ userId: ctx.userId, projectId: ctx.project.id });
+    const sceneId = script.scenes[0].id;
+    const saved = await updateScene({ userId: ctx.userId, projectId: ctx.project.id, sceneId, patch: { lines: [{ speaker: 'narrator', text: TRANSCRIPT }] } });
+    expect(saved.script.violations.map((v) => v.rule)).toContain('reference_copy'); // a warning only
+    const other = script.scenes[1].id;
+    const out = await reviseScript({ userId: ctx.userId, projectId: ctx.project.id, instruction: `Make it warmer [[mock:edit:${other}]]` });
+    expect(out.script.scenes.find((sc) => sc.id === sceneId).lines[0].text).toBe(TRANSCRIPT);
+  });
+
+  it('N3: a share link that does not resolve is a free failure with a TikTok message', async () => {
+    const ctx = await newProject();
+    accounts.set({ paid: false });
+    await start(ctx, { type: 'link', url: 'https://vm.tiktok.com/[[mock:fail]]/' });
+    expect(await usage(ctx.userId)).toBe(1);
+    await work();
+    const [ref] = await refsOf(ctx.project.id);
+    expect(ref.status).toBe('failed');
+    expect(ref.error).toBe("We couldn't open that TikTok share link. Paste the full video link.");
+    expect(ref.provider_started_at).toBeNull();
+    expect(fetchReference).not.toHaveBeenCalled();
+    expect(await usage(ctx.userId)).toBe(0);
+  });
+
+  it('N3: the resolved URL is what gets downloaded', async () => {
+    const ctx = await newProject();
+    await start(ctx, { type: 'link', url: 'https://vt.tiktok.com/ZS9/' });
+    await work();
+    expect(fetchReference.mock.calls[0][0]).toMatch(/^https:\/\/www\.tiktok\.com\//);
+    expect((await refsOf(ctx.project.id))[0].platform).toBe('tiktok');
+  });
+
+  it('N4: when one thumbnail store fails the others are not left behind', async () => {
+    const ctx = await newProject();
+    await start(ctx, { type: 'upload', url: upload(ctx, FX.multi).url });
+    const real = putObject.getMockImplementation();
+    putObject.mockImplementation(async (args) => {
+      if (/beat-2\.jpg$/.test(args.key)) throw new ProviderError('failed');
+      return real(args);
+    });
+    try {
+      await work();
+    } finally {
+      putObject.mockImplementation(real);
+    }
+    const [ref] = await refsOf(ctx.project.id);
+    expect(ref.status).toBe('failed');
+    for (const n of [1, 3]) expect(existsSync(mockStoragePath(`story/${ctx.project.id}/reference/${ref.id}/beat-${n}.jpg`))).toBe(false);
+  });
+
+  it('N5: the share hosts have one source', () => {
+    expect(PROVIDER_CONFIG.reference.shareHosts).toBe(SHARE_HOSTS);
+  });
+
+  it('N6: a percent-encoded or malformed pathname cannot reach story-uploads/ through the plain surface', async () => {
+    const { default: route } = await import('../../pages/api/upload-token.js');
+    globalThis.__analyzeSession = { user: { id: randomUUID() } };
+    for (const pathname of [`story-uploads%2F${randomUUID()}%2Fx.mp4`, 'uploads/%E0%A4%A.mp4']) {
+      const res = makeRes();
+      await route(makeReq({ method: 'POST', body: { type: 'blob.generate-client-token', payload: { pathname, clientPayload: '' } } }), res);
+      expect(res.statusCode, pathname).toBe(400);
+    }
+  });
+
+  it('N7: when another run set the paid marker first, this run calls nothing', async () => {
+    const ctx = await newProject();
+    await start(ctx, { type: 'link', url: 'https://www.instagram.com/reel/abc/' });
+    const [ref] = await refsOf(ctx.project.id);
+    resolveReferenceUrl.mockImplementationOnce(async (url) => {
+      await storyDb().update('story_references', { id: ref.id }, { provider_started_at: new Date().toISOString() });
+      return url;
+    });
+    await work();
+    expect(fetchReference).not.toHaveBeenCalled();
+    expect((await refsOf(ctx.project.id))[0].status).toBe('failed');
+  });
+
+  it('chat update_scene hands reference copy warnings back to the chat model', async () => {
+    const { runTool } = await import('../../lib/story/chatTools.js');
+    const { ctx } = await analysed(FX.multi);
+    const script = await writeScript({ userId: ctx.userId, projectId: ctx.project.id });
+    const out = await runTool({ userId: ctx.userId, chatProjectId: ctx.project.id, name: 'update_scene', input: { scene_id: script.scenes[0].id, patch: { lines: [{ speaker: 'narrator', text: TRANSCRIPT }] } } });
+    expect(out.ok).toBe(true);
+    expect(out.reference_copies).toHaveLength(1);
+    expect(out.reference_copies[0].matched).toMatch(/baker dreamed big/);
+    expect(out.reference_copies[0].message).toBeTruthy();
   });
 });

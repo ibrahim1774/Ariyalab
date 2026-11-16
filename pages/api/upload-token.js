@@ -136,7 +136,15 @@ export default async function handler(req, res) {
           return { ...AUDIO_UPLOAD_LIMITS, validUntil: Date.now() + AUDIO_TOKEN_TTL_MS, addRandomSuffix: true };
         }
         // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix), story-audio/ to audio uploads.
-        if (typeof pathname !== 'string' || /^(story-uploads|story-audio)\//.test(pathname.replace(/^\/+/, ''))) throw new Error('Upload not allowed.');
+        // The pathname is decoded once first, so "story-uploads%2F..." cannot slip past; a malformed encoding is refused.
+        if (typeof pathname !== 'string') throw new Error('Upload not allowed.');
+        let decoded;
+        try {
+          decoded = decodeURIComponent(pathname);
+        } catch {
+          throw new Error('Upload not allowed.');
+        }
+        if ([pathname, decoded].some((p) => /^(story-uploads|story-audio)\//i.test(p.replace(/^\/+/, '')))) throw new Error('Upload not allowed.');
         return {
           ...(limits || ANON_LIMITS),
           ...(limits === SIGNED_IN_LIMITS ? {} : { validUntil: Date.now() + ANON_TOKEN_TTL_MS }),
