@@ -33,6 +33,14 @@ export function describeError(err, { returnTo } = {}) {
   const out = { title: '', message: '', action: null, refresh: false, signIn: false, field: err?.field || null };
 
   // Codes first: the same status can mean different things (a 429 is a daily limit or a chat limit).
+  if (code === 'daily_limit' && err?.body?.action === 'render') {
+    // A paid account's per-video render cap (lib/story/limits.js): a plan would not help.
+    const n = Number(err.body.limit);
+    const message = Number.isFinite(n)
+      ? `This video has been made ${n} ${n === 1 ? 'time' : 'times'} in the last 24 hours. You can make it again later.`
+      : 'This video has been made as many times as it can be in 24 hours. You can make it again later.';
+    return { ...out, title: 'Render limit reached', message };
+  }
   if (code === 'daily_limit') {
     return { ...out, title: 'Daily limit reached', message: dailyLimitMessage(err?.body), action: { label: 'See plans', href: '/app/billing' } };
   }

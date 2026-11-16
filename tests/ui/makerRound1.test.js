@@ -447,6 +447,13 @@ describe('round 4', () => {
     expect(e({ limit: 3, action: 'project_create' }).message).toBe('You have used your 3 new videos for today. Come back tomorrow, or pick a plan for more.');
   });
 
+  it('final review I5: the render cap says it counts this video over 24 hours, and offers no plan', () => {
+    const d = describeError(new StoryApiError({ status: 429, code: 'daily_limit', body: { limit: 10, action: 'render' } }));
+    expect(d.title).toBe('Render limit reached');
+    expect(d.message).toBe('This video has been made 10 times in the last 24 hours. You can make it again later.');
+    expect(d.action).toBeNull();
+  });
+
   it('QuoteBar marks its sub-label as updating while the quote is older than the shots', async () => {
     client.getQuote.mockResolvedValueOnce({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro narrated shots', credits: 420 }] });
     const shots = Array.from({ length: 10 }, (_, i) => shot(i + 1, { seconds: 3 }));

@@ -233,7 +233,8 @@ off. Then check on the deployed app:
 - Fish voice provider-side delete is not implemented; the app removes the voice from the account only (the copy says
   "removed from your account").
 - Captions in non-Latin scripts need a font with those glyphs (today they get a `captions_missing` warning).
-- Paid transcription runs on each render: decide between a render cap and a charge.
+- Paid transcription runs on each render. A cap is built (10 renders per project in any 24 hours, pricing_config
+  `free_limits.rendersPerProjectPer24h`); decide whether renders should also be charged.
 - Read the script prompt (Task 13 report) and run it once on the real model.
 - When `pricing_config` cannot be read on a cold instance, checkout answers 503 (also for legacy plans) rather than
   sell the wrong plan: accepted.

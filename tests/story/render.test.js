@@ -447,6 +447,59 @@ describe('render', () => {
   });
 });
 
+describe('final review I5: per-project render cap (rolling 24 h)', () => {
+  async function pastRenders(projectId, list) {
+    let v = 0;
+    for (const { status, hoursAgo } of list) {
+      v += 1;
+      await raw.query(
+        `insert into story_renders (project_id, version, status, created_at) values ($1, $2, $3, now() - make_interval(secs => $4))`,
+        [projectId, v, status, hoursAgo * 3600],
+      );
+    }
+  }
+  const refusal = (ctx) => startRender({ userId: ctx.userId, projectId: ctx.project.id }).then(() => null, (e) => e);
+
+  it('refuses the 11th render of a project inside 24 hours with a clear 429 message', async () => {
+    const ctx = await newProject();
+    await pastRenders(ctx.project.id, Array.from({ length: 10 }, (_, i) => ({ status: 'done', hoursAgo: 1 + i })));
+    const err = await refusal(ctx);
+    expect(err).toBeTruthy();
+    expect(err).toMatchObject({ status: 429, code: 'daily_limit', extra: { action: 'render', limit: 10 } });
+    expect(err.message).toMatch(/10 times in the last 24 hours/);
+    expect(await renders(ctx.project.id)).toHaveLength(10);
+  });
+
+  it('a failed render gives its count back, and renders older than 24 hours no longer count', async () => {
+    const failedBack = await newProject();
+    await pastRenders(failedBack.project.id, [
+      ...Array.from({ length: 9 }, () => ({ status: 'done', hoursAgo: 2 })),
+      ...Array.from({ length: 3 }, () => ({ status: 'failed', hoursAgo: 1 })),
+    ]);
+    expect(await refusal(failedBack)).toBeNull();
+    const rolled = await newProject();
+    await pastRenders(rolled.project.id, [
+      ...Array.from({ length: 9 }, () => ({ status: 'done', hoursAgo: 25 })),
+      { status: 'done', hoursAgo: 23 },
+    ]);
+    expect(await refusal(rolled)).toBeNull();
+  });
+
+  it('the cap is read from pricing_config free_limits.rendersPerProjectPer24h', async () => {
+    await raw.query(`insert into pricing_config (key, value) values ('free_limits', '{"rendersPerProjectPer24h": 2}'::jsonb)
+                     on conflict (key) do update set value = excluded.value`);
+    _resetPricingCache();
+    try {
+      const ctx = await newProject();
+      await pastRenders(ctx.project.id, [{ status: 'done', hoursAgo: 3 }, { status: 'done', hoursAgo: 2 }]);
+      expect(await refusal(ctx)).toMatchObject({ status: 429, code: 'daily_limit', extra: { limit: 2 } });
+    } finally {
+      await raw.query(`delete from pricing_config where key = 'free_limits'`);
+      _resetPricingCache();
+    }
+  });
+});
+
 describe('render worker route', () => {
   it('needs the cron secret, and claims one render per invocation', async () => {
     vi.stubEnv('CRON_SECRET', 'render-secret');
