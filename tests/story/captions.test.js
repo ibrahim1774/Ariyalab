@@ -1,7 +1,11 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import sharp from 'sharp';
 import { describe, expect, it } from 'vitest';
 import {
   MIN_WORD_SECONDS, MAX_PHRASE_WORDS, SAFE_BAND, countSyllables, retimeStretch, captionLayout, buildCaptionEvents,
-  wordsFromSegments, wordsFromShotLines, assTime, fitFontSize, unsupportedCharacters, CAPTION_FONT_FILE,
+  wordsFromSegments, wordsFromShotLines, assTime, fitFontSize, unsupportedCharacters, CAPTION_FONT_FILE, captionPngs,
 } from '../../lib/story/captions.js';
 
 const sum = (xs) => xs.reduce((n, x) => n + x, 0);
@@ -211,4 +215,30 @@ describe('round 1', () => {
     expect(unsupportedCharacters(['Hello, café! "quoted"'], font)).toEqual([]);
     expect(unsupportedCharacters(['你好 😀 ok'], font).sort()).toEqual(['你', '好', '😀'].sort());
   });
+});
+
+describe('O4: PNG fallback', () => {
+  it('draws one transparent PNG per spoken word, with visible text inside the safe band', async () => {
+    const dir = mkdtempSync(path.join(os.tmpdir(), 'cap-png-'));
+    try {
+      const words = wordsFromSegments([{ sceneId: 's', lineIndex: 0, text: 'Once upon a time,', start: 0, end: 2 }]);
+      const { events } = buildCaptionEvents({ words, style: 'serif_accent' });
+      const pngs = await captionPngs({ events, style: 'serif_accent', width: 1080, height: 1920, dir, fontPath: path.join(process.cwd(), 'public/fonts', CAPTION_FONT_FILE) });
+      expect(pngs).toHaveLength(4);
+      for (const p of pngs) {
+        expect(p.y).toBeGreaterThanOrEqual(SAFE_BAND.top);
+        expect(p.y + p.height).toBeLessThanOrEqual(SAFE_BAND.bottom);
+        const { data, info } = await sharp(path.join(dir, p.file)).raw().toBuffer({ resolveWithObject: true });
+        expect(info.channels).toBe(4);
+        let opaque = 0;
+        for (let i = 3; i < data.length; i += 4) if (data[i] > 200) opaque += 1;
+        expect(opaque).toBeGreaterThan(500);
+        // Transparent around the text.
+        expect(data[3]).toBe(0);
+      }
+      expect(pngs[1].start).toBeCloseTo(Math.round(events[0].timings[1].start * 100) / 100, 2);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 60_000);
 });

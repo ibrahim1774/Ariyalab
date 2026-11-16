@@ -165,14 +165,14 @@ const segs = (a, b) => [
 const NARRATIONS = { fill: segs(5.7, 5.5), short: segs(2.2, 2.7), long: segs(5.7, 8) };
 const SEGMENTS = NARRATIONS.fill;
 
-async function newProject({ style = 'serif_accent', music = true, clips = ['c1', 'c2', 'c3', 'c4'], ready = true, narration = 'fill', musicFile = 'music' } = {}) {
+async function newProject({ style = 'serif_accent', captions = true, music = true, clips = ['c1', 'c2', 'c3', 'c4'], ready = true, narration = 'fill', musicFile = 'music' } = {}) {
   const userId = randomUUID();
   const track = { fill: media.narration, short: media.short, long: media.long }[narration];
   const [project] = await storyDb().insert('story_projects', {
     user_id: userId, title: 'Render test', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
     narration_url: track.url, narration_key: track.key, narration_seconds: 12, narration_segments: NARRATIONS[narration],
     music_url: music ? media[musicFile].url : null, music_key: music ? media[musicFile].key : null,
-    audio_plan: { captions: { on: true, style }, music: { type: music ? 'generated' : 'none', prompt: '', assetId: null } },
+    audio_plan: { captions: { on: captions, style }, music: { type: music ? 'generated' : 'none', prompt: '', assetId: null } },
   });
   await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
   const shots = await storyDb().insert('story_shots', clips.map((c, i) => ({
@@ -366,13 +366,31 @@ describe('render', () => {
     expect(row.settings.checks.retried).toBe(false);
   }, 240_000);
 
-  it('says so when captions were asked for and could not be burned', async () => {
-    const ctx = await newProject();
+  it('O4: without the ass filter the captions are drawn as PNG overlays, in the band', async () => {
+    const plain = await renderOnce(await newProject({ style: 'bold_pop', captions: false }));
     captionFilterAvailable.mockResolvedValueOnce(false);
-    const row = await renderOnce(ctx);
+    const row = await renderOnce(await newProject({ style: 'bold_pop' }));
     expect(row.status).toBe('done');
-    expect(row.settings.captions.format).toBe('none');
-    expect(row.warnings.map((w) => w.code)).toContain('captions_missing');
+    expect(row.settings.captions.format).toBe('png');
+    expect(row.warnings.map((w) => w.code)).not.toContain('captions_missing');
+    // At 1 s a caption is on screen: the band around y 1250 has the white text the same video without captions lacks.
+    const band = (file) => {
+      const r = spawnSync(FF, ['-hide_banner', '-loglevel', 'error', '-ss', '1', '-i', file, '-frames:v', '1', '-vf', 'crop=1080:300:0:1100,format=gray', '-f', 'rawvideo', '-'], { maxBuffer: 1 << 24 });
+      return r.stdout;
+    };
+    const png = band(localPathFor(row.file_url));
+    const none = band(localPathFor(plain.file_url));
+    const bright = (buf) => buf.reduce((n, v) => n + (v > 235 ? 1 : 0), 0);
+    expect(bright(png) - bright(none)).toBeGreaterThan(500);
+  }, 240_000);
+
+  it('Fm3: characters the caption font does not have are a warning', async () => {
+    const ctx = await newProject();
+    const segments = NARRATIONS.fill.map((x, i) => (i === 0 ? { ...x, text: 'Once upon 你好 time,' } : x));
+    await storyDb().update('story_projects', { id: ctx.project.id }, { narration_segments: segments });
+    const row = await renderOnce(ctx);
+    const w = row.warnings.find((x) => x.code === 'captions_missing');
+    expect(w.message).toContain('你');
   }, 240_000);
 
   it('POST /render starts it through the action route, and /status shows the render', async () => {
