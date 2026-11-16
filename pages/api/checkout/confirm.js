@@ -4,6 +4,7 @@ import {
   linkStripeCustomerToProfile,
   CustomerLinkedElsewhereError,
 } from '../../../lib/entitlement';
+import { customerBelongsToOther, refuseSecondPlan } from '../../../lib/planGuard';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
 import { sendCapiEvent } from '../../../lib/meta';
 import { nsEventId } from '../../../lib/metaKeys';
@@ -89,6 +90,16 @@ export default async function handler(req, res) {
     const topup = plan ? null : topupFromPrice(price);
     if (!plan && !topup) {
       return res.status(400).json({ error: 'This checkout is not for an Ariya Lab plan or pack.' });
+    }
+
+    // One plan per account (billing v2): a second plan bought at the same time
+    // (another tab) is cancelled and refunded before anything is linked.
+    if (plan) {
+      if (await customerBelongsToOther(customerId, session.user.id, checkoutSession)) {
+        return res.status(409).json({ error: 'This payment is linked to another account. Contact support.' });
+      }
+      const refused = await refuseSecondPlan({ userId: session.user.id, customerId, checkoutSession, claim: false });
+      if (refused) return res.status(409).json({ error: refused.message, code: 'HAS_PLAN', refunded: refused.refunded });
     }
 
     let linkPlan;

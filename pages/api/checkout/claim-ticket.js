@@ -1,5 +1,5 @@
 import { stripe, planFromPrice, planAmountCents, planCap } from '../../../lib/stripe';
-import { refuseSecondPlan, SECOND_PLAN_MESSAGE } from '../../../lib/planGuard';
+import { customerBelongsToOther, refuseSecondPlan } from '../../../lib/planGuard';
 import {
   assertCanLink,
   linkStripeCustomerToProfile,
@@ -137,11 +137,20 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Session is not a subscription.' });
     }
 
-    // One plan per account (billing v2): a claimer who already has a plan does
-    // not get a second one; the new subscription is cancelled and refunded.
-    if (await refuseSecondPlan({ userId: session.user.id, customerId, checkoutSession })) {
+
+    // The paid customer already belongs to another account: refused before
+    // anything else (no cancel, no refund: support links it).
+    if (await customerBelongsToOther(customerId, session.user.id, checkoutSession)) {
+      return res.status(409).json({ error: 'This payment is linked to another account. Contact support.' });
+    }
+
+    // One plan per account (billing v2): a claimer who already has a plan, or
+    // whose account already has a different customer, does not get this one;
+    // it is cancelled and refunded (lib/planGuard.js).
+    const refused = await refuseSecondPlan({ userId: session.user.id, customerId, checkoutSession });
+    if (refused) {
       clearClaimCookie(res, req.cookies?.[CLAIM_NONCE_COOKIE], checkoutSession);
-      return res.status(409).json({ error: SECOND_PLAN_MESSAGE, code: 'HAS_PLAN', refunded: true });
+      return res.status(409).json({ error: refused.message, code: 'HAS_PLAN', refunded: refused.refunded });
     }
 
     // Grant before linking (the entitlement reader must never see a linked

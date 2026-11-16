@@ -107,6 +107,7 @@ import webhook from '../pages/api/stripe-webhook.js';
 import checkout from '../pages/api/checkout.js';
 import grantYearly from '../pages/api/cron/grant-yearly.js';
 import claim from '../pages/api/checkout/claim.js';
+import confirm from '../pages/api/checkout/confirm.js';
 
 let db;
 beforeAll(async () => {
@@ -468,7 +469,9 @@ describe('Task 27 round 2: R3 one plan per account at claim time', () => {
     S.state.customers.set(customer, { id: customer, email, metadata: { pending_supabase_link: 'true' } });
     const sub = newSub(customer, lookupKey);
     const inv = paidInvoice(customer, sub);
-    Object.assign(S.state.invoices.get(inv), { payment_intent: `pi_${inv}` });
+    const ch = `ch_${inv}`;
+    Object.assign(S.state.invoices.get(inv), { charge: ch });
+    S.state.charges.set(ch, { id: ch, customer, invoice: inv, amount: 100, amount_refunded: 0 });
     S.state.subs.get(sub).latest_invoice = inv;
     const id = `cs_test_${randomUUID().replace(/-/g, '')}`;
     S.state.sessions.set(id, {
@@ -501,7 +504,7 @@ describe('Task 27 round 2: R3 one plan per account at claim time', () => {
     expect(res.body.error).toBe('You already have a plan — use Manage billing to change it. Your new payment has been refunded.');
     expect(await linkedTo(user.id)).toBe(mine);
     expect(S.state.cancels).toEqual([{ id: paid.sub, key: `second-plan-cancel-${paid.sub}` }]);
-    expect(S.state.refunds).toEqual([{ payment_intent: `pi_${paid.inv}`, key: `second-plan-refund-${paid.sub}` }]);
+    expect(S.state.refunds).toEqual([{ charge: `ch_${paid.inv}`, key: `second-plan-refund-${paid.sub}` }]);
     const parked = await db.query('select claimed_by from public.credit_pending_grants where stripe_customer_id = $1', [paid.customer]);
     expect(parked.rows.every((r) => r.claimed_by === null)).toBe(true);
     // A retried claim answers the same and never refunds twice (same idempotency key).
@@ -556,7 +559,8 @@ describe('Task 27 round 2: upgrade level and yearly edges', () => {
   it('minor: a switch to yearly with no "unused time" line still grants month 0 under a date-keyed ref', async () => {
     await setV2(true);
     const user = newUser(); const customer = await linkedCustomer(user);
-    const sub = newSub(customer, STARTER_M);
+    const t0 = nowS() - 20 * DAY;
+    const sub = newSub(customer, STARTER_M, { start: t0, end: t0 + 30 * DAY });
     await deliver(invoiceEvent(paidInvoice(customer, sub)));
     setPrice(sub, STARTER_Y);
     const yStart = nowS();
@@ -594,7 +598,7 @@ describe('Task 27 round 2: upgrade level and yearly edges', () => {
     expect(Number(up.ref.split(':')[2])).toBeLessThan(t0 + 30 * DAY);
   });
 
-  it('minor: a partial refund of a yearly upgrade lowers the raised level by its share; a full refund of an earlier one keeps a later paid level', async () => {
+  it('S4: yearly upgrade refunds lower the level by the strict rule (base0 + each step x its unrefunded share)', async () => {
     await setV2(true);
     const user = newUser(); const customer = await linkedCustomer(user);
     const start = nowS() - 10 * DAY;
@@ -608,9 +612,227 @@ describe('Task 27 round 2: upgrade level and yearly edges', () => {
     await deliver(invoiceEvent(up2));
     expect((await yearlyRow(sub)).credits).toBe(5400);
     await refund(customer, up1, 800, 800); // the earlier upgrade, fully
-    expect((await yearlyRow(sub)).credits).toBe(5400); // still paid for by the later one
+    // S4 strict rule: base0 + each step x its unrefunded share = 1500 + 0 + 2800.
+    expect((await yearlyRow(sub)).credits).toBe(4300);
     await refund(customer, up2, 2000, 1000); // half of the later one
-    // The later upgrade was bought from Creator (2600): half of its 2600 -> 5400 step is still paid for.
-    expect((await yearlyRow(sub)).credits).toBe(2600 + Math.floor((5400 - 2600) * 0.5));
+    expect((await yearlyRow(sub)).credits).toBe(1500 + 1400);
+  });
+});
+
+describe('Task 27 round 3', () => {
+  const grantsTotal = async (u) => (await ledger(u.id)).filter((r) => r.op === 'renew' || (r.op === 'grant' && r.reason === 'plan_upgrade')).reduce((n, r) => n + r.amount, 0);
+  function switchTo(customer, sub, { oldKey, newKey, paid, yearly }) {
+    setPrice(sub, newKey);
+    const now = nowS();
+    Object.assign(S.state.subs.get(sub), { current_period_start: now, current_period_end: now + (yearly ? 365 : 30) * DAY });
+    return deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey, newKey, paid })));
+  }
+
+  it('S2: flipping yearly <-> monthly (and up a plan) three times grants nothing after the first paid step', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const sub = newSub(customer, STARTER_M);
+    await deliver(invoiceEvent(paidInvoice(customer, sub))); // 1500
+    await switchTo(customer, sub, { oldKey: STARTER_M, newKey: STARTER_Y, paid: 100, yearly: true });
+    await switchTo(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_M, paid: 100, yearly: false });
+    const afterOne = await grantsTotal(user);
+    expect(afterOne).toBeLessThanOrEqual(1500 + 3900);
+    for (let i = 0; i < 3; i += 1) {
+      await switchTo(customer, sub, { oldKey: STUDIO_M, newKey: STARTER_Y, paid: 100, yearly: true });
+      await switchTo(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_M, paid: 100, yearly: false });
+      await switchTo(customer, sub, { oldKey: STUDIO_M, newKey: STUDIO_Y, paid: 100, yearly: true });
+      await switchTo(customer, sub, { oldKey: STUDIO_Y, newKey: STUDIO_M, paid: 100, yearly: false });
+    }
+    expect(await grantsTotal(user)).toBe(afterOne);
+  });
+
+  async function yearlyUpgradeWithRaisedMonths() {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const start = nowS() - 10 * DAY;
+    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
+    await deliver(invoiceEvent(paidInvoice(customer, sub))); // month 0 at 1500
+    setPrice(sub, STUDIO_Y);
+    const up = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 9000 });
+    await deliver(invoiceEvent(up)); // month 0 difference, prorated; level 5400 from month 1
+    await grantYearlyMonths({ now: new Date((start + 100 * DAY) * 1000) }); // months 1..3 at 5400
+    expect((await renews(user)).filter((r) => r.ref.startsWith('yearly:')).map((r) => r.amount)).toEqual([5400, 5400, 5400]);
+    return { user, customer, sub, up, start };
+  }
+
+  it('S3: a full dispute of a yearly upgrade reverses every month the cron granted at the raised level and restores the level', async () => {
+    const { user, customer, sub, up } = await yearlyUpgradeWithRaisedMonths();
+    const ch = `ch_${randomUUID().slice(0, 8)}`;
+    S.state.charges.set(ch, { id: ch, customer, invoice: up, amount: 9000, amount_refunded: 0, disputed: true });
+    S.api.disputes.list = async () => ({ data: [{ id: 'dp_up', amount: 9000 }] });
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: { id: 'dp_up', charge: ch, amount: 9000 } } });
+    S.api.disputes.list = async () => ({ data: [] });
+    const claws = (await ledger(user.id)).filter((r) => r.reason === 'stripe_dispute' && r.ref.includes(':upgrade:'));
+    expect(claws.map((r) => r.amount)).toEqual([3900, 3900, 3900]);
+    expect((await yearlyRow(sub)).credits).toBe(1500);
+  });
+
+  it('S3: a partial refund takes the same share of the step from each raised month, and from the level', async () => {
+    const { user, customer, sub, up } = await yearlyUpgradeWithRaisedMonths();
+    await refund(customer, up, 9000, 4500);
+    const claws = (await ledger(user.id)).filter((r) => r.reason === 'stripe_refund' && r.ref.includes(':upgrade:'));
+    expect(claws.map((r) => r.amount)).toEqual([1950, 1950, 1950]);
+    expect((await yearlyRow(sub)).credits).toBe(1500 + 1950);
+    // A second, larger refund takes only the rest.
+    await refund(customer, up, 9000, 9000);
+    const all = (await ledger(user.id)).filter((r) => r.reason === 'stripe_refund' && r.ref.includes(':upgrade:'));
+    expect(all.reduce((n, r) => n + r.amount, 0)).toBe(3 * 3900);
+  });
+
+  it('S4: S->C, C->St, then the S->C upgrade disputed in full: level = St - (C - S)', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const start = nowS() - 10 * DAY;
+    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
+    await deliver(invoiceEvent(paidInvoice(customer, sub)));
+    setPrice(sub, CREATOR_Y);
+    const up1 = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: CREATOR_Y, paid: 800 });
+    await deliver(invoiceEvent(up1));
+    setPrice(sub, STUDIO_Y);
+    await deliver(invoiceEvent(prorationInvoice(customer, sub, { oldKey: CREATOR_Y, newKey: STUDIO_Y, paid: 2000 })));
+    const ch = `ch_${randomUUID().slice(0, 8)}`;
+    S.state.charges.set(ch, { id: ch, customer, invoice: up1, amount: 800, amount_refunded: 0, disputed: true });
+    S.api.disputes.list = async () => ({ data: [{ id: 'dp_s4', amount: 800 }] });
+    await deliver({ id: `evt_${randomUUID()}`, type: 'charge.dispute.created', data: { object: { id: 'dp_s4', charge: ch, amount: 800 } } });
+    S.api.disputes.list = async () => ({ data: [] });
+    expect((await yearlyRow(sub)).credits).toBe(5400 - (2600 - 1500));
+  });
+
+  it('minor: a late webhook for a Jan 31 anchor finds the period it paid for (no second grant after down and up)', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const jan31 = Date.UTC(2027, 0, 31, 12) / 1000;
+    const feb28 = Date.UTC(2027, 1, 28, 12) / 1000;
+    const sub = newSub(customer, STUDIO_M, { start: jan31, end: feb28 });
+    await deliver(invoiceEvent(paidInvoice(customer, sub))); // 5400 for Jan 31 - Feb 28
+    setPrice(sub, STARTER_M);
+    setPrice(sub, STUDIO_M);
+    const inv = prorationInvoice(customer, sub, { oldKey: STARTER_M, newKey: STUDIO_M, paid: 3000 });
+    const row = S.state.invoices.get(inv);
+    row.lines.data[1].period = { start: Date.UTC(2027, 1, 10, 12) / 1000, end: feb28 };
+    row.status_transitions = { paid_at: Date.UTC(2027, 1, 10, 12) / 1000 };
+    Object.assign(S.state.subs.get(sub), { current_period_start: feb28, current_period_end: Date.UTC(2027, 2, 31, 12) / 1000 });
+    await deliver(invoiceEvent(inv));
+    expect(await upgrades(user)).toHaveLength(0);
+  });
+
+  it('minor: a retried yearly upgrade never writes a second level marker', async () => {
+    await setV2(true);
+    const user = newUser(); const customer = await linkedCustomer(user);
+    const start = nowS() - 10 * DAY;
+    const sub = newSub(customer, STARTER_Y, { start, end: start + 365 * DAY });
+    await deliver(invoiceEvent(paidInvoice(customer, sub)));
+    setPrice(sub, STUDIO_Y);
+    const up = prorationInvoice(customer, sub, { oldKey: STARTER_Y, newKey: STUDIO_Y, paid: 900 });
+    await deliver(invoiceEvent(up));
+    await db.query('delete from public.stripe_events where id = $1', [`invoice:${up}:done`]); // as if it died before :done
+    await deliver(invoiceEvent(up));
+    const { rows } = await db.query('select refs from public.credit_invoice_grants where invoice_id = $1', [up]);
+    expect(rows[0].refs.filter((r) => r.startsWith('level:'))).toEqual(['level:1500:5400']);
+  });
+});
+
+describe('Task 27 round 3: claim guard minors', () => {
+  function paidSession(email, { charged = true, refunded = false, customer: given = null, clientRef = null } = {}) {
+    const customer = given || `cus_${randomUUID().slice(0, 12)}`;
+    if (!given) S.state.customers.set(customer, { id: customer, email, metadata: {} });
+    const sub = newSub(customer, CREATOR_M);
+    const inv = paidInvoice(customer, sub);
+    const ch = `ch_${inv}`;
+    if (charged) {
+      Object.assign(S.state.invoices.get(inv), { charge: ch, amount_paid: 4900 });
+      S.state.charges.set(ch, { id: ch, customer, invoice: inv, amount: 4900, amount_refunded: refunded ? 4900 : 0, refunded });
+    } else {
+      Object.assign(S.state.invoices.get(inv), { amount_paid: 0 });
+    }
+    S.state.subs.get(sub).latest_invoice = inv;
+    const id = `cs_test_${randomUUID().replace(/-/g, '')}`;
+    S.state.sessions.set(id, {
+      id, object: 'checkout.session', mode: 'subscription', payment_status: 'paid', customer, subscription: sub,
+      client_reference_id: clientRef, metadata: clientRef ? { supabase_user_id: clientRef } : { pending_supabase_link: 'true' },
+      customer_details: { email }, created: nowS(),
+      line_items: { data: [{ price: { id: `price_${CREATOR_M}`, lookup_key: CREATOR_M } }] },
+    });
+    return { id, customer, sub, inv };
+  }
+  const call = async (route, user, sessionId) => {
+    auth.user = user;
+    const res = makeRes();
+    await route({ method: 'POST', query: { session_id: sessionId }, cookies: {}, headers: {} }, res);
+    return res;
+  };
+  beforeEach(() => {
+    S.state.cancels.length = 0;
+    S.state.refunds.length = 0;
+  });
+
+  it('a charge already refunded (a retry after the idempotency window) is not refunded again', async () => {
+    await setV2(true);
+    const user = newUser(); const mine = await linkedCustomer(user); newSub(mine, STARTER_M);
+    const paid = paidSession(user.email, { refunded: true });
+    const res = await call(claim, user, paid.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.refunded).toBe(true);
+    expect(S.state.refunds).toEqual([]);
+  });
+
+  it('nothing charged (trial, 100% coupon): cancelled, and the message does not say refunded', async () => {
+    await setV2(true);
+    const user = newUser(); const mine = await linkedCustomer(user); newSub(mine, STARTER_M);
+    const paid = paidSession(user.email, { charged: false });
+    const res = await call(claim, user, paid.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body).toMatchObject({ refunded: false });
+    expect(res.body.error).toBe('You already have a plan — use Manage billing to change it. The new plan was cancelled; nothing was charged.');
+    expect(S.state.cancels.map((c) => c.id)).toEqual([paid.sub]);
+  });
+
+  it('support mode: an account with another customer and no live plan gets the new plan cancelled and refunded', async () => {
+    await setV2(true);
+    const user = newUser(); const mine = await linkedCustomer(user); // a customer, no plan
+    const paid = paidSession(user.email);
+    const res = await call(claim, user, paid.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('Buy the plan while signed in so it joins your account. Your payment has been refunded.');
+    expect(S.state.cancels.map((c) => c.id)).toEqual([paid.sub]);
+    expect(S.state.refunds).toHaveLength(1);
+    expect((await db.query('select stripe_customer_id from public.profiles where id = $1', [user.id])).rows[0].stripe_customer_id).toBe(mine);
+  });
+
+  it('a paid customer already linked to another account is refused first, with no cancel or refund', async () => {
+    await setV2(true);
+    const owner = newUser(); const theirs = await linkedCustomer(owner);
+    const user = newUser(); const mine = await linkedCustomer(user); newSub(mine, STARTER_M);
+    const paid = paidSession(user.email, { customer: theirs });
+    const res = await call(claim, user, paid.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('This payment is linked to another account. Contact support.');
+    expect(S.state.cancels).toEqual([]);
+    expect(S.state.refunds).toEqual([]);
+  });
+
+  it('/confirm: a second plan bought in another tab is cancelled and refunded before linking', async () => {
+    await setV2(true);
+    const user = newUser(); const mine = await linkedCustomer(user); newSub(mine, STARTER_M);
+    const paid = paidSession(user.email, { customer: mine, clientRef: user.id });
+    const res = await call(confirm, user, paid.id);
+    expect(res.statusCode).toBe(409);
+    expect(res.body.code).toBe('HAS_PLAN');
+    expect(S.state.cancels.map((c) => c.id)).toEqual([paid.sub]);
+    expect(S.state.refunds).toHaveLength(1);
+  });
+
+  it('/confirm: a signed-in first plan confirms normally', async () => {
+    await setV2(true);
+    const user = newUser(); const mine = await linkedCustomer(user);
+    const paid = paidSession(user.email, { customer: mine, clientRef: user.id });
+    const res = await call(confirm, user, paid.id);
+    expect(res.statusCode).toBe(200);
+    expect(S.state.cancels).toEqual([]);
   });
 });
