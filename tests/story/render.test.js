@@ -507,6 +507,9 @@ describe('round 1', () => {
   it('N1: a gap between scenes is fine under music, and fails only when the whole mix is silent there', async () => {
     const withMusic = await renderOnce(await newProject({ narration: 'short' }));
     expect(codes(withMusic)).not.toContain('silence');
+    // R2: the long pause after the scene's line is said instead (no remix).
+    const gaps = withMusic.warnings.filter((w) => w.code === 'narration_gap').map((w) => w.message);
+    expect(gaps).toContain('The narration for "Morning" ends well before its shots do, so there is a long pause. Lengthen the line or shorten the shots.');
     const bare = await renderOnce(await newProject({ narration: 'short', music: false }));
     expect(codes(bare)).toContain('silence');
     expect(bare.settings.checks.longestSilence).toBeGreaterThan(3);
@@ -749,5 +752,70 @@ describe('round 1', () => {
     const [row] = await storyDb().select('story_renders', { id: render.id });
     expect(row.status).toBe('failed');
     expect(row.error).toBe('Your voice recording could not be read. Upload it again as an mp3, wav or m4a file.');
+  }, 240_000);
+});
+
+describe('round 3', () => {
+  const codes = (row) => row.warnings.map((w) => w.code);
+  const sliceCalls = () => (globalThis.__ffCalls || []).filter((a) => a.some((x) => String(x).startsWith('silencedetect=noise=-35dB')));
+
+  it('R1: a re-cut of our own narration opens it as a plain file', async () => {
+    const ctx = await newProject();
+    await storyDb().update('story_projects', { id: ctx.project.id }, { narration_segments: null });
+    globalThis.__ffCalls = [];
+    try {
+      const row = await renderOnce(ctx);
+      expect(row.status).toBe('done');
+      const narr = localPathFor(media.narration.url);
+      const cuts = sliceCalls().filter((a) => a.includes(narr));
+      expect(cuts).toHaveLength(1);
+      // No forced demuxer before the input (the '-f null' after it is the output).
+      expect(cuts[0].slice(0, cuts[0].indexOf('-i'))).not.toContain('-f');
+      expect(cuts[0].slice(0, 3)).toEqual(['-protocol_whitelist', 'file', '-i']);
+      // The re-cut found both lines, so each scene was placed at its own shots.
+      expect(row.settings.narrationPlan.map((g) => g.sceneId)).toEqual(['s1', 's2']);
+    } finally {
+      globalThis.__ffCalls = undefined;
+    }
+  }, 240_000);
+
+  it('R1: a re-cut of the customer\'s own recording keeps the forced demuxer', async () => {
+    const ctx = await newProject();
+    const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'voice_track', url: media.narration.url, storage_key: media.narration.key, name: 'mine', mime: 'audio/wav' });
+    await storyDb().update('story_projects', { id: ctx.project.id }, {
+      narration_key: null, narration_segments: null,
+      audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'generated', prompt: '', assetId: null }, voiceTrackAssetId: asset.id },
+    });
+    globalThis.__ffCalls = [];
+    try {
+      const row = await renderOnce(ctx);
+      expect(row.status).toBe('done');
+      const narr = localPathFor(media.narration.url);
+      const cuts = sliceCalls().filter((a) => a.includes(narr));
+      expect(cuts).toHaveLength(1);
+      expect(cuts[0].slice(0, 5)).toEqual(['-protocol_whitelist', 'file', '-f', 'wav', '-i']);
+    } finally {
+      globalThis.__ffCalls = undefined;
+    }
+  }, 240_000);
+
+  it('R2: no narration_gap when each line fills its scene', async () => {
+    const row = await renderOnce(await newProject());
+    expect(codes(row)).not.toContain('narration_gap');
+  }, 240_000);
+
+  it('R3 and R4: a playlist saved as an .mp4 video inset fails cleanly, with the inset wording', async () => {
+    const ctx = await newProject();
+    const target = path.join(dir, 'secret-inset.mp4');
+    ff(['-f', 'lavfi', '-i', 'testsrc2=size=320x240:rate=24:duration=2', '-pix_fmt', 'yuv420p', target]);
+    const key = `test-fixtures/${randomUUID()}.mp4`;
+    mkdirSync(path.dirname(mockStoragePath(key)), { recursive: true });
+    writeFileSync(mockStoragePath(key), `#EXTM3U\n#EXT-X-TARGETDURATION:10\n#EXTINF:2,\nfile://${target}\n#EXT-X-ENDLIST\n`);
+    const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'video_clip', url: `/api/mock/storage/${key}`, storage_key: key, name: 'pip', mime: 'video/mp4' });
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { inset_asset_id: asset.id });
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    await runWorkerJob('render', {});
+    const [row] = await storyDb().select('story_renders', { id: render.id });
+    expect(row).toMatchObject({ status: 'failed', error: 'One of your picture-in-picture files could not be read. Pick another file for that shot.' });
   }, 240_000);
 });
