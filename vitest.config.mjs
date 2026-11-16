@@ -23,5 +23,7 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.js'],
     setupFiles: ['./tests/helpers/mockEnv.js'],
+    // A per-run temp folder (mock storage, render fixtures), removed when the run ends.
+    globalSetup: ['./tests/helpers/globalSetup.js'],
   },
 });
