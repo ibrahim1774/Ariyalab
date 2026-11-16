@@ -1,0 +1,38 @@
+.working { display: flex; flex-direction: column; gap: 12px; padding: 16px 18px; }
+.progress { position: relative; height: 10px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
+.progress span { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: var(--accent); animation: slide 1.4s var(--ease) infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .progress span { animation: none; width: 100%; opacity: 0.55; } }
+.workingText { margin: 0; display: flex; flex-direction: column; gap: 2px; font-size: 14px; color: var(--text-dim); }
+.workingText strong { color: var(--text); font-size: 15px; }
+
+.failedCard, .intro { display: flex; gap: 14px; align-items: flex-start; padding: 16px 18px; }
+.failedCard h3, .intro h3 { font-size: 16px; margin: 0 0 4px; }
+.failedCard p, .intro p { margin: 0; font-size: 14px; color: var(--text-dim); max-width: 64ch; }
+.failedCard { border-color: var(--error); background: var(--error-bg); }
+.failedCard p { color: var(--error); }
+.failedIcon { display: grid; place-items: center; flex: none; width: 44px; height: 44px; border-radius: 12px; background: var(--accent-tint); color: var(--accent-deep); }
+
+.watch { display: flex; flex-direction: column; gap: 14px; padding: 14px; }
+.side { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.meta { margin: 0; font-size: 13px; color: var(--text-dim); }
+.versions { display: flex; flex-wrap: wrap; gap: 8px; }
+.version { padding: 6px 12px; border-radius: var(--radius-pill); border: 1px solid var(--border); background: var(--surface); font: inherit; font-size: 13px; cursor: pointer; color: var(--text); }
+.version[aria-pressed='true'] { border-color: var(--accent); background: var(--accent-tint); color: var(--accent-deep); font-weight: 600; }
+
+.warnings h3 { font-size: 14px; margin: 0 0 6px; }
+.warnings ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.warnings li { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; padding: 8px 10px; border-radius: 10px; background: var(--accent-tint); font-size: 13px; line-height: 1.4; }
+.dismiss { flex: none; border: 0; background: transparent; color: var(--accent-deep); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer; padding: 2px 4px; }
+.error { margin: 0; font-size: 14px; color: var(--error); }
+
+/* A tall video sits beside its details when there is room. */
+@media (min-width: 900px) {
+  .watch[data-portrait] { flex-direction: row; align-items: flex-start; }
+  .watch[data-portrait] > :first-child { margin: 0; flex: none; }
+  .watch[data-portrait] .side { flex: 1; }
+}
+@media (max-width: 760px) {
+  .dismiss { min-height: 44px; min-width: 44px; }
+  .version { min-height: 44px; }
+}

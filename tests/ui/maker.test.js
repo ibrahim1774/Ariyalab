@@ -31,6 +31,7 @@ const { default: StepScript } = await import('../../components/maker/StepScript'
 const { default: StepCast } = await import('../../components/maker/StepCast');
 const { default: StepStoryboard } = await import('../../components/maker/StepStoryboard');
 const { default: StepGenerate } = await import('../../components/maker/StepGenerate');
+const { default: StepFinish } = await import('../../components/maker/StepFinish');
 const { default: StepReview } = await import('../../components/maker/StepReview');
 const slots = await import('../../components/maker/slots');
 const { default: NewVideoPage } = await import('../../pages/app/new');
@@ -407,7 +408,8 @@ describe('waiting, failed and empty states', () => {
       <StepGenerate key="6" {...common} shots={shots} />, <StepGenerate key="7" {...common} shots={[]} />,
       <StepReview key="8" {...common} shots={shots} status={{ shots, project: project() }} />, <StepReview key="9" {...common} shots={[]} status={{ shots: [], project: project() }} />,
       <StepScript key="10" {...common} />, <StepStart key="11" onCreate={vi.fn()} />,
-      <div key="12"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.FinishSlot /></div>,
+      <div key="12"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /></div>,
+      <StepFinish key="13" project={project()} status={{ render: null, renders: [] }} />,
     ];
     let seen = 0;
     for (const view of views) {
@@ -757,13 +759,12 @@ describe('slots', () => {
       <>
         <slots.ReferenceBreakdownSlot />
         <slots.VoiceSoundSlot />
-        <slots.FinishSlot />
         <slots.ChatPanelSlot />
         <slots.AssetPickerSlot />
         <slots.StartFromVideoSlot />
       </>,
     );
-    for (const name of ['reference-breakdown', 'voice-sound', 'finish', 'chat-panel', 'asset-picker', 'start-from-video']) {
+    for (const name of ['reference-breakdown', 'voice-sound', 'chat-panel', 'asset-picker', 'start-from-video']) {
       expect(container.querySelector(`[data-slot="${name}"]`)).not.toBeNull();
     }
   });
@@ -799,8 +800,8 @@ describe('copy rules', () => {
       <StepLength key="e" {...common} />, <StepScript key="f" {...common} />, <StepCast key="g" {...common} cast={cast} jobs={[]} />,
       <StepCast key="g2" {...common} cast={[]} jobs={[]} />, <StepStoryboard key="h" {...common} shots={shots} />, <StepStoryboard key="h2" {...common} shots={[]} />,
       <StepGenerate key="i" {...common} shots={shots} />, <StepReview key="j" {...common} shots={shots} status={{ shots, project: p }} />,
-      <QuoteBar key="k" project={p} shots={[]} />,
-      <div key="l"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.FinishSlot /><slots.ChatPanelSlot /><slots.AssetPickerSlot /><slots.StartFromVideoSlot /></div>,
+      <QuoteBar key="k" project={p} shots={[]} />, <StepFinish key="m" project={p} status={{ render: null, renders: [] }} />,
+      <div key="l"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.ChatPanelSlot /><slots.AssetPickerSlot /><slots.StartFromVideoSlot /></div>,
     ];
     for (const view of views) {
       const { container, unmount } = render(view);

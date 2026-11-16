@@ -19,7 +19,7 @@ import StepScript from './StepScript';
 import StepStart from './StepStart';
 import StepStoryboard from './StepStoryboard';
 import StepStyle from './StepStyle';
-import { FinishSlot } from './slots';
+import StepFinish from './StepFinish';
 import { furthestId, nextId, staleIds, stepsFor } from './steps';
 import useProject from './useProject';
 import styles from './Steps.module.css';
@@ -95,7 +95,7 @@ function MakerPageInner({ id, returnTo }) {
     case 'audio': body = <StepAudio {...common} />; break;
     case 'generate': body = <StepGenerate {...common} shots={shots} />; break;
     case 'review': body = <StepReview {...common} shots={shots} status={data} />; break;
-    case 'finish': body = <FinishSlot project={project} status={data} refresh={refresh} />; break;
+    case 'finish': body = <StepFinish project={project} status={data} refresh={refresh} />; break;
     default: body = null;
   }
 

@@ -2,11 +2,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { getProject, getStatus, updateProject } from '../../lib/story/client';
 import { anyJobActive } from './steps';
+import { renderActive } from './finish';
 
 export const POLL_ACTIVE_MS = 3000;
 export const POLL_IDLE_MS = 15000;
 
-const EMPTY = { project: null, shots: [], cast: [], jobs: [], balance: null, render: null, rerolls: null };
+const EMPTY = { project: null, shots: [], cast: [], jobs: [], balance: null, render: null, renders: [], rerolls: null };
 
 /**
  * Loads a project and keeps it fresh.
@@ -62,7 +63,8 @@ export default function useProject(id) {
       try {
         const { data, degraded } = await fetchOnce();
         if (stopped) return;
-        active = anyJobActive(data.jobs || []);
+        // A queued or running render polls at the active rate too (the server throttles its ticks to one every 3 s).
+        active = anyJobActive(data.jobs || []) || renderActive(data.render);
         setState({
           project: data.project || null,
           shots: data.shots || [],
@@ -70,6 +72,7 @@ export default function useProject(id) {
           jobs: data.jobs || [],
           balance: data.balance ?? null,
           render: data.render ?? null,
+          renders: Array.isArray(data.renders) ? data.renders : [],
           rerolls: data.rerolls ?? null,
           loading: false,
           error: null,

@@ -48,7 +48,7 @@ export default function AppHome() {
           </Card>
         ) : (
           <div className={styles.grid}>
-            {projects.map((p) => <ProjectCard key={p.id} project={p} />)}
+            {projects.map((p) => <ProjectCard key={p.id} project={p} onDeleted={(id) => setProjects((list) => (list || []).filter((x) => x.id !== id))} />)}
           </div>
         )}
       </div>

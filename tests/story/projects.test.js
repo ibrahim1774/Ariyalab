@@ -116,6 +116,32 @@ describe('listProjects thumbnails', () => {
   });
 });
 
+describe('listProjects latest render', () => {
+  it('gives each project the newest finished render file, only its own owner sees it, and nothing for an unfinished one', async () => {
+    const userId = userA();
+    const other = userA();
+    const a = await createProject({ userId, input: { title: 'Rendered twice' } });
+    const b = await createProject({ userId, input: { title: 'Only failed' } });
+    const c = await createProject({ userId, input: { title: 'Never rendered' } });
+    const theirs = await createProject({ userId: other, input: { title: 'Theirs' } });
+    const row = (project, version, status, file_url = null) => ({ project_id: project.id, version, status, file_url });
+    await storyDb().insert('story_renders', [
+      row(a, 1, 'done', 'https://f.example/v1.mp4'),
+      row(a, 2, 'done', 'https://f.example/v2.mp4'),
+      row(a, 3, 'failed'),
+      row(b, 1, 'failed'),
+      row(theirs, 1, 'done', 'https://f.example/theirs.mp4'),
+    ]);
+    const list = await listProjects({ userId });
+    const by = (id) => list.find((p) => p.id === id);
+    expect(by(a.id)).toMatchObject({ latest_render_url: 'https://f.example/v2.mp4', latest_render_version: 2 });
+    expect(by(b.id).latest_render_url ?? null).toBeNull();
+    expect(by(c.id).latest_render_url ?? null).toBeNull();
+    expect(list.map((p) => p.id)).not.toContain(theirs.id);
+    expect(JSON.stringify(list)).not.toContain('theirs.mp4');
+  });
+});
+
 describe('getProject / listProjects', () => {
   it("another user's getProject throws NotFoundError", async () => {
     const project = await createProject({ userId: userA(), input: BRIEF });
