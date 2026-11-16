@@ -95,7 +95,7 @@ function MakerPageInner({ id, returnTo }) {
     case 'audio': body = <StepAudio {...common} />; break;
     case 'generate': body = <StepGenerate {...common} shots={shots} />; break;
     case 'review': body = <StepReview {...common} shots={shots} status={data} />; break;
-    case 'finish': body = <FinishSlot project={project} />; break;
+    case 'finish': body = <FinishSlot project={project} status={data} refresh={refresh} />; break;
     default: body = null;
   }
 

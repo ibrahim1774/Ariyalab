@@ -1,6 +1,10 @@
 // Marked places that later tasks fill. Each one is a small, self-contained card so a later task
 // replaces the body of one function and nothing else. Search for "SLOT" to find them.
+import { useState } from 'react';
+import Button from '../ui/Button';
 import Card from '../ui/Card';
+import { startRender } from '../../lib/story/client';
+import { describeError } from './errors';
 import { Icon } from './Tiles';
 import styles from './Steps.module.css';
 
@@ -24,9 +28,56 @@ export function VoiceSoundSlot() {
   return <Slot slot="voice-sound" title="Voice and sound" icon="spark">Narrator voice, music and captions are chosen here. They are coming in the next update, so you can carry on for now.</Slot>;
 }
 
-// SLOT: finish (step 12). Filled by the render task. Props: { project, status, refresh }.
-export function FinishSlot() {
-  return <Slot slot="finish" title="Your finished video" icon="film">Preview and download of the finished video appear here.</Slot>;
+// SLOT: finish (step 12). The full Finish screen is Task 21; until then a minimal "Make my video" trigger
+// (Task 20). Props: { project, status, refresh }. With no project it renders the plain placeholder.
+export function FinishSlot({ project, status, refresh }) {
+  if (!project) {
+    return <Slot slot="finish" title="Your finished video" icon="film">Preview and download of the finished video appear here.</Slot>;
+  }
+  return <MakeVideo project={project} render={status?.render || null} refresh={refresh} />;
+}
+
+const RENDER_TEXT = {
+  queued: 'Your video is being made. This takes a minute or two.',
+  running: 'Your video is being made. This takes a minute or two.',
+  failed: 'The video could not be made this time.',
+};
+
+function MakeVideo({ project, render, refresh }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const working = render && (render.status === 'queued' || render.status === 'running');
+  const start = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await startRender(project.id);
+      refresh?.();
+    } catch (err) {
+      setError(describeError(err));
+      if (err?.status === 409) refresh?.();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card className={styles.slot} data-slot="finish" data-media-card="">
+      <span className={styles.slotIcon} data-tile="slot"><Icon name="film" /></span>
+      <h3>Your finished video</h3>
+      {render?.status === 'done' && render.file_url ? (
+        <p>
+          Version {render.version} is ready. <a href={render.file_url} target="_blank" rel="noreferrer">Watch your video</a>
+        </p>
+      ) : (
+        <p>{render ? RENDER_TEXT[render.status] || '' : 'Put your clips, voice, music and captions together into one video.'}</p>
+      )}
+      {render?.status === 'failed' && render.error ? <p>{render.error}</p> : null}
+      {error ? <p role="alert">{error.message || error.title}</p> : null}
+      <Button onClick={start} disabled={busy || Boolean(working)}>
+        {render?.status === 'done' ? 'Make it again' : render?.status === 'failed' ? 'Try again' : 'Make my video'}
+      </Button>
+    </Card>
+  );
 }
 
 // SLOT: chat panel. Filled by the chat task. Props: { project }.

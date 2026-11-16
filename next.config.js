@@ -14,6 +14,13 @@ const nextConfig = {
       process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ||
       process.env.VITE_GOOGLE_CLIENT_ID,
   },
+  // The render worker (lib/story/render.js) reads the caption font from public/fonts at run time and runs
+  // the platform ffmpeg binary, which is loaded by a dynamic import that file tracing cannot follow.
+  experimental: {
+    outputFileTracingIncludes: {
+      '/api/story/render-worker': ['./public/fonts/**/*', './node_modules/@ffmpeg-installer/linux-x64/**/*'],
+    },
+  },
   // OAuth discovery for the MCP connector (lib/mcp/oauth.js). Clients try
   // the bare well-known paths and the path-suffixed forms (RFC 8414 3.1,
   // RFC 9728 3.1: /.well-known/oauth-protected-resource/api/mcp).

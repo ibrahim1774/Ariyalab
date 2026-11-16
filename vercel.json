@@ -16,5 +16,11 @@
       "path": "/api/cron/legacy-holds",
       "schedule": "*/10 * * * *"
     }
-  ]
+  ],
+  "functions": {
+    "pages/api/story/render-worker.js": {
+      "memory": 3009,
+      "maxDuration": 300
+    }
+  }
 }
