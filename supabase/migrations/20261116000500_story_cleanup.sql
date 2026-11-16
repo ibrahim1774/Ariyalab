@@ -29,6 +29,10 @@
 -- story_project_busy(project) -> true while a job of the project is queued or running (checked before each delete).
 -- story_retention_done(project) -> clears files_expire_at once every delete succeeded, so a file stored later (a job
 --   that was already running) starts a fresh retention window instead of being deleted on the next run.
+-- story_extend_files_expiry(project, until) -> true when files_expire_at was moved: sets it to
+--   greatest(files_expire_at, until) (until = the file's store time + retentionDays), so every stored file gets the full
+--   window (spec 10.10; final review I2). A project marked 'expired' whose deletes are still under way (files_expire_at
+--   set) is left alone; once the cleanup cleared it, a later file starts a fresh window as before.
 
 create or replace function public.story_release_orphan_hold(p_hold uuid, p_min_age_minutes integer default 30)
 returns integer
@@ -194,6 +198,20 @@ begin
 end
 $$;
 
+create or replace function public.story_extend_files_expiry(p_project uuid, p_until timestamptz)
+returns boolean
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  update story_projects set files_expire_at = p_until, updated_at = now()
+   where id = p_project
+     and (files_expire_at is null or (files_expire_at < p_until and status <> 'expired'));
+  return found;
+end
+$$;
+
 -- ---------------------------------------------------------------- privileges
 
 do $$
@@ -207,7 +225,8 @@ begin
       where n.nspname = 'public'
         and p.proname = any (array[
           'story_release_orphan_hold', 'story_retention_due', 'story_json_keys', 'story_project_file_keys',
-          'story_keys_in_use', 'story_expire_project', 'story_project_busy', 'story_retention_done'
+          'story_keys_in_use', 'story_expire_project', 'story_project_busy', 'story_retention_done',
+          'story_extend_files_expiry'
         ])
   loop
     execute format('revoke all on function %s from public', fn);

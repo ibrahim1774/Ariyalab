@@ -168,7 +168,7 @@ describe('retention cleanup', () => {
     await db.query('update public.story_projects set narration_key = $2 where id = $1', [p, `story/${p}/n.mp3`]);
     await run();
     expect(await expiresAt(p)).toBeNull();
-    // A render that was already under way lands later: the runner sets files_expire_at only when it is null.
+    // A render that was already under way lands later: the cleanup cleared files_expire_at, so the runner starts a fresh window.
     const late = `story/${p}/render/late.mp4`;
     await db.query("insert into public.story_renders (project_id, version, storage_key) values ($1, 1, $2)", [p, late]);
     await db.query("update public.story_projects set files_expire_at = now() + interval '30 days' where id = $1 and files_expire_at is null", [p]);

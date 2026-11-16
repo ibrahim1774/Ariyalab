@@ -588,7 +588,7 @@ describe('tick: polling', () => {
     expect(await held(project)).toBe(30);
   });
 
-  it('sets files_expire_at once, from retentionDays in pricing config', async () => {
+  it('every stored file moves files_expire_at to the later of its value and now + retentionDays (final review I2)', async () => {
     await raw.query(`insert into pricing_config (key, value) values ('retentionDays', '7'::jsonb)
                      on conflict (key) do update set value = excluded.value`);
     _resetPricingCache();
@@ -605,11 +605,48 @@ describe('tick: polling', () => {
       await tick({ projectId: project.id, now: at(40), limit: 1 });
       await tick({ projectId: project.id, now: at(100), limit: 0 });
       const [p2] = await storyDb().select('story_projects', { id: project.id });
-      expect(p2.files_expire_at).toBe(p1.files_expire_at);
+      expect(new Date(p2.files_expire_at).getTime()).toBe(at(100 + 7 * 86400).getTime());
+      // A file stored with an earlier clock never pulls the window back.
+      await enqueue({ projectId: project.id, kind: 'still' });
+      await tick({ projectId: project.id, now: at(60), limit: 1 });
+      await tick({ projectId: project.id, now: at(80), limit: 0 });
+      const [p3] = await storyDb().select('story_projects', { id: project.id });
+      expect(p3.files_expire_at).toBe(p2.files_expire_at);
     } finally {
       await raw.query(`delete from pricing_config where key = 'retentionDays'`);
       _resetPricingCache();
     }
+  });
+
+  it('final review I2: a clip paid for on day 29 survives the cleanup on day 30', async () => {
+    const { runRetention } = await import('../../lib/story/retention.js');
+    const DAY = 86400_000;
+    // Day 0 is 30 days (and an hour) ago, so "today" is day 30 for the retention job (it reads the database clock).
+    const day0 = new Date(Date.now() - 30 * DAY - 3600_000);
+    const on = (d, s = 0) => new Date(day0.getTime() + d * DAY + s * 1000);
+    const project = await newProject();
+    const { handler } = fakeAsync({ poll: doneWith(MOCK_URLS.still) });
+    registerHandler('still', handler);
+    // Day 0: the cast picture (the project's first file).
+    await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: on(0), limit: 1 });
+    await tick({ projectId: project.id, now: on(0, 20), limit: 0 });
+    // Day 29: a paid clip.
+    const clip = await enqueue({ projectId: project.id, kind: 'still' });
+    await tick({ projectId: project.id, now: on(29), limit: 1 });
+    await tick({ projectId: project.id, now: on(29, 20), limit: 0 });
+    const clipKey = (await jobRow(clip.id)).result.key;
+    expect(clipKey).toBeTruthy();
+    const deleted = [];
+    await runRetention({
+      list: async () => ({ objects: [], cursor: null }),
+      del: async ({ keys }) => { deleted.push(...keys); return keys.length; },
+    });
+    expect(deleted).not.toContain(clipKey);
+    expect(deleted.filter((k) => k.includes(project.id))).toEqual([]);
+    const [row] = await storyDb().select('story_projects', { id: project.id });
+    expect(row.status).not.toBe('expired');
+    expect(new Date(row.files_expire_at).getTime()).toBe(on(29 + 30, 20).getTime());
   });
 });
 
