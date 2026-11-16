@@ -15,10 +15,18 @@ const nextConfig = {
       process.env.VITE_GOOGLE_CLIENT_ID,
   },
   // The render worker (lib/story/render.js) reads the caption font from public/fonts at run time and runs
-  // the platform ffmpeg binary, which is loaded by a dynamic import that file tracing cannot follow.
+  // the platform ffmpeg binary, which is loaded by a dynamic import that file tracing cannot follow. The other
+  // routes that run ffmpeg (reference analysis, audio jobs and audio actions, asset and voice sample checks) load it
+  // the same way. Keys are picomatch globs matched anywhere in the route ([action] escaped: a literal segment name).
   experimental: {
     outputFileTracingIncludes: {
       '/api/story/render-worker': ['./public/fonts/**/*', './node_modules/@ffmpeg-installer/linux-x64/**/*'],
+      '/api/story/worker/analyze': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+      '/api/story/worker/audio': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+      '/api/story/assets': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+      '/api/story/voices': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+      '/api/story/projects/*/analyze': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
+      '/api/story/projects/*/\\[action\\]': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
     },
   },
   // OAuth discovery for the MCP connector (lib/mcp/oauth.js). Clients try

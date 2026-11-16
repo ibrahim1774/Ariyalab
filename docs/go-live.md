@@ -15,7 +15,7 @@ and to `.env.local` for local runs. `.env.example` lists them all with notes.
 | `CRON_SECRET` | Random string | **Required in every environment** before deploy. Every cron route and the signed job ids fail closed without it. |
 | `ADMIN_EMAILS` | Comma-separated admin emails | Admins need a confirmed email. |
 | `ANTHROPIC_API_KEY` | Claude (script, analysis, moderation) | |
-| `KIE_API_KEY`, `KIE_WEBHOOK_SECRET` | kie.ai (video, images) | Set the webhook secret in the kie.ai dashboard to the same value. |
+| `KIE_API_KEY`, `KIE_WEBHOOK_SECRET`, `KIE_WEBHOOK_HMAC_KEY` | kie.ai (video, images) | `KIE_WEBHOOK_SECRET` is our own random string (it signs the callback URL we send). `KIE_WEBHOOK_HMAC_KEY` (optional) is the HMAC key shown in the kie.ai dashboard; when set, kie's signature header is checked too. |
 | `FISH_API_KEY` | Fish Audio (voices, cloning) | New account. |
 | `GOOGLE_AI_API_KEY` | Google AI Studio / Lyria (music) | New account. |
 | `APIFY_TOKEN` | Apify (reference video links) | Existing account. |
@@ -199,8 +199,9 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
 
 ## 5. Kie webhook secret
 
-Set `KIE_WEBHOOK_SECRET` on Vercel and the same secret in the kie.ai dashboard, then confirm one webhook arrives and is
-accepted (the runner also polls, so a missing webhook only slows things down).
+Set `KIE_WEBHOOK_SECRET` on Vercel to a random string (it signs the callback URL we send; kie.ai never needs it). To
+also check kie's own signature, copy the webhook HMAC key from the kie.ai dashboard into `KIE_WEBHOOK_HMAC_KEY`. Then
+confirm one webhook arrives and is accepted (the runner also polls, so a missing webhook only slows things down).
 
 ## 6. Deploy
 
@@ -258,8 +259,7 @@ Each of these spends real money; run one only after approving it and its cost.
 
 - `pages/api/upload-token.js` signed-in limits allow image/* and video/* up to 1 GB on any allowed path (the server
   re-checks on registration).
-- Audio handlers: putObject has no deadline signal; the own-recording download timeout (10 min) exceeds the worker
-  window.
+- Audio handlers: the own-recording download timeout (10 min) exceeds the worker window.
 - Files of a deleted project are not swept by the retention job (only expired projects and the brand/audio upload
   folders are); a future sweep of `story/<id>/` prefixes without a project row would cover them.
 - Reference links (R9): a link over 180 s is refused only after the download, when the file is probed; refuse it

@@ -1,5 +1,6 @@
 import { del } from '@vercel/blob';
 
+import { safeEqual } from '../../../lib/mcp/oauth.js';
 import { getSupabaseAdmin } from '../../../lib/supabaseServer';
 
 /*
@@ -20,7 +21,7 @@ export default async function handler(req, res) {
 
   const secret = process.env.CRON_SECRET;
   const auth = req.headers.authorization || '';
-  if (!secret || auth !== `Bearer ${secret}`) {
+  if (!secret || !safeEqual(auth, `Bearer ${secret}`)) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
