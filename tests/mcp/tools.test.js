@@ -25,6 +25,7 @@ const mockFn = (name) => globalThis.__storyProviderMock.registry.get(name);
 const { generateCast } = await import('../../lib/story/cast.js');
 const { _setMcpRateLimit } = await import('../../lib/mcp/server.js');
 const draftRoute = await import('../../pages/api/story/worker/draft.js');
+const { draftHandler } = await import('../../lib/story/draftJobs.js');
 const { sceneSig } = await import('../../lib/story/storyboard.js');
 const { quoteGeneration } = await import('../../lib/story/shots.js');
 const { RIGHTS_STATEMENT } = await import('../../lib/story/referenceRules.js');
@@ -817,8 +818,12 @@ describe('round 1: money', () => {
 
     const other = newUser();
     const [voice] = await storyDb().insert('story_voices', { user_id: other.id, name: 'Theirs', provider: 'fish', status: 'ready', provider_voice_id: 'their-voice', consent_statement: 'x', consent_at: new Date().toISOString() });
-    const stolen = await use(client, 'make_audio', { project_id: projectId, voice_id: voice.provider_voice_id });
-    expect(stolen).toMatchObject({ isError: true, data: { error: 'not_found' } });
+    // Their row id (a UUID) goes through audio.js's owner check; their provider id is not one of this customer's voices either.
+    for (const voiceId of [voice.id, voice.provider_voice_id]) {
+      const stolen = await use(client, 'make_audio', { project_id: projectId, voice_id: voiceId });
+      expect(stolen, voiceId).toMatchObject({ isError: true, data: { error: 'not_found' } });
+    }
+    expect((await storyDb().select('story_projects', { id: projectId }))[0].audio_plan?.voiceId).not.toBe(voice.id);
 
     const ok = await use(client, 'make_audio', { project_id: projectId, confirm_total: total });
     expect(ok.isError, ok.text).toBe(false);
@@ -878,5 +883,128 @@ describe('round 1: the route', () => {
     const list = await use(client, 'get_project', {});
     expect(list.data.projects).toHaveLength(50);
     expect(Object.keys(list.data.projects[0]).sort()).toEqual(['id', 'status', 'step', 'title', 'updated_at']);
+  });
+});
+
+describe('round 2', () => {
+  const usage = async (userId, prefix) => Number((await raw.query(
+    `select coalesce(sum(count), 0)::int as n from story_usage where user_id = $1 and action like $2`, [userId, `${prefix}%`],
+  )).rows[0].n);
+  const draftJob = async (projectId) => (await storyDb().select('story_jobs', { project_id: projectId, kind: 'script' }, { order: '-created_at', limit: 1 }))[0];
+
+  it('S1: onFail and onDone run again give the count back once', async () => {
+    accounts.set({ paid: false });
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const { data } = await use(client, 'create_project', { title: 'Once', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = data.project.id;
+    await use(client, 'write_script', { project_id: projectId });
+    // Two writes counted today (one earlier, one by this draft), so a second give-back would show.
+    await raw.query(`update story_usage set count = count + 1 where user_id = $1 and action like 'script_write%'`, [user.id]);
+    expect(await usage(user.id, 'script_write')).toBe(2);
+    const job = await draftJob(projectId);
+    await draftHandler.onFail(job);
+    await draftHandler.onFail(job);
+    await draftHandler.onDone(job, { error: { code: 'x', message: 'x' } });
+    expect(await usage(user.id, 'script_write')).toBe(1);
+    expect((await draftJob(projectId)).allowance_returned_at).toBeTruthy();
+  });
+
+  it('S2: a write or revise run again after it saved does not write again', async () => {
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    const versions = async () => (await storyDb().select('story_scripts', { project_id: projectId })).length;
+    expect(await versions()).toBe(1);
+    const written = await draftJob(projectId);
+    expect(await draftHandler.run(written)).toMatchObject({ script_version: 1, already_saved: true });
+
+    await use(client, 'set_script', { project_id: projectId, instruction: 'Make the opening funnier' });
+    const revise = await draftJob(projectId);
+    expect(revise.payload).toMatchObject({ task: 'revise', baseVersion: 1 });
+    expect(await draftHandler.run(revise)).toMatchObject({ script_version: 2 });
+    // The retry of a run that died after saving: done, nothing written again.
+    expect(await draftHandler.run(revise)).toMatchObject({ script_version: 2, already_saved: true });
+    expect(await versions()).toBe(2);
+    expect(modelCalls.story_script).toBe(2);
+  });
+
+  it('S3: a killed draft is retried after the worker limit, not 10 minutes; a retried plan takes one storyboard build count', async () => {
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const { data } = await use(client, 'create_project', { title: 'Stuck', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    await use(client, 'write_script', { project_id: data.project.id });
+    const job = await draftJob(data.project.id);
+    await raw.query(`update story_jobs set status = 'running', attempts = 1, started_at = now() - interval '6 minutes', run_after = null where id = $1`, [job.id]);
+    await sweep({ now: new Date() });
+    expect((await draftJob(data.project.id)).status).toBe('queued');
+
+    await fund(user.id, 2000);
+    const projectId = await projectWithScript(client);
+    await draftCast(client, projectId);
+    await use(client, 'generate_cast', { project_id: projectId, confirm_total: (await getPricing()).projectFee });
+    await runJobs(projectId);
+    const { data: st } = await use(client, 'get_status', { project_id: projectId });
+    for (const c of st.cast) await use(client, 'pick_cast', { project_id: projectId, cast_id: c.id, candidate_index: 0 });
+    await runJobs(projectId);
+    await use(client, 'generate_storyboard', { project_id: projectId });
+    expect(await usage(user.id, 'shots_build')).toBe(1);
+    const plan = await draftJob(projectId);
+    expect(plan.payload.task).toBe('shots');
+    await draftHandler.run(plan);
+    // The run died after the plan was saved and is run again: no second count, and the first one is kept.
+    await draftHandler.run(plan);
+    expect(await usage(user.id, 'shots_build')).toBe(1);
+    expect(modelCalls.story_shots).toBe(1);
+  });
+
+  it('S5: two cast confirms at once charge the fee once and only one reports it', async () => {
+    const user = newUser();
+    await fund(user.id, 2000);
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    await draftCast(client, projectId);
+    const fee = (await getPricing()).projectFee;
+    const outs = await Promise.all([1, 2].map(() => use(client, 'generate_cast', { project_id: projectId, confirm_total: fee })));
+    const reported = outs.filter((o) => !o.isError).map((o) => o.data.credits);
+    expect(reported.reduce((a, b) => a + b, 0)).toBe(fee);
+    expect(charged(await ledger(user.id))).toBe(fee);
+  });
+
+  it('S5: the request that loses the cast insert race reports 0 spent', async () => {
+    const user = newUser();
+    await fund(user.id, 2000);
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    await use(client, 'generate_cast', { project_id: projectId });
+    await runDrafts();
+    const [job] = await storyDb().select('story_jobs', { project_id: projectId, kind: 'script' }, { order: '-created_at', limit: 1 });
+    const drafted = { characters: job.result.characters, scriptId: job.result.script_id };
+    const fee = (await getPricing()).projectFee;
+    // Both read the fee as due before either inserts the characters; the loser hits the unique index.
+    const outs = await Promise.all([1, 2].map(() => generateCast({ userId: user.id, projectId, expectedCredits: fee, drafted })));
+    expect(outs.map((o) => o.charged).sort((a, b) => a - b)).toEqual([0, fee]);
+    expect(charged(await ledger(user.id))).toBe(fee);
+  });
+
+  it('S6: generate_storyboard reports the previous failed plan when it plans again', async () => {
+    const user = newUser();
+    await fund(user.id, 2000);
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    await use(client, 'generate_storyboard', { project_id: projectId });
+    const real = mockFn('story_shots');
+    registerMock('story_shots', () => ({ shots: [] }));
+    try {
+      await runDrafts();
+    } finally {
+      registerMock('story_shots', real);
+    }
+    const status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.shot_plan).toMatchObject({ status: 'failed' });
+    const again = await use(client, 'generate_storyboard', { project_id: projectId });
+    expect(again.isError, again.text).toBe(false);
+    expect(again.data.previous_attempt).toMatchObject({ task: 'shots', status: 'failed' });
+    expect(again.data.drafting).toEqual({ task: 'shots', status: 'queued' });
   });
 });
