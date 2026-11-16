@@ -113,7 +113,7 @@ function MakerPageInner({ id, returnTo }) {
           returnTo={returnTo}
           onChanged={(changed) => {
             refresh();
-            if (!Array.isArray(changed) || changed.includes('script')) setScriptRev((n) => n + 1);
+            if (Array.isArray(changed) && changed.includes('script')) setScriptRev((n) => n + 1);
           }}
         />
       )}

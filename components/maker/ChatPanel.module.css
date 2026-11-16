@@ -62,7 +62,10 @@
   border-radius: 12px;
   background: var(--surface);
 }
+.confirmText { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .confirmLabel { font-size: 13px; font-weight: 600; }
+.confirmNote { font-size: 12px; color: var(--text-dim); overflow-wrap: anywhere; }
+.confirmOld { margin-left: auto; font-size: 13px; color: var(--text-dim); }
 .confirmButton {
   margin-left: auto;
   padding: 6px 12px;

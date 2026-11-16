@@ -20,12 +20,14 @@ const HISTORY = [
   msg('2', 'assistant', 'I rewrote the first scene so Marcus trips over the broom as he opens up. The rest of the story is the same.'),
   msg('3', 'user', 'Give Dre a red cap'),
   msg('4', 'assistant', 'Dre has used his included new pictures, so the next set costs 5 credits. Press the button to start it.', [{
-    tool: 'regenerate_character', needsConfirm: true, quote: { label: 'New pictures of Dre', credits: 5 },
+    id: 'card-1', state: 'open', tool: 'regenerate_character', needsConfirm: true, quote: { label: 'New pictures of Dre', credits: 5 },
     confirm: { action: 'cast-regen', method: 'POST', body: { castId: 'c1', note: 'a red cap', expected_credits: 5 } },
   }]),
 ];
+const usedHistory = HISTORY.map((m) => (m.confirms.length ? { ...m, confirms: m.confirms.map((c) => ({ ...c, state: 'used' })) } : m));
 const states = {
   history: { messages: HISTORY, usage: { used: 2, limit: 150 } },
+  used: { messages: usedHistory, usage: { used: 2, limit: 150 } },
   empty: { messages: [], usage: { used: 0, limit: 150 } },
   waiting: { messages: HISTORY.slice(0, 2), usage: { used: 1, limit: 150 }, send: 'Make it 45 seconds' },
 };

@@ -21,6 +21,8 @@ const { default: ChatPanel } = await import('../../components/maker/ChatPanel');
 
 const project = { id: 'p1', title: 'Fox', step: 'cast' };
 const CONFIRM = {
+  id: '6f0f6c1e-2b7a-4f5e-9a51-0c2d1f9e8a11',
+  state: 'open',
   tool: 'regenerate_character',
   needsConfirm: true,
   quote: { label: 'New pictures of Maya', credits: 5 },
@@ -69,7 +71,7 @@ describe('ChatPanel', () => {
     const onChanged = vi.fn();
     render(<ChatPanel project={project} onChanged={onChanged} />);
     fireEvent.click(await screen.findByRole('button', { name: 'Start for 5 credits' }));
-    expect(client.confirmChatAction).toHaveBeenCalledWith('p1', CONFIRM.confirm);
+    expect(client.confirmChatAction).toHaveBeenCalledWith('p1', CONFIRM.id);
     expect(await screen.findByText('Started')).toBeInTheDocument();
     expect(onChanged).toHaveBeenCalled();
   });
@@ -119,5 +121,56 @@ describe('ChatPanel', () => {
       expect(text).not.toMatch(names);
     }
     unmount();
+  });
+
+  it('round 1 C4: shows the note the card will use', async () => {
+    client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'That costs 5 credits.', [CONFIRM])], usage: { used: 1, limit: 150 } });
+    render(<ChatPanel project={project} onChanged={vi.fn()} />);
+    expect(await screen.findByText('a red cap')).toBeInTheDocument();
+  });
+
+  it('round 1 C3: a used card shows Started and an out of date card cannot be pressed', async () => {
+    client.getChat.mockResolvedValue({
+      messages: [
+        msg('a1', 'assistant', 'x', [{ ...CONFIRM, id: 'c-used', state: 'used' }]),
+        msg('a2', 'assistant', 'y', [{ ...CONFIRM, id: 'c-old', state: 'outdated' }]),
+      ],
+      usage: { used: 2, limit: 150 },
+    });
+    render(<ChatPanel project={project} onChanged={vi.fn()} />);
+    expect(await screen.findByText('Started')).toBeInTheDocument();
+    expect(screen.getByText('Out of date')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Start for/ })).toBeNull();
+  });
+
+  it('round 1 C3: a refused press (already used, out of date) marks the card so it cannot be pressed again', async () => {
+    client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'x', [CONFIRM])], usage: { used: 1, limit: 150 } });
+    client.confirmChatAction.mockRejectedValue(new StoryApiError({ status: 409, code: 'confirm_used', message: 'This was already started.' }));
+    render(<ChatPanel project={project} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start for 5 credits' }));
+    expect(await screen.findByText('Started')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Start for/ })).toBeNull();
+  });
+});
+
+describe('MakerPage chat wiring (round 1 C6)', () => {
+  it('a plain refresh from the chat does not reload the script step', async () => {
+    const { default: MakerPage } = await import('../../components/maker/MakerPage');
+    const p = { id: 'p1', title: 'Fox', purpose: 'app', offer: 'x', audience: 'y', style: '3d_family', seconds: 30, aspect: '9:16', quality: 'standard', mode: 'narrated', step: 'script', fee_charged: false, files_expire_at: null, reference_id: null };
+    client.getStatus.mockResolvedValue({ project: p, shots: [], cast: [], jobs: [] });
+    client.getScript.mockResolvedValue({ id: 'x', version: 1, scenes: [{ id: 's1', title: 'T', visual: 'V', lines: [{ speaker: 'narrator', text: 'Hi' }] }], violations: [] });
+    client.getPricing.mockResolvedValue({ pricing: {} });
+    client.getQuote.mockResolvedValue({ total: 0, lines: [] });
+    client.getBilling.mockResolvedValue({ v2: true, balance: { available: 0 }, history: [] });
+    client.sendChat.mockRejectedValue(new StoryApiError({ status: 409, code: 'conflict', message: 'Busy.' }));
+    render(<MakerPage id="p1" returnTo="/app/p/p1" />);
+    const input = await screen.findByLabelText('Message to the chat helper');
+    await waitFor(() => expect(client.getScript).toHaveBeenCalledTimes(1));
+    fireEvent.change(input, { target: { value: 'Hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    const refresh = await screen.findByRole('button', { name: /Refresh/ });
+    fireEvent.click(refresh);
+    await waitFor(() => expect(client.getStatus.mock.calls.length).toBeGreaterThan(1));
+    expect(client.getScript).toHaveBeenCalledTimes(1);
   });
 });

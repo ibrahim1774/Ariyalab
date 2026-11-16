@@ -6,29 +6,39 @@ import styles from './ChatPanel.module.css';
 
 const SUGGESTIONS = ['Make the opening funnier', 'Make it 45 seconds', 'What will the video cost?'];
 
-/** One confirm card: a priced action the chat did not do. The button calls the normal route with the shown price. */
+/**
+ * One confirm card: a priced action the chat did not do. The button sends the card's id; the server runs the card it
+ * stored, once. A used card shows "Started"; an out of date one (the price moved, or a newer card replaced it) cannot
+ * be pressed.
+ */
 function ConfirmCard({ projectId, item, returnTo, onDone }) {
-  const [state, setState] = useState('idle'); // idle | busy | done
+  const [state, setState] = useState(item.state || 'open'); // open | busy | used | outdated
   const [error, setError] = useState(null);
   const { quote, confirm } = item;
+  const note = confirm?.body?.note;
   const press = async () => {
     setState('busy');
     setError(null);
     try {
-      await client.confirmChatAction(projectId, confirm);
-      setState('done');
+      await client.confirmChatAction(projectId, item.id);
+      setState('used');
       onDone?.();
     } catch (err) {
-      setError(err);
-      setState('idle');
+      if (err?.code === 'confirm_used') setState('used');
+      else if (err?.code === 'confirm_outdated') setState('outdated');
+      else setState('open');
+      setError(err?.code === 'confirm_used' ? null : err);
     }
   };
   return (
-    <div className={styles.confirm} data-testid="chat-confirm">
-      <span className={styles.confirmLabel}>{quote.label}</span>
-      {state === 'done' ? (
-        <span className={styles.confirmDone} role="status">Started</span>
-      ) : (
+    <div className={styles.confirm} data-testid="chat-confirm" data-state={state}>
+      <span className={styles.confirmText}>
+        <span className={styles.confirmLabel}>{quote.label}</span>
+        {note && <span className={styles.confirmNote}>{note}</span>}
+      </span>
+      {state === 'used' && <span className={styles.confirmDone} role="status">Started</span>}
+      {state === 'outdated' && <span className={styles.confirmOld}>Out of date</span>}
+      {(state === 'open' || state === 'busy') && (
         <button type="button" className={styles.confirmButton} onClick={press} disabled={state === 'busy'}>
           {state === 'busy' ? 'Starting…' : `Start for ${quote.credits} credits`}
         </button>
@@ -69,9 +79,26 @@ export default function ChatPanel({ project, onChanged, returnTo }) {
     load();
   }, [load]);
 
+  // Scroll to the newest message once it has laid out (a confirm card is taller than its first paint), so it is never clipped.
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return undefined;
+    const toEnd = () => {
+      el.scrollTop = el.scrollHeight;
+    };
+    toEnd();
+    const frame = typeof requestAnimationFrame === 'function' ? requestAnimationFrame(toEnd) : null;
+    let observer = null;
+    if (typeof ResizeObserver === 'function') {
+      observer = new ResizeObserver(toEnd);
+      for (const child of el.children) observer.observe(child);
+    }
+    const stop = setTimeout(() => observer?.disconnect(), 1000);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      observer?.disconnect();
+      clearTimeout(stop);
+    };
   }, [messages.length, pending]);
 
   const send = async (text) => {

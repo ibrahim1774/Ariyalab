@@ -9,11 +9,11 @@ import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { setCreditsDb, grantCredits, getBalance } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache, getPricing } from '../../lib/pricing.js';
 import { registerMock } from '../../lib/providers/mock.js';
-import { ModerationError } from '../../lib/moderation.js';
+import { ModerationError, MODERATION_UNAVAILABLE } from '../../lib/moderation.js';
 import { LimitError } from '../../lib/story/errors.js';
 import { storyChatMock } from '../../lib/story/mocks.js';
 import { CHAT_TOOLS, runTool } from '../../lib/story/chatTools.js';
-import { sendChat, listChat, buildChatSystem, MAX_TOOL_CALLS, CHAT_FALLBACK_REPLY } from '../../lib/story/chat.js';
+import { sendChat, listChat, buildChatSystem, screenReply, MAX_TOOL_CALLS, CHAT_FALLBACK_REPLY, CHAT_REFUSED_REPLY } from '../../lib/story/chat.js';
 import handler, { config } from '../../pages/api/story/chat.js';
 
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
@@ -204,11 +204,146 @@ describe('message cap', () => {
     expect(await usage(userId, project.id)).toBe(1);
   });
 
-  it('gives the count back when the model fails before any tool ran', async () => {
+  it('a refusal is a paid model turn: it is stored with a plain reply and stays counted (round 1 C1)', async () => {
     const { userId, user, project } = await newProject();
-    await expect(sendChat({ userId, user, projectId: project.id, message: 'Hi [[mock:blocked]]' })).rejects.toMatchObject({ code: 'blocked' });
-    expect(await usage(userId, project.id)).toBe(0);
-    expect(await chatRows(project.id)).toHaveLength(0);
+    const out = await sendChat({ userId, user, projectId: project.id, message: 'Hi [[mock:blocked]]' });
+    expect(out.reply).toBe(CHAT_REFUSED_REPLY);
+    expect(await usage(userId, project.id)).toBe(1);
+    expect((await chatRows(project.id)).map((r) => r.role)).toEqual(['user', 'assistant']);
+  });
+});
+
+describe('round 1', () => {
+  it('C1: gives the count back only when the model was never reached (config, or rate limited before any answer)', async () => {
+    for (const code of ['config', 'rate_limited']) {
+      const { userId, user, project } = await newProject();
+      await expect(sendChat({ userId, user, projectId: project.id, message: `Hi [[mock:throw:${code}]]` })).rejects.toMatchObject({ code });
+      expect(await usage(userId, project.id), code).toBe(0);
+      expect(await chatRows(project.id), code).toHaveLength(0);
+    }
+  });
+
+  it('C1: a failure after the model answered is stored as a counted fallback that says what was done', async () => {
+    for (const code of ['failed', 'rate_limited']) {
+      const { userId, user, project } = await newProject();
+      const out = await sendChat({ userId, user, projectId: project.id, message: `Longer ${tool('set_length', { seconds: 45 })} [[mock:throw:${code}]]` });
+      expect(out.reply, code).toMatch(/could not finish/i);
+      expect(out.reply, code).toMatch(/length/i);
+      expect(out.changed).toEqual(['project']);
+      expect(await usage(userId, project.id), code).toBe(1);
+      expect((await chatRows(project.id)).map((r) => r.role), code).toEqual(['user', 'assistant']);
+    }
+  });
+
+  it('C1: a model failure with nothing done is still counted once the model was reached', async () => {
+    const { userId, user, project } = await newProject();
+    const out = await sendChat({ userId, user, projectId: project.id, message: 'Hi [[mock:throw:failed]]' });
+    expect(out.reply).toMatch(/could not finish/i);
+    expect(await usage(userId, project.id)).toBe(1);
+  });
+
+  it('C2: one message runs at most one script revision', async () => {
+    const { userId, user, project } = await newProject();
+    const two = `${tool('revise_script', { instruction: 'Warmer' })} ${tool('revise_script', { instruction: 'Colder' })}`;
+    const out = await sendChat({ userId, user, projectId: project.id, message: `Two rewrites ${two}` });
+    expect(out.tools).toEqual([{ name: 'revise_script', ok: true }, { name: 'revise_script', ok: false, error: 'one_revise_per_message' }]);
+    expect((await latestScript(project.id)).version).toBe(2);
+    expect(await usage(userId, project.id)).toBe(1);
+  });
+
+  const confirmVia = async (body) => {
+    const res = makeRes();
+    await handler(makeReq({ method: 'POST', body }), res);
+    return res;
+  };
+
+  it('C3: a confirm card runs once through its id; a replay after reload is refused and charges nothing', async () => {
+    const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id, note: 'a red cap' }) });
+    const [card] = sent.body.confirms;
+    expect(card.id).toMatch(/^[0-9a-f-]{36}$/);
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('open');
+
+    const first = await confirmVia({ projectId: project.id, confirmId: card.id });
+    expect(first.statusCode).toBe(200);
+    expect(first.body.charged).toBe(5);
+    const ledger = await ledgerCount(userId);
+    const balance = await getBalance(userId);
+    expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(3);
+
+    const again = await confirmVia({ projectId: project.id, confirmId: card.id });
+    expect(again.statusCode).toBe(409);
+    expect(again.body.error).toBe('confirm_used');
+    expect(await ledgerCount(userId)).toBe(ledger);
+    expect(await getBalance(userId)).toEqual(balance);
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('used');
+  });
+
+  it('C3: the server runs the stored card, not what the browser sends, and refuses an unknown or another project\'s card', async () => {
+    const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    const other = await newProject();
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id }) });
+    const id = sent.body.confirms[0].id;
+    expect((await confirmVia({ projectId: project.id, confirmId: randomUUID() })).statusCode).toBe(404);
+    signIn(other.user);
+    expect((await confirmVia({ projectId: project.id, confirmId: id })).statusCode).toBe(404);
+    expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(2);
+  });
+
+  it('C3: a card whose price moved is out of date and runs nothing', async () => {
+    const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id }) });
+    await storyDb().update('story_cast', { id: cast.id }, { regens_used: 0 });
+    const ledger = await ledgerCount(userId);
+    const res = await confirmVia({ projectId: project.id, confirmId: sent.body.confirms[0].id });
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('confirm_outdated');
+    expect(await ledgerCount(userId)).toBe(ledger);
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('outdated');
+  });
+
+  it('C3: a newer card for the same character makes the older one out of date', async () => {
+    const { user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    signIn(user);
+    const a = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id, note: 'a hat' }) });
+    await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id, note: 'a scarf' }) });
+    const res = await confirmVia({ projectId: project.id, confirmId: a.body.confirms[0].id });
+    expect(res.body.error).toBe('confirm_outdated');
+  });
+
+  it('C3: when the action itself fails nothing is charged and the card can be pressed again', async () => {
+    const { userId, user, project, cast } = await newProject({ funds: 0, cast: { regens_used: 2 } });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id }) });
+    const id = sent.body.confirms[0].id;
+    const res = await confirmVia({ projectId: project.id, confirmId: id });
+    expect(res.statusCode).toBe(402);
+    expect(await ledgerCount(userId)).toBe(0);
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('open');
+  });
+
+  it('C5: the reply goes through the classifier, and through the regex alone while the classifier is down', async () => {
+    const blocked = async () => { throw new ModerationError('sexual', 'Layer 2'); };
+    const down = async () => { throw new ModerationError(MODERATION_UNAVAILABLE, MODERATION_UNAVAILABLE); };
+    expect(await screenReply('A warm hello', { screen: async () => ({ ok: true }) })).toBe('A warm hello');
+    expect(await screenReply('A warm hello', { screen: blocked })).toBe(CHAT_FALLBACK_REPLY);
+    expect(await screenReply('A warm hello', { screen: down })).toBe('A warm hello');
+    expect(await screenReply('Here is a nude scene', { screen: down })).toBe(CHAT_FALLBACK_REPLY);
+  });
+
+  it('C8: a failed character offers Try again at its retry price', async () => {
+    const { userId, user, project, cast } = await newProject({ cast: { status: 'failed', round_credits: 5, regens_used: 3 } });
+    const ledger = await ledgerCount(userId);
+    const result = await runTool({ userId, user, chatProjectId: project.id, name: 'regenerate_character', input: { cast_id: cast.id } });
+    expect(result).toMatchObject({
+      ok: true, needsConfirm: true,
+      quote: { label: 'Try again: pictures of Maya', credits: 5 },
+      confirm: { action: 'cast-regen', method: 'POST', body: { castId: cast.id, retry: true, expected_credits: 5 } },
+    });
+    expect(await ledgerCount(userId)).toBe(ledger);
   });
 });
 
@@ -221,6 +356,7 @@ describe('money', () => {
     const res = await post({ projectId: project.id, message: `New look for Maya ${tool('regenerate_character', { cast_id: cast.id, note: 'a red cap' })}` });
     expect(res.statusCode).toBe(200);
     expect(res.body.confirms).toEqual([{
+      id: expect.any(String),
       tool: 'regenerate_character',
       needsConfirm: true,
       quote: { label: 'New pictures of Maya', credits: pricing.castRegen },
@@ -232,7 +368,7 @@ describe('money', () => {
     expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(2);
     // The confirm card is kept with the reply, so it shows again when the chat is reopened.
     const history = await listChat({ userId, user, projectId: project.id });
-    expect(history.messages.at(-1).confirms).toEqual(res.body.confirms);
+    expect(history.messages.at(-1).confirms).toEqual([{ ...res.body.confirms[0], state: 'open' }]);
   });
 
   it('an included regeneration runs at no charge, pinned to a price of 0', async () => {
