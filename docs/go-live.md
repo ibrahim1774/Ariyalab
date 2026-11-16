@@ -151,19 +151,33 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
       invoice (`period:<sub>:<end>:up:<invoice>`). By the last month the whole entitlement is out.
     - A yearly period the subscription leaves (unused time credited with nothing new charged on it) ends there: no
       later month, and what it gave above the money kept is clawed back.
+    - Delivery order does not matter. Stripe does not promise to deliver invoices in order (a retry, a 500, flips
+      seconds apart). Unused time given back on a yearly period is recorded against that period even when the
+      invoice that starts the period has not been processed yet. When that invoice comes, the period counts every
+      line recorded for it, is ended at once if the switch away came first, and gives what it would have given in
+      order.
   - It does not matter whether the invoice is paid by card, from the customer balance, or not at all (a negative
     total): money given back to the balance was clawed back when it was given, and the balance then pays later
     invoices like money. So upgrades, downgrades, interval switches and loops of them all come to "credits = money kept
     x rate", within a credit per line (rounding always favours the business). Prorations left for the next renewal
     invoice (`create_prorations`) are credited on that invoice the same way.
-  - Grants are applied before clawbacks within one invoice. A plan change's clawback (reason `plan_change`) takes
-    what is available; what it cannot take because the credits were already spent is **owed** (`plan_debt` on the
+  - Within one invoice, clawbacks are applied before grants. A grant's rollover cap is the largest monthly level
+    among the invoice's plans, so a switch to a smaller plan never expires credits that are about to be clawed, or the
+    old plan's credits for the time just used. The rollover rule applies again at the next renewal. A customer who
+    did not spend never ends a plan change owing anything. A plan change's clawback (reason `plan_change`) takes what
+    is available; what it cannot take because the credits were already spent is **owed** (`plan_debt` on the
     account) and taken from the next plan grants (renewal, upgrade, yearly month; ledger reason `plan_debt`, ref
     `<grant ref>:debt`), since the money for that time went back to the customer's balance and pays those grants. So
     spending every credit before a downgrade never farms: what was delivered beyond the money kept is exactly what is
     still owed, and it does not grow from one plan change to the next. A customer who cancels while owing keeps that
-    one change's spent credits (their unused balance stays in Stripe). Refund and dispute clawbacks do not create
-    debt (as before: credits spent before a refund are not taken back).
+    one change's spent credits (their unused balance stays in Stripe).
+  - Only a plan-change invoice's own unused-time lines can create debt, and only up to what they took off the
+    period's money. Refund and dispute clawbacks never create debt (as before: credits spent before a refund are not
+    taken back). Neither does the cron when it brings a period down to its money (reason `plan_adjustment`; for
+    example, a refund whose own settlement failed and that the cron finished first). The database refuses debt for
+    any other reason (`credit_plan_clawback` raises `plan_debt_reason`). One consequence: if a plan-change invoice
+    dies after recording its lines and the cron settles the period before Stripe retries the invoice, that change's
+    clawback is booked without debt.
   - A line in another currency than its price (currency options, adaptive pricing) is skipped and logged: v2 prices
     are USD only.
 - Refunds and disputes take back, of each invoice, the share of money returned (refunded plus disputed, over what the

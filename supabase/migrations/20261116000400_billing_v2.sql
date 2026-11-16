@@ -1,5 +1,5 @@
 -- Task 27 (billing v2 plans, yearly grants, billing hardening). Applies after 20261116000300_story_assets.sql.
--- Additive: three new credit_ tables, one new column (credit_accounts.plan_debt), ten new functions, and a replacement
+-- Additive: three new credit_ tables, one new column (credit_accounts.plan_debt), eleven new functions, and a replacement
 -- body for credit_charge_closed_hold
 -- (same signature, same privileges). Touches no shared (haelabs) table.
 --
@@ -21,7 +21,9 @@
 --   charge is worth floor(amount x rate), a proration credit (unused time given back) -ceil(|amount| x rate), with
 --   rate = the price's credits for one period / its amount; a period line (non-proration) is the price's allotment.
 --   kind 'month' (monthly v2 or legacy price: credited at once) or 'year' (a yearly v2 price: counts toward the yearly
---   period named by the line's period end).
+--   period named by the line's period end, recorded even before that period's row exists, so delivery order never
+--   changes a period's entitlement). starts_at: the line's period start for unused time given back on a yearly period
+--   (an invoice with only such lines on a period left it then).
 -- credit_yearly_periods: one row per yearly period of a v2 subscription, keyed by (sub_id, period_end). What the
 --   period may give (its entitlement) is the sum of its year lines less the refunded share of each invoice's part;
 --   the cron releases it month by month and never past it, and anything given above it is clawed back at once.
@@ -29,8 +31,11 @@
 --   <prefix>: for catch-ups and clawbacks; parked grants count too).
 -- credit_accounts.plan_debt (new column): what a plan change's clawback could not take because the credits were
 --   already spent (money for that time went back to the customer's balance). credit_plan_clawback records it;
---   credit_collect_plan_debt takes it from the next plan grants (ref <grant ref>:debt, reason plan_debt). Refund and
---   dispute clawbacks do not create debt.
+--   credit_collect_plan_debt takes it from the next plan grants (ref <grant ref>:debt, reason plan_debt). Only reason
+--   plan_change can create debt (credit_plan_clawback refuses any other); refund, dispute and the cron's settlement
+--   (plan_adjustment) clawbacks never do.
+-- credit_renew_plan_capped(user, allotment, ref, cap): a monthly allotment paid by an invoice that also moves between
+--   plans, with the rollover cap at the largest of the invoice's monthly levels.
 -- credit_period_apply(...): one grant or clawback for a period under a per-period advisory lock, applied only when
 --   the period still stands at the total the caller computed from (else 'stale': re-read and retry), so the cron, a
 --   webhook and a retry of either can never both act on the same state.
@@ -133,6 +138,7 @@ create table public.credit_plan_lines (
   period_end timestamptz,
   amount_cents integer not null,
   credits integer not null,
+  starts_at timestamptz,
   created_at timestamptz not null default now(),
   check (kind = 'month' or period_end is not null)
 );
@@ -167,22 +173,59 @@ as $$
 $$;
 
 create function public.credit_plan_line_record(
-  p_key text, p_invoice text, p_sub text, p_kind text, p_period_end timestamptz, p_amount integer, p_credits integer
+  p_key text, p_invoice text, p_sub text, p_kind text, p_period_end timestamptz, p_amount integer, p_credits integer,
+  p_starts_at timestamptz default null
 )
 returns void
 language sql
 security definer
 set search_path = public, pg_temp
 as $$
-  insert into credit_plan_lines (line_key, invoice_id, sub_id, kind, period_end, amount_cents, credits)
-  values (p_key, p_invoice, p_sub, p_kind, p_period_end, p_amount, p_credits)
+  insert into credit_plan_lines (line_key, invoice_id, sub_id, kind, period_end, amount_cents, credits, starts_at)
+  values (p_key, p_invoice, p_sub, p_kind, p_period_end, p_amount, p_credits, p_starts_at)
   on conflict (line_key) do nothing;
+$$;
+
+-- A monthly allotment paid by an invoice that also moves between plans: granted like credit_renew_plan, but the
+-- rollover cap is p_cap (the largest monthly level among the invoice's plans) instead of the new allotment, so the
+-- switch never expires the old plan's credits for the time just used. The rollover rule applies again at the next
+-- renewal.
+create function public.credit_renew_plan_capped(p_user uuid, p_allotment integer, p_ref text, p_cap integer)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  a credit_accounts;
+  r credit_ledger;
+  v_target integer;
+  v_result jsonb;
+begin
+  perform credit_check_args(p_allotment, 'plan_renewal', p_ref);
+  a := credit_lock_account(p_user, 'video');
+  r := credit_replay(p_user, 'video', 'plan_renewal', p_ref, 'renew', p_allotment, null);
+  if r.id is not null then
+    return credit_to_json(a);
+  end if;
+  v_target := greatest(least(a.plan_balance, greatest(coalesce(p_cap, p_allotment), p_allotment)) + p_allotment,
+                       a.held - a.topup_balance);
+  v_result := credit_apply(p_user, 'video', p_allotment, 0, 0, 'plan_renewal', p_ref, null, 'renew', p_allotment);
+  if a.plan_balance + p_allotment > v_target then
+    v_result := credit_apply(
+      p_user, 'video', v_target - (a.plan_balance + p_allotment), 0, 0,
+      'plan_expiry', p_ref, null, 'expire', a.plan_balance + p_allotment - v_target
+    );
+  end if;
+  return v_result;
+end
 $$;
 
 alter table public.credit_accounts add column plan_debt integer not null default 0 check (plan_debt >= 0);
 
 -- A plan change's clawback (reason plan_change): what it cannot take now (spent, not on hold) becomes plan_debt.
--- A replay of the same ref adds nothing.
+-- A replay of the same ref adds nothing. Any other reason is refused: only the clawback of a plan-change invoice's own
+-- unused-time lines may create debt (a refund, a dispute or the cron's settlement takes what is there and owes nothing).
 create function public.credit_plan_clawback(p_user uuid, p_amount integer, p_reason text, p_ref text)
 returns jsonb
 language plpgsql
@@ -194,6 +237,9 @@ declare
   r jsonb;
   v_lost integer;
 begin
+  if p_reason is distinct from 'plan_change' then
+    raise exception 'plan_debt_reason';
+  end if;
   a := credit_lock_account(p_user, 'video');
   if exists (select 1 from credit_ledger
               where user_id = p_user and currency = 'video' and reason = p_reason and ref = p_ref) then
@@ -410,7 +456,7 @@ begin
         and p.proname = any (array[
           'credit_yearly_record', 'credit_yearly_sync', 'credit_yearly_raise', 'credit_yearly_period_record',
           'credit_yearly_period_end', 'credit_plan_line_record', 'credit_period_state', 'credit_period_apply',
-          'credit_plan_clawback', 'credit_collect_plan_debt',
+          'credit_plan_clawback', 'credit_collect_plan_debt', 'credit_renew_plan_capped',
           'credit_charge_closed_hold'
         ])
   loop
