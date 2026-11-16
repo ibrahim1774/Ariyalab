@@ -377,12 +377,14 @@ describe('money', () => {
     expect(history.messages.at(-1).confirms).toEqual([{ ...res.body.confirms[0], state: 'open' }]);
   });
 
-  it('an included regeneration runs at no charge, pinned to a price of 0', async () => {
+  it('an included regeneration is a card at 0 credits; pressing it runs at no charge (round 3 E1)', async () => {
     const { userId, user, project, cast } = await newProject({ cast: { regens_used: 0 } });
     const before = { balance: await getBalance(userId), ledger: await ledgerCount(userId) };
     const result = await runTool({ userId, user, chatProjectId: project.id, name: 'regenerate_character', input: { cast_id: cast.id, note: 'a red cap' } });
-    expect(result).toMatchObject({ ok: true, charged: 0, changed: 'cast' });
-    expect(result.needsConfirm).toBeUndefined();
+    expect(result).toMatchObject({ ok: true, needsConfirm: true, quote: { credits: 0 }, confirm: { action: 'cast-regen', body: { castId: cast.id, note: 'a red cap', expected_credits: 0 } } });
+    expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(0);
+    const out = await runConfirm({ userId, user, projectId: project.id, confirm: result.confirm });
+    expect(out.charged).toBe(0);
     expect(await getBalance(userId)).toEqual(before.balance);
     expect(await ledgerCount(userId)).toBe(before.ledger);
     expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(1);
@@ -630,8 +632,9 @@ describe('round 2', () => {
     const draft = await newProject({ shots: 1 });
     await storyDb().update('story_shots', { id: draft.shots[0].id }, { scene_sig: sceneSig(SCENES[0]) });
     const free = await runTool({ userId: draft.userId, user: draft.user, chatProjectId: draft.project.id, name: 'make_picture', input: { shot_id: draft.shots[0].id } });
-    expect(free).toMatchObject({ ok: true, changed: 'shots', charged: 0 });
-    expect(free.needsConfirm).toBeUndefined();
+    // Round 3 E1: an included picture is a card too, at 0 credits.
+    expect(free).toMatchObject({ ok: true, needsConfirm: true, quote: { credits: 0 }, confirm: { action: 'stills', body: { shotIds: [draft.shots[0].id], expected_credits: 0 } } });
+    expect(await jobCount(draft.project.id)).toBe(0);
   });
 
   it('D3: once the action has run, a later failure keeps the card used, so a second press cannot charge again', async () => {
@@ -684,5 +687,101 @@ describe('round 2 follow-up: the stills action passes expected_credits', () => {
     await expect(stills({ userId, user, projectId: project.id, project, body: { shotIds: [shots[0].id], expected_credits: 0 } }))
       .rejects.toMatchObject({ status: 409, code: 'quote_changed' });
     expect(await jobCount(project.id)).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------- round 3
+
+describe('round 3', () => {
+  it('E1: no tool starts anything on the chat route; every start is a card (included ones at 0 credits) that runs when pressed', async () => {
+    const castP = await newProject({ cast: { regens_used: 0 } });
+    const gen = await genProject({ clips: true });
+    const pic = await genProject();
+    await storyDb().update('story_shots', { id: pic.shots[0].id }, { status: 'draft', still_url: null, still_key: null, still_delivered: false });
+    const runs = [
+      [castP, tool('regenerate_character', { cast_id: castP.cast.id })],
+      [gen, tool('remake_clip', { shot_id: gen.shots[0].id })],
+      [pic, tool('make_picture', { shot_id: pic.shots[0].id })],
+    ];
+    for (const [ctx, message] of runs) {
+      const before = { jobs: await jobCount(ctx.project.id), ledger: await ledgerCount(ctx.userId) };
+      const out = await sendChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, message });
+      expect(out.confirms, message).toHaveLength(1);
+      // The remake fixture has no delivered clip jobs, so its remake is priced; the other two are included.
+      if (!message.includes('remake_clip')) expect(out.confirms[0].quote.credits, message).toBe(0);
+      expect(out.changed, message).toEqual([]);
+      expect(await jobCount(ctx.project.id), message).toBe(before.jobs);
+      expect(await ledgerCount(ctx.userId), message).toBe(before.ledger);
+      // Pressed on the short route, the included card runs at no charge.
+      signIn(ctx.user);
+      const res = await confirmVia({ projectId: ctx.project.id, confirmId: out.confirms[0].id });
+      expect(res.statusCode, message).toBe(200);
+      expect(res.body.charged, message).toBe(out.confirms[0].quote.credits);
+      expect(await jobCount(ctx.project.id), message).toBeGreaterThan(before.jobs);
+      if (out.confirms[0].quote.credits === 0) expect(await ledgerCount(ctx.userId), message).toBe(before.ledger);
+    }
+  });
+
+  it('E2: a claim lost after the hold is marked after commit, and the card stays used', async () => {
+    const { _setShotsDeps } = await import('../../lib/story/shots.js');
+    const { holdCredits } = await import('../../lib/credits.js');
+    const { userId, user, project } = await genProject();
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('get_quote') });
+    _setShotsDeps({
+      holdCredits: async (args) => {
+        const out = await holdCredits(args);
+        // A stall recovery takes the claim while this request is still queuing.
+        await storyDb().update('story_projects', { id: project.id }, { gen_claim_id: null });
+        return out;
+      },
+    });
+    let res;
+    try {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      res = await confirmVia({ projectId: project.id, confirmId: sent.body.confirms[0].id });
+    } finally {
+      _setShotsDeps();
+      vi.restoreAllMocks();
+    }
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toBe('shots_busy');
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('used');
+  });
+
+  it('E2: an error marked afterCommit keeps the card used even when it is a StoryError', async () => {
+    const { ConflictError } = await import('../../lib/story/errors.js');
+    const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id }) });
+    _setConfirmRunner(async () => {
+      throw Object.assign(new ConflictError('Changed.', { code: 'shots_busy' }), { afterCommit: true });
+    });
+    try {
+      expect((await confirmVia({ projectId: project.id, confirmId: sent.body.confirms[0].id })).statusCode).toBe(409);
+    } finally {
+      _setConfirmRunner();
+    }
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('used');
+  });
+
+  it('E3: a card whose price cannot be read is out of date and the chat still lists', async () => {
+    const { userId, user, project } = await genProject();
+    await storyDb().insert('story_chat', {
+      project_id: project.id, role: 'assistant',
+      content: [{ type: 'text', text: 'x' }, { type: 'confirm', id: randomUUID(), tool: 'get_quote', needsConfirm: true, quote: { label: 'Make clips', credits: 5 }, confirm: { action: 'generate', method: 'POST', body: { shotIds: 'not a list', confirmTotal: 5 } } }],
+    });
+    const out = await listChat({ userId, user, projectId: project.id });
+    expect(out.messages.at(-1).confirms[0].state).toBe('outdated');
+  });
+
+  it('E3: listing the chat reads prices without the stall recovery writes', async () => {
+    const { userId, user, project } = await genProject();
+    signIn(user);
+    await post({ projectId: project.id, message: tool('get_quote') });
+    const claim = randomUUID();
+    await storyDb().update('story_projects', { id: project.id }, { gen_claim_id: claim, gen_claimed_at: new Date(Date.now() - 10 * 60_000).toISOString(), gen_shots: [] });
+    await listChat({ userId, user, projectId: project.id });
+    expect((await storyDb().select('story_projects', { id: project.id }))[0].gen_claim_id).toBe(claim);
   });
 });

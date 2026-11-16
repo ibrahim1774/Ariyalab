@@ -201,3 +201,15 @@ describe('round 2 D4: cards follow the server state', () => {
     expect(screen.queryByRole('button', { name: /Start for/ })).toBeNull();
   });
 });
+
+describe('round 3 E1: included cards', () => {
+  it('a card at 0 credits reads Start (included) and presses through the confirm route', async () => {
+    const included = { ...CONFIRM, id: 'c-free', quote: { label: 'New pictures of Maya', credits: 0 }, confirm: { ...CONFIRM.confirm, body: { castId: 'c1', note: '', expected_credits: 0 } } };
+    client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'x', [included])], usage: { used: 1, limit: 150 } });
+    client.confirmChatAction.mockResolvedValue({ charged: 0 });
+    render(<ChatPanel project={project} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start (included)' }));
+    expect(client.confirmChatAction).toHaveBeenCalledWith('p1', 'c-free');
+    expect(await screen.findByText('Started')).toBeInTheDocument();
+  });
+});

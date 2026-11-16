@@ -46,7 +46,7 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
       {state === 'outdated' && <span className={styles.confirmOld}>Out of date</span>}
       {(state === 'open' || state === 'busy') && (
         <button type="button" className={styles.confirmButton} onClick={press} disabled={state === 'busy'}>
-          {state === 'busy' ? 'Starting…' : `Start for ${quote.credits} credits`}
+          {state === 'busy' ? 'Starting…' : quote.credits > 0 ? `Start for ${quote.credits} credits` : 'Start (included)'}
         </button>
       )}
       {error && <ErrorNotice error={error} returnTo={returnTo} onRefresh={onDone} />}
