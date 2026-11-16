@@ -39,7 +39,12 @@ vi.mock('../../lib/providers/tts.js', async (importOriginal) => {
 // A release that fails (the database was unreachable for a moment) must leave the hold on the row, to be closed later.
 vi.mock('../../lib/credits.js', async (importOriginal) => {
   const real = await importOriginal();
-  return { ...real, releaseHold: vi.fn(async (args) => { if (globalThis.__releaseFail) throw new Error('database unreachable'); return real.releaseHold(args); }) };
+  return {
+    ...real,
+    releaseHold: vi.fn(async (args) => { if (globalThis.__releaseFail) throw new Error('database unreachable'); return real.releaseHold(args); }),
+    // A test can look at the rows at the moment a hold is taken.
+    holdCredits: vi.fn(async (args) => { await globalThis.__onHold?.(args); return real.holdCredits(args); }),
+  };
 });
 vi.mock('../../lib/providers/http.js', async (importOriginal) => {
   const real = await importOriginal();
@@ -371,6 +376,26 @@ describe('a clone that fails', () => {
     const [failed] = await voiceRows(userId);
     await expect(retryVoice({ userId, id: failed.id })).rejects.toMatchObject({ name: 'InsufficientCreditsError' });
     expect((await voiceRows(userId))[0]).toMatchObject({ status: 'failed', attempts: 1 });
+  });
+
+  it('final review M2: the hold id is on the voice row before the hold exists, so a request that dies between can be closed', async () => {
+    const userId = await newUser({ funds: 100 });
+    const seen = [];
+    globalThis.__onHold = async ({ holdId }) => { seen.push({ holdId, rows: await voiceRows(userId) }); };
+    try {
+      await clone(userId);
+    } finally {
+      globalThis.__onHold = null;
+    }
+    expect(seen).toHaveLength(1);
+    expect(seen[0].rows).toMatchObject([{ status: 'pending', hold_id: seen[0].holdId }]);
+    // Had the request died right there, recovery closes the row (the hold that was never made counts as released).
+    const [orphan] = await storyDb().insert('story_voices', {
+      user_id: userId, name: 'Died', provider: 'fish', status: 'pending', hold_id: randomUUID(), cost_credits: 20,
+      consent_at: new Date().toISOString(), consent_statement: CONSENT_STATEMENT,
+    });
+    await recoverStalledVoices(userId, { now: Date.now() + HOUR });
+    expect((await storyDb().select('story_voices', { id: orphan.id }))[0]).toMatchObject({ status: 'failed', hold_id: null });
   });
 
   it("a stalled request is closed: a pending row past the window fails and its hold is released; a ready row's open hold is settled", async () => {
