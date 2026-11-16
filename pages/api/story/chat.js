@@ -1,14 +1,13 @@
 import { getUserFromRequest } from '../../../lib/supabaseServer.js';
 import { sendError } from '../../../lib/story/errors.js';
-import { confirmChat, listChat, sendChat } from '../../../lib/story/chat.js';
+import { listChat, sendChat } from '../../../lib/story/chat.js';
 
 /*
  * /api/story/chat: the chat helper (lib/story/chat.js).
  *
  *   GET  ?projectId=<id>              -> { messages, usage: { used, limit } }
  *   POST { projectId, message }       -> { reply, confirms, tools, changed, usage, messages }
- *   POST { projectId, confirmId }     -> presses a confirm card: the stored action's result + { confirmId };
- *                                        409 confirm_used / confirm_outdated, 404 for an unknown card
+ * Confirm cards are pressed through /api/story/chat/confirm (maxDuration 25).
  *
  * 401 without a session; 405 (Allow) for other methods; 422 for a missing or
  * too long message; 404 for a project that is not the caller's; 400/503 when
@@ -34,9 +33,6 @@ export default async function handler(req, res) {
     }
     const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
     const projectId = typeof body.projectId === 'string' ? body.projectId : '';
-    if (body.confirmId !== undefined) {
-      return res.status(200).json(await confirmChat({ userId, user: session.user, projectId, confirmId: body.confirmId }));
-    }
     return res.status(200).json(await sendChat({ userId, user: session.user, projectId, message: body.message }));
   } catch (err) {
     return sendError(res, err);

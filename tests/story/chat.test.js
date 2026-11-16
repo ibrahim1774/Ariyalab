@@ -15,6 +15,11 @@ import { storyChatMock } from '../../lib/story/mocks.js';
 import { CHAT_TOOLS, runTool } from '../../lib/story/chatTools.js';
 import { sendChat, listChat, buildChatSystem, screenReply, MAX_TOOL_CALLS, CHAT_FALLBACK_REPLY, CHAT_REFUSED_REPLY } from '../../lib/story/chat.js';
 import handler, { config } from '../../pages/api/story/chat.js';
+import confirmHandler, { config as confirmConfig } from '../../pages/api/story/chat/confirm.js';
+import { _setConfirmRunner } from '../../lib/story/chat.js';
+import { runConfirm } from '../../lib/story/chatTools.js';
+import { generateStills, sceneSig } from '../../lib/story/storyboard.js';
+import { quoteGeneration } from '../../lib/story/shots.js';
 
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
@@ -94,6 +99,12 @@ const seedUsage = (userId, projectId, count) => raw.query(
 const ledgerCount = async (userId) => Number((await raw.query('select count(*)::int as n from credit_ledger where user_id = $1', [userId])).rows[0].n);
 const latestScript = async (projectId) => (await storyDb().select('story_scripts', { project_id: projectId }, { order: '-version', limit: 1 }))[0];
 const jobCount = async (projectId) => (await storyDb().select('story_jobs', { project_id: projectId })).length;
+
+async function confirmVia(body) {
+  const res = makeRes();
+  await confirmHandler(makeReq({ method: 'POST', body }), res);
+  return res;
+}
 
 function signIn(user) {
   globalThis.__chatTestSession = { user };
@@ -251,11 +262,6 @@ describe('round 1', () => {
     expect(await usage(userId, project.id)).toBe(1);
   });
 
-  const confirmVia = async (body) => {
-    const res = makeRes();
-    await handler(makeReq({ method: 'POST', body }), res);
-    return res;
-  };
 
   it('C3: a confirm card runs once through its id; a replay after reload is refused and charges nothing', async () => {
     const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
@@ -383,22 +389,25 @@ describe('money', () => {
   });
 
   it('get_quote reads the price and charges nothing', async () => {
-    const { userId, user, project } = await newProject({ shots: 3 });
+    const { userId, user, project } = await genProject();
     const before = await ledgerCount(userId);
     const result = await runTool({ userId, user, chatProjectId: project.id, name: 'get_quote', input: {} });
     const pricing = await getPricing();
-    expect(result).toMatchObject({ ok: true });
-    expect(result.quote.total).toBe(pricing.projectFee + 3 * 3 * pricing.perSecond.standard);
-    expect(result.quote.lines[0]).toEqual({ label: 'Project fee', credits: pricing.projectFee });
+    expect(result).toMatchObject({ ok: true, needsConfirm: true });
+    expect(result.quote.total).toBe(3 * 3 * pricing.perSecond.standard);
     expect(result.quote.shotIds).toHaveLength(3);
     expect(result.balance.available).toBe(1000);
-    expect(result.needsConfirm).toBeUndefined();
     expect(await ledgerCount(userId)).toBe(before);
+    // A storyboard that needs rebuilding is a readable refusal, not a price.
+    const stale = await newProject({ shots: 2 });
+    expect(await runTool({ userId: stale.userId, user: stale.user, chatProjectId: stale.project.id, name: 'get_quote', input: {} }))
+      .toMatchObject({ ok: false, error: 'needs_rebuild' });
   });
 
   it('every tool result is plain data the model can read, and no tool exposes a spend', () => {
     expect(CHAT_TOOLS.map((t) => t.name)).toEqual([
       'get_project', 'revise_script', 'update_scene', 'regenerate_character', 'update_shot', 'set_style', 'set_length', 'get_quote',
+      'make_picture', 'remake_clip',
     ]);
     for (const t of CHAT_TOOLS) {
       expect(t.description, t.name).toMatch(/\S/);
@@ -538,5 +547,131 @@ describe('route and history', () => {
     signIn(user);
     const res = await post({ projectId: project.id, message: tool('set_length', { seconds: 45 }) });
     expect(res.body.changed).toEqual(['project']);
+  });
+});
+
+// ---------------------------------------------------------------- round 2
+
+/** A project whose shots have current pictures (and, with clips: true, ready clips), so Generate and Make it again can run. */
+async function genProject({ n = 3, clips = false, funds = 1000, rerollsUsed = 0 } = {}) {
+  const base = await newProject({ funds });
+  await storyDb().update('story_projects', { id: base.project.id }, { step: 'generate', fee_charged: true, rerolls_used: rerollsUsed });
+  const rows = Array.from({ length: n }, (_, i) => ({
+    project_id: base.project.id, ord: i, scene_id: SCENES[i % 2].id, scene_sig: sceneSig(SCENES[i % 2]), description: `Shot ${i + 1} of the shop.`,
+    line: null, seconds: 3, quality: 'standard', status: clips ? 'ready' : 'still_ready', still_url: `/still/${i}.png`, still_key: `still-${i}`, still_delivered: true,
+    ...(clips ? { clip_url: `/clip/${i}.mp4`, clip_key: `clip-${i}` } : {}),
+  }));
+  const shots = (await storyDb().insert('story_shots', rows)).sort((a, b) => a.ord - b.ord);
+  const [project] = await storyDb().select('story_projects', { id: base.project.id });
+  return { ...base, project, shots };
+}
+
+describe('round 2', () => {
+  it('D1: the confirm route is short (25 s) and the model turn route keeps 120 s', () => {
+    expect(confirmConfig.maxDuration).toBe(25);
+    expect(config.maxDuration).toBe(120);
+  });
+
+  it('D1: get_quote offers a Generate card at the server quote, and pressing it generates once at that total', async () => {
+    const { userId, user, project, shots } = await genProject();
+    const quote = await quoteGeneration({ userId, projectId: project.id });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('get_quote') });
+    const [card] = sent.body.confirms;
+    expect(card).toMatchObject({
+      tool: 'get_quote',
+      quote: { credits: quote.total },
+      confirm: { action: 'generate', method: 'POST', body: { shotIds: quote.shotIds, confirmTotal: quote.total } },
+    });
+    expect(await ledgerCount(userId)).toBe(1);
+    const res = await confirmVia({ projectId: project.id, confirmId: card.id });
+    expect(res.statusCode).toBe(200);
+    expect(res.body.charged).toBe(quote.total);
+    expect(res.body.queued).toHaveLength(shots.length);
+    const after = await ledgerCount(userId);
+    const again = await confirmVia({ projectId: project.id, confirmId: card.id });
+    expect(again.body.error).toBe('confirm_used');
+    expect(await ledgerCount(userId)).toBe(after);
+  });
+
+  it('D1: Make it again on a clip with no included remakes left is a card with expected_credits, run through reroll', async () => {
+    const { userId, user, project, shots } = await genProject({ clips: true, rerollsUsed: 99 });
+    const before = await ledgerCount(userId);
+    const result = await runTool({ userId, user, chatProjectId: project.id, name: 'remake_clip', input: { shot_id: shots[0].id } });
+    expect(result).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'reroll', method: 'POST', body: { shotId: shots[0].id } } });
+    expect(result.quote.credits).toBeGreaterThan(0);
+    expect(result.confirm.body.expected_credits).toBe(result.quote.credits);
+    expect(await ledgerCount(userId)).toBe(before);
+    const out = await runConfirm({ userId, user, projectId: project.id, confirm: result.confirm });
+    expect(out.charged).toBe(result.quote.credits);
+  });
+
+  it('D2: /stills takes expected_credits: a different price is 409 quote_changed and nothing starts', async () => {
+    const { userId, user, project, shots } = await genProject();
+    const before = await ledgerCount(userId);
+    const err = await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id], expectedCredits: 0, user }).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(err.extra.credits).toBe((await getPricing()).stillReroll);
+    expect(await ledgerCount(userId)).toBe(before);
+    expect(await jobCount(project.id)).toBe(0);
+    const ok = await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id], expectedCredits: (await getPricing()).stillReroll, user });
+    expect(ok.queued).toEqual([shots[0].id]);
+  });
+
+  it('D2: make_picture offers a priced picture as a card and makes an included one at once', async () => {
+    const { userId, user, project, shots } = await genProject();
+    const pricing = await getPricing();
+    const priced = await runTool({ userId, user, chatProjectId: project.id, name: 'make_picture', input: { shot_id: shots[0].id } });
+    expect(priced).toMatchObject({
+      ok: true, needsConfirm: true,
+      quote: { credits: pricing.stillReroll },
+      confirm: { action: 'stills', method: 'POST', body: { shotIds: [shots[0].id], expected_credits: pricing.stillReroll } },
+    });
+    const draft = await newProject({ shots: 1 });
+    await storyDb().update('story_shots', { id: draft.shots[0].id }, { scene_sig: sceneSig(SCENES[0]) });
+    const free = await runTool({ userId: draft.userId, user: draft.user, chatProjectId: draft.project.id, name: 'make_picture', input: { shot_id: draft.shots[0].id } });
+    expect(free).toMatchObject({ ok: true, changed: 'shots', charged: 0 });
+    expect(free.needsConfirm).toBeUndefined();
+  });
+
+  it('D3: once the action has run, a later failure keeps the card used, so a second press cannot charge again', async () => {
+    const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id }) });
+    _setConfirmRunner(async (args) => {
+      await runConfirm(args);
+      throw new Error('read after the hold failed');
+    });
+    try {
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = await confirmVia({ projectId: project.id, confirmId: sent.body.confirms[0].id });
+      expect(res.statusCode).toBe(500);
+    } finally {
+      _setConfirmRunner();
+      vi.restoreAllMocks();
+    }
+    const ledger = await ledgerCount(userId);
+    const again = await confirmVia({ projectId: project.id, confirmId: sent.body.confirms[0].id });
+    expect(again.body.error).toBe('confirm_used');
+    expect(await ledgerCount(userId)).toBe(ledger);
+    expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(3);
+  });
+
+  it('D3: a refusal raised before anything is held gives the card back', async () => {
+    const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
+    signIn(user);
+    const sent = await post({ projectId: project.id, message: tool('regenerate_character', { cast_id: cast.id }) });
+    accounts.set({ paid: false });
+    const res = await confirmVia({ projectId: project.id, confirmId: sent.body.confirms[0].id });
+    expect(res.statusCode).toBe(402);
+    expect((await listChat({ userId, user, projectId: project.id })).messages.at(-1).confirms[0].state).toBe('open');
+  });
+
+  it('the chat route no longer runs confirm cards', async () => {
+    const { user, project } = await newProject();
+    signIn(user);
+    const res = await post({ projectId: project.id, confirmId: randomUUID() });
+    expect(res.statusCode).toBe(422);
+    expect(llmCalls).toBe(0);
   });
 });

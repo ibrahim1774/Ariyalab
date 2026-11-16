@@ -174,3 +174,30 @@ describe('MakerPage chat wiring (round 1 C6)', () => {
     expect(client.getScript).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('round 2 D4: cards follow the server state', () => {
+  it('a press that loses to another tab reloads the chat and shows what the winner left', async () => {
+    client.getChat
+      .mockResolvedValueOnce({ messages: [msg('a1', 'assistant', 'x', [CONFIRM])], usage: { used: 1, limit: 150 } })
+      .mockResolvedValue({ messages: [msg('a1', 'assistant', 'x', [{ ...CONFIRM, state: 'used' }])], usage: { used: 1, limit: 150 } });
+    client.confirmChatAction.mockRejectedValue(new StoryApiError({ status: 409, code: 'confirm_outdated', message: 'Out of date.' }));
+    const onChanged = vi.fn();
+    render(<ChatPanel project={project} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start for 5 credits' }));
+    await waitFor(() => expect(client.getChat).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Started')).toBeInTheDocument();
+    expect(onChanged).toHaveBeenCalled();
+  });
+
+  it('cards read their state again when the panel reloads (the tab comes back into view)', async () => {
+    client.getChat
+      .mockResolvedValueOnce({ messages: [msg('a1', 'assistant', 'x', [CONFIRM])], usage: { used: 1, limit: 150 } })
+      .mockResolvedValue({ messages: [msg('a1', 'assistant', 'x', [{ ...CONFIRM, state: 'outdated' }])], usage: { used: 1, limit: 150 } });
+    render(<ChatPanel project={project} onChanged={vi.fn()} />);
+    await screen.findByRole('button', { name: 'Start for 5 credits' });
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(await screen.findByText('Out of date')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Start for/ })).toBeNull();
+  });
+});

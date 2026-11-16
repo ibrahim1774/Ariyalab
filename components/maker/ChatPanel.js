@@ -11,8 +11,12 @@ const SUGGESTIONS = ['Make the opening funnier', 'Make it 45 seconds', 'What wil
  * stored, once. A used card shows "Started"; an out of date one (the price moved, or a newer card replaced it) cannot
  * be pressed.
  */
-function ConfirmCard({ projectId, item, returnTo, onDone }) {
+function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
   const [state, setState] = useState(item.state || 'open'); // open | busy | used | outdated
+  // The server's state wins whenever the panel reloads (another tab may have pressed it).
+  useEffect(() => {
+    setState((current) => (current === 'busy' ? current : item.state || 'open'));
+  }, [item.state]);
   const [error, setError] = useState(null);
   const { quote, confirm } = item;
   const note = confirm?.body?.note;
@@ -28,6 +32,8 @@ function ConfirmCard({ projectId, item, returnTo, onDone }) {
       else if (err?.code === 'confirm_outdated') setState('outdated');
       else setState('open');
       setError(err?.code === 'confirm_used' ? null : err);
+      // Lost to another press or a price change: read every card again, and what the winner changed.
+      if (err?.code === 'confirm_used' || err?.code === 'confirm_outdated' || err?.code === 'quote_changed') onStale?.();
     }
   };
   return (
@@ -77,6 +83,15 @@ export default function ChatPanel({ project, onChanged, returnTo }) {
 
   useEffect(() => {
     load();
+  }, [load]);
+
+  // Coming back to the tab reads the chat again, so cards pressed elsewhere show their state.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') load();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
   }, [load]);
 
   // Scroll to the newest message once it has laid out (a confirm card is taller than its first paint), so it is never clipped.
@@ -156,7 +171,7 @@ export default function ChatPanel({ project, onChanged, returnTo }) {
             <li key={m.id} className={m.role === 'user' ? styles.mine : styles.theirs} data-role={m.role}>
               <p className={styles.bubble}>{m.text}</p>
               {(m.confirms || []).map((c, i) => (
-                <ConfirmCard key={`${m.id}-${i}`} projectId={projectId} item={c} returnTo={returnTo} onDone={() => onChanged?.(['cast'])} />
+                <ConfirmCard key={`${m.id}-${i}`} projectId={projectId} item={c} returnTo={returnTo} onDone={() => onChanged?.([c.confirm?.action === 'cast-regen' ? 'cast' : 'shots'])} onStale={() => { load(); onChanged?.(); }} />
               ))}
             </li>
           ))}
