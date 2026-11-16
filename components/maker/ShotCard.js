@@ -159,7 +159,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
         {editable && !editing && (
           <div className={`${styles.actions} ${more ? styles.actionsOpen : ''}`}>
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} title="Make a new picture for this shot"
-              onClick={() => run('still', () => makeStills(project.id, [shot.id]))}>
+              onClick={() => run('still', () => makeStills(project.id, [shot.id], ...(Number.isInteger(shot.still_credits) ? [shot.still_credits] : [])))}>
               {busy === 'still' ? 'Making…' : remakeCost > 0 ? `Make it again, ${remakeCost} credits` : 'Make it again'}
             </Button>
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>

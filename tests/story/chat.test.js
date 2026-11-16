@@ -675,3 +675,14 @@ describe('round 2', () => {
     expect(llmCalls).toBe(0);
   });
 });
+
+describe('round 2 follow-up: the stills action passes expected_credits', () => {
+  it('POST stills with a different expected_credits is 409 quote_changed and starts nothing', async () => {
+    const { getAction } = await import('../../lib/story/actions.js');
+    const { userId, user, project, shots } = await genProject();
+    const { handler: stills } = getAction('stills', 'POST');
+    await expect(stills({ userId, user, projectId: project.id, project, body: { shotIds: [shots[0].id], expected_credits: 0 } }))
+      .rejects.toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(await jobCount(project.id)).toBe(0);
+  });
+});
