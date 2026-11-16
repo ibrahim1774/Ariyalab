@@ -19,7 +19,12 @@ const { setStoryDb, storyDb } = await import('../../lib/story/db.js');
 const { setCreditsDb, grantCredits, getBalance } = await import('../../lib/credits.js');
 const { setPricingDb, _resetPricingCache, getPricing } = await import('../../lib/pricing.js');
 const oauth = await import('../../lib/mcp/oauth.js');
-const { tick, runWorkerJob } = await import('../../lib/story/runner.js');
+const { tick, runWorkerJob, sweep, WORKER_KINDS } = await import('../../lib/story/runner.js');
+const { registerMock } = await import('../../lib/providers/mock.js');
+const mockFn = (name) => globalThis.__storyProviderMock.registry.get(name);
+const { generateCast } = await import('../../lib/story/cast.js');
+const { _setMcpRateLimit } = await import('../../lib/mcp/server.js');
+const draftRoute = await import('../../pages/api/story/worker/draft.js');
 const { sceneSig } = await import('../../lib/story/storyboard.js');
 const { quoteGeneration } = await import('../../lib/story/shots.js');
 const { RIGHTS_STATEMENT } = await import('../../lib/story/referenceRules.js');
@@ -31,15 +36,19 @@ const tokenHandler = (await import('../../pages/api/oauth/token.js')).default;
 const consentPage = await import('../../pages/oauth/consent.js');
 
 useRegexOnlyModeration();
-useTestAccounts();
+const accounts = useTestAccounts();
 
 const ISSUER = 'https://app.test';
 const RESOURCE = `${ISSUER}/api/mcp`;
 const CALLBACK = 'https://claude.ai/api/mcp/auth_callback';
 const TOOL_NAMES = [
   'create_project', 'analyze_reference', 'get_project', 'write_script', 'set_script', 'generate_cast', 'pick_cast',
-  'generate_storyboard', 'get_quote', 'generate_video', 'get_status', 'render', 'get_result',
+  'generate_storyboard', 'get_quote', 'generate_video', 'make_audio', 'get_status', 'render', 'get_result',
 ];
+
+// Every model call the story services make, by mock responder name (the drafting tools must make none in the route).
+const modelCalls = { story_script: 0, story_cast: 0, story_shots: 0 };
+const modelTotal = () => Object.values(modelCalls).reduce((a, b) => a + b, 0);
 
 let raw;
 let server;
@@ -74,8 +83,23 @@ afterAll(async () => {
   await raw?.close();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
   _resetPricingCache();
+  _setMcpRateLimit(null);
+  for (const name of Object.keys(modelCalls)) {
+    modelCalls[name] = 0;
+    const real = mockFn(name);
+    if (!real.__counted) {
+      const counted = (input) => {
+        modelCalls[name] += 1;
+        return real(input);
+      };
+      counted.__counted = true;
+      registerMock(name, counted);
+    }
+  }
+  // runWorkerJob claims from any project: drafts left by an earlier test must not run in this one.
+  await raw.query(`update story_jobs set status = 'failed', applied_at = now() where kind in ('script', 'narration', 'music', 'render') and status in ('queued', 'running')`);
   vi.stubEnv('APP_URL', ISSUER);
   vi.stubEnv('VERCEL', '');
   vi.stubEnv('VERCEL_ENV', '');
@@ -193,6 +217,38 @@ async function ledger(userId) {
 const charged = (rows) => rows.filter((r) => r.op === 'settle' || r.op === 'spend').reduce((n, r) => n + r.amount, 0);
 const jobsOf = (projectId) => storyDb().select('story_jobs', { project_id: projectId });
 const holdsOf = async (userId) => (await raw.query('select id from credit_holds where user_id = $1', [userId])).rows;
+
+/** What the draft worker route does when it is kicked: runs every queued drafting job. -> how many ran */
+async function runDrafts() {
+  let n = 0;
+  while ((await runWorkerJob('script', {})).claimed) n += 1;
+  return n;
+}
+const setFee = async (fee) => {
+  await raw.query(`insert into pricing_config (key, value) values ('projectFee', $1::jsonb) on conflict (key) do update set value = excluded.value`, [JSON.stringify(fee)]);
+  _resetPricingCache();
+};
+const clearFee = async () => {
+  await raw.query(`delete from pricing_config where key = 'projectFee'`);
+  _resetPricingCache();
+};
+
+/** A new project with a written script, through the tools. -> projectId */
+async function projectWithScript(client, fields = {}) {
+  const { data } = await use(client, 'create_project', { title: 'Barber app', purpose: 'app', offer: 'A booking app for barbers', seconds: 15, ...fields });
+  const queued = await use(client, 'write_script', { project_id: data.project.id });
+  expect(queued.isError, queued.text).toBe(false);
+  expect(await runDrafts()).toBe(1);
+  return data.project.id;
+}
+
+/** Drafts the cast and returns generate_cast's quote answer. */
+async function draftCast(client, projectId) {
+  const queued = await use(client, 'generate_cast', { project_id: projectId });
+  expect(queued.data.drafting, queued.text).toMatchObject({ task: 'cast', status: 'queued' });
+  expect(await runDrafts()).toBe(1);
+  return use(client, 'generate_cast', { project_id: projectId });
+}
 
 let clock = Date.parse('2026-11-16T12:00:00.000Z');
 /** What the cron does between polls: runs this project's queued and running jobs with the mock providers. */
@@ -316,10 +372,12 @@ describe('money', () => {
     const { data: created } = await use(client, 'create_project', { title: 'Fee test', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
     const projectId = created.project.id;
     expect((await use(client, 'write_script', { project_id: projectId })).isError).toBe(false);
+    await runDrafts();
     const fee = (await getPricing()).projectFee;
 
-    const quote = await use(client, 'generate_cast', { project_id: projectId });
+    const quote = await draftCast(client, projectId);
     expect(quote.data).toMatchObject({ needs_confirmation: true, quote: { total: fee } });
+    expect(quote.data.characters.length).toBeGreaterThan(0);
     const wrong = await use(client, 'generate_cast', { project_id: projectId, confirm_total: fee + 5 });
     expect(wrong).toMatchObject({ isError: true, data: { error: 'quote_changed', quote: { total: fee } } });
     expect(await ledger(user.id)).toHaveLength(1);
@@ -365,6 +423,7 @@ describe('ownership', () => {
       ['generate_storyboard', { confirm_total: 0 }],
       ['get_quote', {}],
       ['generate_video', { confirm_total: total }],
+      ['make_audio', { confirm_total: 0 }],
       ['get_status', {}],
       ['render', {}],
       ['get_result', {}],
@@ -393,7 +452,7 @@ describe('ownership', () => {
 });
 
 describe('a full mock sequence through the tools', () => {
-  it('goes from a brief to a finished video and ends in a render URL', async () => {
+  it('goes from a brief to a finished narrated video and ends in a render URL', async () => {
     const user = newUser();
     await fund(user.id, 3000);
     const client = await connect(await tokenFor(user));
@@ -405,17 +464,22 @@ describe('a full mock sequence through the tools', () => {
     expect(created.isError, created.text).toBe(false);
     const projectId = created.data.project.id;
 
-    const script = await use(client, 'write_script', { project_id: projectId });
-    expect(script.isError, script.text).toBe(false);
-    expect(script.data.script.scenes.length).toBeGreaterThan(0);
-
-    const scene = script.data.script.scenes[0];
+    // The script is written by the draft worker, not inside the request.
+    const writing = await use(client, 'write_script', { project_id: projectId });
+    expect(writing.data).toMatchObject({ project_id: projectId, drafting: { task: 'write', status: 'queued' } });
+    expect(writing.data.status_text).toMatch(/get_status/);
+    expect(modelTotal()).toBe(0);
+    expect(await runDrafts()).toBe(1);
+    let status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.script).toMatchObject({ task: 'write', status: 'ready' });
+    const project = await use(client, 'get_project', { project_id: projectId });
+    const scene = project.data.summary.script.scenes[0];
     const edited = await use(client, 'set_script', { project_id: projectId, scene_id: scene.id, patch: { title: 'Opening' } });
     expect(edited.isError, edited.text).toBe(false);
     expect(edited.data.script.scenes[0].title).toBe('Opening');
 
-    // The cast: quote, then the confirmed fee.
-    const castQuote = await use(client, 'generate_cast', { project_id: projectId });
+    // The cast: drafted in the background, then quoted, then the confirmed fee.
+    const castQuote = await draftCast(client, projectId);
     expect(castQuote.data).toMatchObject({ needs_confirmation: true, quote: { total: pricing.projectFee } });
     const cast = await use(client, 'generate_cast', { project_id: projectId, confirm_total: pricing.projectFee });
     expect(cast.isError, cast.text).toBe(false);
@@ -423,26 +487,28 @@ describe('a full mock sequence through the tools', () => {
     expect(cast.data.credits).toBe(pricing.projectFee);
 
     await runJobs(projectId);
-    let status = await use(client, 'get_status', { project_id: projectId });
+    status = await use(client, 'get_status', { project_id: projectId });
     expect(status.isError, status.text).toBe(false);
     expect(status.data.cast.every((c) => c.status === 'ready' && c.pictures.length > 0)).toBe(true);
-
     for (const c of status.data.cast) {
       const picked = await use(client, 'pick_cast', { project_id: projectId, cast_id: c.id, candidate_index: 0 });
       expect(picked.isError, picked.text).toBe(false);
     }
     await runJobs(projectId);
 
-    // The storyboard: the first call plans the shots and quotes the pictures, the next one starts them.
-    const planned = await use(client, 'generate_storyboard', { project_id: projectId });
-    expect(planned.isError, planned.text).toBe(false);
-    expect(planned.data.shots.length).toBeGreaterThan(0);
-    expect(planned.data.quote).toMatchObject({ total: 0 });
-    expect(await jobsOf(projectId).then((j) => j.filter((x) => x.kind === 'still'))).toHaveLength(0);
-    const stills = await use(client, 'generate_storyboard', { project_id: projectId, confirm_total: 0 });
+    // The storyboard: the plan is drafted in the background; the next call starts the (included) pictures.
+    const planning = await use(client, 'generate_storyboard', { project_id: projectId });
+    expect(planning.data).toMatchObject({ drafting: { task: 'shots', status: 'queued' } });
+    expect(modelCalls.story_shots).toBe(0);
+    expect(await runDrafts()).toBe(1);
+    status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.shot_plan).toMatchObject({ status: 'ready' });
+    const stills = await use(client, 'generate_storyboard', { project_id: projectId });
     expect(stills.isError, stills.text).toBe(false);
-    expect(stills.data.status_text).toMatch(/get_status/);
+    expect(stills.data).toMatchObject({ credits: 0 });
+    expect(stills.data.started).toBeGreaterThan(0);
     await runJobs(projectId);
+
 
     const quote = await use(client, 'get_quote', { project_id: projectId });
     expect(quote.isError, quote.text).toBe(false);
@@ -454,15 +520,19 @@ describe('a full mock sequence through the tools', () => {
     status = await use(client, 'get_status', { project_id: projectId });
     expect(status.data.shots).toMatchObject({ total: quote.data.quote.shot_ids.length, with_clip: quote.data.quote.shot_ids.length });
 
-    // The tools have no voice or music step: a render before the narration exists is refused (Task 20 round 1, F1).
+    // A render before the narration exists is refused (Task 20 round 1, F1); make_audio is the way through.
     const early = await use(client, 'render', { project_id: projectId });
-    expect(early.isError).toBe(true);
-    expect(early.data.error).toBe('audio_not_ready');
-    // Made on the maker's Voice and sound step: no music, and the narration (the first one is included).
-    const { setAudioPlan, generateNarration } = await import('../../lib/story/audio.js');
-    await setAudioPlan({ userId: user.id, projectId, plan: { music: { type: 'none' } } });
-    await generateNarration({ userId: user.id, projectId, user });
+    expect(early).toMatchObject({ isError: true, data: { error: 'audio_not_ready' } });
+
+    // Narration and music: included, so they start at once.
+    const audio = await use(client, 'make_audio', { project_id: projectId, music_prompt: 'Warm acoustic guitar' });
+    expect(audio.isError, audio.text).toBe(false);
+    expect(audio.data).toMatchObject({ started: ['narration', 'music'], credits: 0 });
+    // What the audio worker route does when it is kicked.
     expect(await runWorkerJob('narration', {})).toMatchObject({ claimed: true, outcome: 'done' });
+    expect(await runWorkerJob('music', {})).toMatchObject({ claimed: true, outcome: 'done' });
+    status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.audio).toEqual({ narration: 'ready', music: 'ready' });
 
     const render = await use(client, 'render', { project_id: projectId });
     expect(render.isError, render.text).toBe(false);
@@ -475,15 +545,338 @@ describe('a full mock sequence through the tools', () => {
     const result = await use(client, 'get_result', { project_id: projectId });
     expect(result.isError, result.text).toBe(false);
     expect(result.data.render.url).toMatch(new RegExp(`^${ISSUER}/api/mock/storage/story/${projectId}/render/v1-.*\\.mp4$`));
+    // The video was made with the narration make_audio made.
+    const [row] = await storyDb().select('story_renders', { project_id: projectId });
+    expect(row.settings).toMatchObject({ mode: 'narrated', music: true });
+    expect(row.settings.narrationUrl).toBeTruthy();
 
     // Money: the fee once and the clips at the confirmed quote; nothing left held.
     const b = await getBalance(user.id);
     expect(b.held).toBe(0);
     expect(charged(await ledger(user.id))).toBe(pricing.projectFee + quote.data.quote.total);
 
-    // get_status never shows holds, prompts or internal ids.
-    for (const word of ['hold_id', 'gen_claim', 'gen_hold', 'prompt', 'cost_credits', 'payload', 'storage_key', 'job_id', 'pending_shots']) {
+    // get_status never shows holds, prompts, the drafting payload or internal ids.
+    for (const word of ['hold_id', 'gen_claim', 'gen_hold', 'prompt', 'cost_credits', 'payload', 'storage_key', 'job_id', 'pending_shots', 'receipt', 'counters']) {
       expect(status.text, word).not.toContain(word);
     }
   }, 240_000);
+});
+
+describe('round 1: drafting runs in the draft worker, never in /api/mcp', () => {
+  it('write_script, set_script with an instruction, generate_cast and generate_storyboard only queue; the worker drafts and get_status shows it', async () => {
+    const user = newUser();
+    await fund(user.id, 2000);
+    const client = await connect(await tokenFor(user));
+    const { data } = await use(client, 'create_project', { title: 'Queued', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = data.project.id;
+
+    for (const [name, args, task, label] of [
+      ['write_script', {}, 'write', 'script'],
+      ['set_script', { instruction: 'Make the opening funnier' }, 'revise', 'script'],
+      ['generate_cast', {}, 'cast', 'cast'],
+    ]) {
+      const before = modelTotal();
+      const out = await use(client, name, { project_id: projectId, ...args });
+      expect(out.isError, out.text).toBe(false);
+      expect(out.data.drafting, name).toEqual({ task, status: 'queued' });
+      expect(modelTotal(), `${name} called the model inside the request`).toBe(before);
+      // A second draft while one waits is refused, and nothing more is queued.
+      const busy = await use(client, 'write_script', { project_id: projectId });
+      expect(busy).toMatchObject({ isError: true, data: { error: 'drafting_busy' } });
+      let status = await use(client, 'get_status', { project_id: projectId });
+      expect(status.data.drafts[label]).toMatchObject({ task, status: 'queued' });
+      expect(await runDrafts()).toBe(1);
+      expect(modelTotal()).toBeGreaterThan(before);
+      status = await use(client, 'get_status', { project_id: projectId });
+      expect(status.data.drafts[label]).toEqual({ task, status: 'ready' });
+    }
+    // The revise made a new script version; the cast draft is ready and nothing was charged or saved for it yet.
+    expect((await storyDb().select('story_scripts', { project_id: projectId })).length).toBe(2);
+    expect(await storyDb().select('story_cast', { project_id: projectId })).toHaveLength(0);
+    expect(await ledger(user.id)).toHaveLength(1);
+
+    const fee = (await getPricing()).projectFee;
+    await use(client, 'generate_cast', { project_id: projectId, confirm_total: fee });
+    await runJobs(projectId);
+    const { data: s } = await use(client, 'get_status', { project_id: projectId });
+    for (const c of s.cast) await use(client, 'pick_cast', { project_id: projectId, cast_id: c.id, candidate_index: 0 });
+    await runJobs(projectId);
+    const before = modelTotal();
+    const plan = await use(client, 'generate_storyboard', { project_id: projectId });
+    expect(plan.data.drafting).toEqual({ task: 'shots', status: 'queued' });
+    expect(modelTotal()).toBe(before);
+    expect(await storyDb().select('story_shots', { project_id: projectId })).toHaveLength(0);
+    expect(await runDrafts()).toBe(1);
+    expect(modelCalls.story_shots).toBe(1);
+    expect((await storyDb().select('story_shots', { project_id: projectId })).length).toBeGreaterThan(0);
+  });
+
+  it('the draft worker route needs the cron secret and runs one drafting job; script is a worker kind', async () => {
+    expect(draftRoute.config.maxDuration).toBe(300);
+    expect(WORKER_KINDS).toContain('script');
+    const call = async (authorization) => {
+      const res = { statusCode: 200, headers: {}, body: null, setHeader(k, v) { this.headers[k] = v; }, status(c) { this.statusCode = c; return this; }, json(b) { this.body = b; return this; } };
+      await draftRoute.default({ method: 'POST', headers: authorization ? { authorization } : {} }, res);
+      return res;
+    };
+    expect((await call()).statusCode).toBe(401);
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const { data } = await use(client, 'create_project', { title: 'Route', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    await use(client, 'write_script', { project_id: data.project.id });
+    const res = await call(`Bearer ${process.env.CRON_SECRET}`);
+    expect(res).toMatchObject({ statusCode: 200, body: { ok: true, draft: 1 } });
+    expect(await storyDb().select('story_scripts', { project_id: data.project.id })).toHaveLength(1);
+  });
+
+  it('a drafting job killed mid-run gives the free-tier count back; a refused draft does too', async () => {
+    accounts.set({ paid: false });
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const { data } = await use(client, 'create_project', { title: 'Killed', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = data.project.id;
+    const count = async () => Number((await raw.query(
+      `select coalesce(sum(count), 0)::int as n from story_usage where user_id = $1 and action like 'script_write%'`, [user.id],
+    )).rows[0].n);
+
+    expect((await use(client, 'write_script', { project_id: projectId })).isError).toBe(false);
+    expect(await count()).toBe(1);
+    // The worker dies twice mid-draft (the claim is taken, the run never ends): the sweep retries once, then fails it.
+    const [job] = await storyDb().select('story_jobs', { project_id: projectId, kind: 'script' });
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await raw.query(`update story_jobs set status = 'running', attempts = $2, started_at = now() - interval '1 hour', run_after = null where id = $1`, [job.id, attempt]);
+      await sweep({ now: new Date(Date.now() + 60_000) });
+    }
+    const [ended] = await storyDb().select('story_jobs', { id: job.id });
+    expect(ended.status).toBe('failed');
+    expect(await count()).toBe(0);
+    const status = await use(client, 'get_status', { project_id: projectId });
+    expect(status.data.drafts.script).toMatchObject({ task: 'write', status: 'failed' });
+    expect(status.text).not.toContain('receipt');
+
+    // A draft the service refuses (no brief to write from) is a result, not a retry, and gives the count back too.
+    const { data: empty } = await use(client, 'create_project', { title: 'Empty brief' });
+    expect((await use(client, 'write_script', { project_id: empty.project.id })).isError).toBe(false);
+    expect(await count()).toBe(1);
+    await runDrafts();
+    expect(await count()).toBe(0);
+    const refused = await use(client, 'get_status', { project_id: empty.project.id });
+    expect(refused.data.drafts.script).toMatchObject({ status: 'failed', error: 'validation_failed' });
+  });
+});
+
+describe('round 1: money', () => {
+  it('O1: a fee changed between the quote and the confirm is quote_changed with nothing charged; a fee changed during the model call charges the confirmed fee', async () => {
+    try {
+      const user = newUser();
+      await fund(user.id, 5000);
+      const client = await connect(await tokenFor(user));
+      const projectId = await projectWithScript(client);
+      const quote = await draftCast(client, projectId);
+      expect(quote.data.quote.total).toBe(90);
+      await setFee(120);
+      const late = await use(client, 'generate_cast', { project_id: projectId, confirm_total: 90 });
+      expect(late).toMatchObject({ isError: true, data: { error: 'quote_changed', quote: { total: 120 } } });
+      expect(await ledger(user.id)).toHaveLength(1);
+      expect(await storyDb().select('story_cast', { project_id: projectId })).toHaveLength(0);
+      // Confirmed at the new price: exactly that is charged, and the answer says what was spent.
+      const ok = await use(client, 'generate_cast', { project_id: projectId, confirm_total: 120 });
+      expect(ok.data.credits).toBe(120);
+      expect(charged(await ledger(user.id))).toBe(120);
+
+      // The website path (the model asked inside generateCast): the fee moves while the model writes.
+      await setFee(90);
+      const web = newUser();
+      await fund(web.id, 5000);
+      const webClient = await connect(await tokenFor(web));
+      const webProject = await projectWithScript(webClient);
+      const real = mockFn('story_cast');
+      registerMock('story_cast', async (input) => {
+        await setFee(500);
+        return real(input);
+      });
+      let out;
+      try {
+        out = await generateCast({ userId: web.id, projectId: webProject, expectedCredits: 90 });
+      } finally {
+        registerMock('story_cast', real);
+      }
+      expect(out.charged).toBe(90);
+      expect(charged(await ledger(web.id))).toBe(90);
+    } finally {
+      await clearFee();
+    }
+  });
+
+  it('a3: the fee raised while the characters are drafted is quoted, never charged unseen', async () => {
+    try {
+      const user = newUser();
+      await fund(user.id, 5000);
+      const client = await connect(await tokenFor(user));
+      const projectId = await projectWithScript(client);
+      await use(client, 'generate_cast', { project_id: projectId });
+      const real = mockFn('story_cast');
+      registerMock('story_cast', async (input) => {
+        await setFee(500);
+        return real(input);
+      });
+      try {
+        await runDrafts();
+      } finally {
+        registerMock('story_cast', real);
+      }
+      const old = await use(client, 'generate_cast', { project_id: projectId, confirm_total: 90 });
+      expect(old).toMatchObject({ isError: true, data: { error: 'quote_changed', quote: { total: 500 } } });
+      expect(await ledger(user.id)).toHaveLength(1);
+      const quote = await use(client, 'generate_cast', { project_id: projectId });
+      expect(quote.data.quote.total).toBe(500);
+    } finally {
+      await clearFee();
+    }
+  });
+
+  it('a7: a fee already in the ledger (a request died after the spend) is not quoted or reported again', async () => {
+    const { spendCredits } = await import('../../lib/credits.js');
+    const user = newUser();
+    await fund(user.id, 5000);
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    await spendCredits({ userId: user.id, currency: 'video', amount: 90, reason: 'story_project_fee', ref: `project-fee:${projectId}`, projectId });
+    await use(client, 'generate_cast', { project_id: projectId });
+    await runDrafts();
+    // Nothing is due: it starts at once and reports 0 spent.
+    const out = await use(client, 'generate_cast', { project_id: projectId });
+    expect(out.isError, out.text).toBe(false);
+    expect(out.data).toMatchObject({ credits: 0 });
+    expect(out.data.needs_confirmation).toBeUndefined();
+    expect(charged(await ledger(user.id))).toBe(90);
+    expect((await storyDb().select('story_projects', { id: projectId }))[0].fee_charged).toBe(true);
+  });
+
+  it('Om5: paid storyboard pictures are quoted, a wrong amount is quote_changed, and the confirmed total is held', async () => {
+    const user = newUser();
+    await fund(user.id, 1000);
+    const [project] = await storyDb().insert('story_projects', {
+      user_id: user.id, title: 'Paid pictures', style: '3d_family', step: 'storyboard', seconds: 15, quality: 'standard', mode: 'narrated', fee_charged: true,
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: [SCENE], source: 'brief' });
+    await storyDb().insert('story_shots', [0, 1].map((i) => ({
+      project_id: project.id, ord: i, scene_id: 's1', scene_sig: sceneSig(SCENE), description: `Shot ${i + 1} of the shop.`,
+      seconds: 5, quality: 'standard', status: 'draft', still_delivered: true,
+    })));
+    const price = 2 * (await getPricing()).stillReroll;
+    expect(price).toBeGreaterThan(0);
+    const client = await connect(await tokenFor(user));
+    const quote = await use(client, 'generate_storyboard', { project_id: project.id });
+    expect(quote.data).toMatchObject({ needs_confirmation: true, quote: { total: price } });
+    const wrong = await use(client, 'generate_storyboard', { project_id: project.id, confirm_total: price - 1 });
+    expect(wrong).toMatchObject({ isError: true, data: { error: 'quote_changed', quote: { total: price } } });
+    expect(await jobsOf(project.id)).toHaveLength(0);
+    expect((await getBalance(user.id)).held).toBe(0);
+    const ok = await use(client, 'generate_storyboard', { project_id: project.id, confirm_total: price });
+    expect(ok.isError, ok.text).toBe(false);
+    expect(ok.data).toMatchObject({ credits: price, started: 2 });
+    expect((await getBalance(user.id)).held).toBe(price);
+  });
+
+  it('Om5: generate_video confirmed twice with the same total charges once', async () => {
+    const user = newUser();
+    await fund(user.id, 1000);
+    const project = await generateReady(user.id);
+    const { total } = await quoteGeneration({ userId: user.id, projectId: project.id });
+    const client = await connect(await tokenFor(user));
+    const [first, second] = await Promise.all([
+      use(client, 'generate_video', { project_id: project.id, confirm_total: total }),
+      use(client, 'generate_video', { project_id: project.id, confirm_total: total }),
+    ]);
+    expect([first.isError, second.isError].sort()).toEqual([false, true]);
+    const again = await use(client, 'generate_video', { project_id: project.id, confirm_total: total });
+    expect(again.isError).toBe(true);
+    await runJobs(project.id);
+    expect(charged(await ledger(user.id))).toBe(total);
+    expect((await getBalance(user.id)).held).toBe(0);
+    expect((await jobsOf(project.id)).filter((j) => j.kind === 'clip')).toHaveLength(3);
+  });
+
+  it('make_audio quotes paid makes, refuses a wrong amount, starts at the confirmed total, and will not use another customer\'s voice', async () => {
+    const user = newUser();
+    await fund(user.id, 1000);
+    const client = await connect(await tokenFor(user));
+    const projectId = await projectWithScript(client);
+    // The included makes are used up, so both parts are priced.
+    await storyDb().update('story_projects', { id: projectId }, { narrations_used: 10, music_used: 10 });
+    const quote = await use(client, 'make_audio', { project_id: projectId });
+    expect(quote.data).toMatchObject({ needs_confirmation: true });
+    const total = quote.data.quote.total;
+    expect(total).toBeGreaterThan(0);
+    expect(quote.data.voices.length).toBeGreaterThan(0);
+    const wrong = await use(client, 'make_audio', { project_id: projectId, confirm_total: total + 1 });
+    expect(wrong).toMatchObject({ isError: true, data: { error: 'quote_changed', quote: { total } } });
+    expect(await jobsOf(projectId).then((j) => j.filter((x) => x.kind === 'narration' || x.kind === 'music'))).toHaveLength(0);
+    expect((await getBalance(user.id)).held).toBe(0);
+
+    const other = newUser();
+    const [voice] = await storyDb().insert('story_voices', { user_id: other.id, name: 'Theirs', provider: 'fish', status: 'ready', provider_voice_id: 'their-voice', consent_statement: 'x', consent_at: new Date().toISOString() });
+    const stolen = await use(client, 'make_audio', { project_id: projectId, voice_id: voice.provider_voice_id });
+    expect(stolen).toMatchObject({ isError: true, data: { error: 'not_found' } });
+
+    const ok = await use(client, 'make_audio', { project_id: projectId, confirm_total: total });
+    expect(ok.isError, ok.text).toBe(false);
+    expect(ok.data).toMatchObject({ started: ['narration', 'music'], credits: total });
+    expect((await getBalance(user.id)).held).toBe(total);
+  });
+});
+
+describe('round 1: the route', () => {
+  it('F2: a JSON-RPC batch is 400 and runs nothing; more requests than the per-user limit is 429 with Retry-After', async () => {
+    const user = newUser();
+    const token = await tokenFor(user);
+    const H = { authorization: `Bearer ${token}` };
+    const call = (id) => ({ jsonrpc: '2.0', id, method: 'tools/call', params: { name: 'create_project', arguments: { title: 'Batch' } } });
+    const batch = await rpc([call(1), call(2)], H);
+    expect(batch.status).toBe(400);
+    expect(await storyDb().select('story_projects', { user_id: user.id })).toHaveLength(0);
+
+    _setMcpRateLimit(3);
+    const second = await tokenFor(newUser());
+    const statuses = [];
+    for (let i = 0; i < 4; i += 1) statuses.push((await rpc(TOOLS_CALL, { authorization: `Bearer ${second}` })).status);
+    expect(statuses.slice(0, 3)).toEqual([200, 200, 200]);
+    expect(statuses[3]).toBe(429);
+    const limited = await rpc(TOOLS_CALL, { authorization: `Bearer ${second}` });
+    expect(Number(limited.headers.get('retry-after'))).toBeGreaterThan(0);
+  });
+
+  it('Fm4: a tools/call with malformed params is a readable validation_failed tool error', async () => {
+    const token = await tokenFor(newUser());
+    for (const params of [{ name: 5 }, { name: 'get_project', arguments: 'x' }, null]) {
+      const res = await rpc({ jsonrpc: '2.0', id: 7, method: 'tools/call', params }, { authorization: `Bearer ${token}` });
+      expect(res.status).toBe(200);
+      const body = await res.json();
+      expect(body.id).toBe(7);
+      expect(body.result.isError).toBe(true);
+      expect(JSON.parse(body.result.content[0].text)).toMatchObject({ error: 'validation_failed' });
+    }
+  });
+
+  it('Fm1: a token without the story scope is 401', async () => {
+    const token = await tokenFor(newUser());
+    const hash = createHash('sha256').update(token).digest('base64url');
+    await raw.query(`update story_oauth_tokens set scope = 'other' where access_token_hash = $1`, [hash]);
+    const res = await rpc(TOOLS_CALL, { authorization: `Bearer ${token}` });
+    expect(res.status).toBe(401);
+    expect(res.headers.get('www-authenticate')).toContain('error="invalid_token"');
+  });
+
+  it('Fm3 and Fm5: NUL characters are dropped from text, and the project list is the newest 50', async () => {
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    const out = await use(client, 'create_project', { title: '\u0000Barber\u0000 app', offer: 'A booking\u0000 app' });
+    expect(out.isError, out.text).toBe(false);
+    expect(out.data.project).toMatchObject({ title: 'Barber app', offer: 'A booking app' });
+    await storyDb().insert('story_projects', Array.from({ length: 55 }, (_, i) => ({ user_id: user.id, title: `P${i}` })));
+    const list = await use(client, 'get_project', {});
+    expect(list.data.projects).toHaveLength(50);
+    expect(Object.keys(list.data.projects[0]).sort()).toEqual(['id', 'status', 'step', 'title', 'updated_at']);
+  });
 });

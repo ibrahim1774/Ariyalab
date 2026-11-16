@@ -209,9 +209,9 @@ describe('tick: claiming', () => {
     const project = await newProject();
     const { handler } = fakeAsync();
     registerHandler('still', handler);
-    registerHandler('script', { sync: true, run: async () => ({ ok: true }) });
+    registerHandler('voice_clone', { sync: true, run: async () => ({ ok: true }) });
     for (let i = 0; i < 15; i++) await enqueue({ projectId: project.id, kind: 'still' });
-    for (let i = 0; i < 3; i++) await enqueue({ projectId: project.id, kind: 'script' });
+    for (let i = 0; i < 3; i++) await enqueue({ projectId: project.id, kind: 'voice_clone' });
     const budget = { submits: 15 };
     const s = await tick({ projectId: project.id, now: T0, limit: 50, budget });
     expect(s).toMatchObject({ claimed: 18, submitted: 15, done: 3 });
@@ -387,12 +387,12 @@ describe('submit outcomes', () => {
   it("a 'config' error fails the job at once with an operator log line", async () => {
     const project = await newProject();
     const fails = [];
-    registerHandler('script', {
+    registerHandler('voice_clone', {
       sync: true,
       run: async () => { throw new ProviderError('config', 'GOOGLE_AI_API_KEY is not set. Add it to .env.local.'); },
       onFail: async (job, info) => fails.push(info),
     });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     await tick({ projectId: project.id, now: T0 });
     expect(await jobRow(job.id)).toMatchObject({ status: 'failed', attempts: 1, error: 'Generation failed. Please try again.' });
     expect(fails).toEqual([{ blocked: false, error: 'Generation failed. Please try again.', final: true }]);
@@ -902,16 +902,16 @@ describe('mirror failures', () => {
     runner._configure({ syncMinSeconds: { default: 0, render: 0 } });
     let runs = 0;
     const done = [];
-    registerHandler('script', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.clip, seconds: 30 }; }, onDone: async (j, r) => done.push(r) });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.voice, seconds: 30 }; }, onDone: async (j, r) => done.push(r) });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     await tick({ projectId: project.id, now: T0, deadline: Date.now() + 3_000 });
     expect(mirror.calls).toHaveLength(0);
     const row = await jobRow(job.id);
-    expect(row).toMatchObject({ status: 'running', attempts: 1, mirror_tries: 0, provider_result: { url: MOCK_URLS.clip, seconds: 30 } });
+    expect(row).toMatchObject({ status: 'running', attempts: 1, mirror_tries: 0, provider_result: { url: MOCK_URLS.voice, seconds: 30 } });
     await sweep({ now: at(11 * MIN) }); // a kept result is not a stuck sync run: not re-run
     await tick({ projectId: project.id, now: at(11 * MIN) });
     expect(runs).toBe(1);
-    const key = `story/${project.id}/script/${job.id}.mp4`;
+    const key = `story/${project.id}/voice_clone/${job.id}.mp3`;
     expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 1, provider_result: null });
     expect(done).toEqual([{ url: `/api/mock/storage/${key}`, key, seconds: 30 }]);
   });
@@ -919,8 +919,8 @@ describe('mirror failures', () => {
   it('a sync result whose copy fails is kept and copied again after a backoff, never run again; the tries are bounded (round 4 N5)', async () => {
     const project = await newProject();
     let runs = 0;
-    registerHandler('script', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.clip }; } });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async () => { runs += 1; return { url: MOCK_URLS.clip }; } });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     mirror.fail = 1;
     await tick({ projectId: project.id, now: T0 });
     let row = await jobRow(job.id);
@@ -932,7 +932,7 @@ describe('mirror failures', () => {
     expect(await jobRow(job.id)).toMatchObject({ status: 'done', mirror_tries: 2 });
     expect(runs).toBe(1);
 
-    const other = await enqueue({ projectId: project.id, kind: 'script' });
+    const other = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     mirror.fail = 10;
     for (const t of [100, 200, 300, 500, 800]) await tick({ projectId: project.id, now: at(t) });
     expect(await jobRow(other.id)).toMatchObject({ status: 'failed', mirror_tries: 4 });
@@ -1107,12 +1107,12 @@ describe('applying results', () => {
     const project = await newProject();
     let t = T0;
     const clock = () => t;
-    registerHandler('script', {
+    registerHandler('voice_clone', {
       sync: true,
       run: async () => { t = at(90); return { url: MOCK_URLS.clip }; },
       onDone: async () => { throw new Error('later'); },
     });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     await tick({ projectId: project.id, now: clock });
     const row = await jobRow(job.id);
     expect(row.status).toBe('done');
@@ -1197,8 +1197,8 @@ describe('sweep', () => {
 
   it('retries a sync job left running after 10 minutes (keeping the attempt)', async () => {
     const project = await newProject();
-    registerHandler('script', { sync: true, run: async () => ({}) });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async () => ({}) });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     await storyDb().rpc('story_claim_jobs', { p_project: project.id, p_limit: 1, p_now: T0.toISOString() });
     expect((await sweep({ now: at(9 * MIN) })).retried).toBe(0);
     expect(await sweep({ now: at(10 * MIN) })).toMatchObject({ swept: 1, retried: 1 });
@@ -1223,7 +1223,7 @@ describe('sweep', () => {
   it('a job with no handler is put back for 5 minutes, outside the submit budget, and fails after 5 rounds', async () => {
     const project = await newProject();
     const holdId = await withHold(project);
-    const job = await enqueue({ projectId: project.id, kind: 'script', holdId, costCredits: 5 });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone', holdId, costCredits: 5 });
     const budget = { submits: 15 };
     await tick({ projectId: project.id, now: T0, budget });
     const row = await jobRow(job.id);
@@ -1242,12 +1242,12 @@ describe('sync and worker kinds', () => {
   it('runs a sync job inside the tick and marks it done', async () => {
     const project = await newProject();
     const done = [];
-    registerHandler('script', {
+    registerHandler('voice_clone', {
       sync: true,
       run: async (job) => ({ scenes: [{ id: 's1' }], echo: job.payload.x }),
       onDone: async (job, result) => done.push({ id: job.id, result }),
     });
-    const job = await enqueue({ projectId: project.id, kind: 'script', payload: { x: 1 } });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone', payload: { x: 1 } });
     expect(await tick({ projectId: project.id, now: T0 })).toMatchObject({ claimed: 1, done: 1 });
     expect(done).toEqual([{ id: job.id, result: { scenes: [{ id: 's1' }], echo: 1 } }]);
     expect(mirror.calls).toHaveLength(0);
@@ -1256,10 +1256,10 @@ describe('sync and worker kinds', () => {
   it('mirrors a sync media result that has a provider url but no key', async () => {
     const project = await newProject();
     const done = [];
-    registerHandler('script', { sync: true, run: async () => ({ url: MOCK_URLS.clip, seconds: 30 }), onDone: async (j, r) => done.push(r) });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async () => ({ url: MOCK_URLS.voice, seconds: 30 }), onDone: async (j, r) => done.push(r) });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     await tick({ projectId: project.id, now: T0 });
-    const key = `story/${project.id}/script/${job.id}.mp4`;
+    const key = `story/${project.id}/voice_clone/${job.id}.mp3`;
     expect(done).toEqual([{ url: `/api/mock/storage/${key}`, key, seconds: 30 }]);
   });
 
@@ -1267,12 +1267,12 @@ describe('sync and worker kinds', () => {
     const project = await newProject();
     const fails = [];
     let runs = 0;
-    registerHandler('script', {
+    registerHandler('voice_clone', {
       sync: true,
       run: async () => { runs += 1; throw new ProviderError('failed'); },
       onFail: async (job, info) => fails.push({ status: job.status, ...info }),
     });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     expect(await tick({ projectId: project.id, now: T0 })).toMatchObject({ retried: 1, failed: 0 });
     expect((await jobRow(job.id)).run_after.getTime()).toBe(at(30).getTime());
     expect((await tick({ projectId: project.id, now: at(29) })).claimed).toBe(0);
@@ -1285,8 +1285,8 @@ describe('sync and worker kinds', () => {
     const project = await newProject();
     const { handler } = fakeAsync();
     registerHandler('still', handler);
-    registerHandler('script', { sync: true, run: async () => ({}) });
-    const s1 = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async () => ({}) });
+    const s1 = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     const st = await enqueue({ projectId: project.id, kind: 'still' });
     await tick({ projectId: project.id, now: T0, deadline: Date.now() + 10_000 });
     expect((await jobRow(s1.id)).status).toBe('queued');
@@ -1298,8 +1298,8 @@ describe('sync and worker kinds', () => {
     const project = await newProject();
     const { handler } = fakeAsync();
     registerHandler('still', handler);
-    registerHandler('script', { sync: true, run: async () => ({}) });
-    const s1 = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async () => ({}) });
+    const s1 = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     const st = await enqueue({ projectId: project.id, kind: 'still' });
     await tick({ projectId: project.id, now: T0, runSync: false });
     expect((await jobRow(s1.id)).status).toBe('queued');
@@ -1797,7 +1797,7 @@ describe('helpers', () => {
   it('registerHandler checks the handler shape against the kind', () => {
     expect(() => registerHandler('clip', { submit: async () => {} })).toThrow(/poll/);
     expect(() => registerHandler('clip', { sync: true, run: async () => {} })).toThrow(/async kind/);
-    expect(() => registerHandler('script', { submit: async () => {}, poll: async () => {} })).toThrow(/sync kind/);
+    expect(() => registerHandler('voice_clone', { submit: async () => {}, poll: async () => {} })).toThrow(/sync kind/);
     expect(() => registerHandler('nope', { sync: true, run: async () => {} })).toThrow(/unknown/);
   });
 
@@ -1901,8 +1901,8 @@ describe('routes', () => {
     }
     const project = await newProject();
     const ran = [];
-    registerHandler('script', { sync: true, run: async (job) => { ran.push(job.id); return {}; } });
-    const job = await enqueue({ projectId: project.id, kind: 'script' });
+    registerHandler('voice_clone', { sync: true, run: async (job) => { ran.push(job.id); return {}; } });
+    const job = await enqueue({ projectId: project.id, kind: 'voice_clone' });
     const res = resMock();
     await cron({ method: 'GET', headers: { authorization: `Bearer ${process.env.CRON_SECRET}` } }, res);
     expect(res.statusCode).toBe(200);
