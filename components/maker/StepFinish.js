@@ -35,7 +35,7 @@ function Working({ render }) {
     <Card className={styles.working} data-render-state={render.status}>
       <div className={styles.progress} role="progressbar" aria-label="Making your video" aria-busy="true"><span /></div>
       <p className={styles.workingText} role="status" aria-live="polite" data-testid="render-progress">
-        <strong>{queued ? 'Waiting for a free spot…' : 'Putting your video together…'}</strong>
+        <strong>{queued ? 'Waiting for a turn…' : 'Putting your video together…'}</strong>
         <span>
           {queued ? 'It starts in a moment.' : 'Clips, voice, music and captions are being joined.'}
           {elapsed != null ? ` ${clock(elapsed)} so far.` : ''} This usually takes a minute or two, and you can leave this page.
@@ -91,11 +91,12 @@ export default function StepFinish({ project, status, refresh }) {
     try {
       await startRender(project.id);
       setPicked(null);
-      refresh?.();
+      // Stay busy until the new render shows up in /status, so the button never flashes back to "Make it again".
+      await refresh?.();
     } catch (err) {
       // A refusal the server explains (audio_not_ready, shots_not_ready, render_busy) is shown in its own words.
       setError({ ...describeError(err), server: err?.serverMessage || '' });
-      if (err?.status === 409) refresh?.();
+      if (err?.status === 409) await refresh?.();
     } finally {
       setBusy(false);
     }
@@ -121,7 +122,7 @@ export default function StepFinish({ project, status, refresh }) {
     return (
       <div className={steps.step} data-testid="finish" data-state="expired">
         <div className={steps.stepHead}><h2>Your finished <span className="accent-word">video</span></h2></div>
-        <EmptyState icon="film" title="This video’s files have been removed" text={`${date ? `They were removed on ${date}. ` : ''}Videos and clips are kept for a limited time. Your script, cast and storyboard are still here, so you can make a copy and generate it again.`}>
+        <EmptyState icon="film" title="This video’s files have been removed" text={`${date ? `They were removed on ${date}. ` : ''}Videos and clips are kept for a limited time. Your script and cast are still here, so you can make a copy and generate it again.`}>
           <Button onClick={copy} disabled={busy}>Make a copy</Button>
           {errorLine}
         </EmptyState>

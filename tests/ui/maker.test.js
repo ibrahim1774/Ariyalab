@@ -409,7 +409,14 @@ describe('waiting, failed and empty states', () => {
       <StepReview key="8" {...common} shots={shots} status={{ shots, project: project() }} />, <StepReview key="9" {...common} shots={[]} status={{ shots: [], project: project() }} />,
       <StepScript key="10" {...common} />, <StepStart key="11" onCreate={vi.fn()} />,
       <div key="12"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /></div>,
-      <StepFinish key="13" project={project()} status={{ render: null, renders: [] }} />,
+      ...[
+        { render: null, renders: [] },
+        { render: { id: 'q', version: 1, status: 'queued', created_at: new Date().toISOString(), warnings: [] }, renders: [] },
+        { render: { id: 'r', version: 1, status: 'running', created_at: new Date().toISOString(), warnings: [] }, renders: [] },
+        { render: { id: 'f', version: 2, status: 'failed', error: 'The video could not be made this time. Try again.', warnings: [] }, renders: [] },
+        { render: { id: 'd', version: 1, status: 'done', url: '/x.mp4', warnings: [{ code: 'loudness', message: 'The music is a little loud under the voice.' }], created_at: '2026-11-14T10:00:00Z' }, renders: [] },
+      ].map((st, i) => <StepFinish key={`fin${i}`} project={project()} status={{ ...st, renders: st.renders.length ? st.renders : [st.render].filter(Boolean) }} />),
+      <StepFinish key="finx" project={project({ status: 'expired', files_expire_at: '2020-01-01T00:00:00Z' })} status={{ render: null, renders: [] }} />,
     ];
     let seen = 0;
     for (const view of views) {
@@ -548,12 +555,12 @@ describe('cast step', () => {
     expect(screen.getByText(/2 regenerations included for Maya, then 5 credits each/)).toBeInTheDocument();
   });
 
-  it('marks the picked option and leaves the own image control disabled with a marked slot', () => {
+  it('marks the picked option and offers the own image control (the asset picker)', () => {
     render(<StepCast {...props([ready({ chosen_index: 0 })])} />);
     expect(screen.getByRole('button', { name: 'Maya, option 1, picked' })).toHaveAttribute('aria-pressed', 'true');
-    const own = document.querySelector('[data-slot="asset-picker"]');
-    expect(own).toBeDisabled();
-    expect(own).toHaveTextContent('coming with brand kit');
+    const own = document.querySelector('[data-asset-picker]');
+    expect(own).toBeEnabled();
+    expect(own).toHaveTextContent('Use my own image');
     expect(screen.getByRole('button', { name: /Continue to the storyboard/ })).toBeEnabled();
   });
 
@@ -599,7 +606,8 @@ describe('storyboard step', () => {
     await waitFor(() => expect(client.updateShot).toHaveBeenCalledWith('p1', 's1', { description: 'A new idea' }));
     fireEvent.change(screen.getByLabelText('Quality'), { target: { value: 'standard' } });
     await waitFor(() => expect(client.updateShot).toHaveBeenCalledWith('p1', 's1', { quality: 'standard' }));
-    expect(document.querySelector('[data-slot="asset-picker"]')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Use my footage' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add a picture-in-picture' })).toBeEnabled();
   });
 
   it('keeps a talking project on Pro talking', () => {

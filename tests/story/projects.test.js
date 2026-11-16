@@ -122,6 +122,7 @@ describe('listProjects latest render', () => {
     const other = userA();
     const a = await createProject({ userId, input: { title: 'Rendered twice' } });
     const b = await createProject({ userId, input: { title: 'Only failed' } });
+    await storyDb().update('story_projects', { id: [a.id, b.id] }, { step: 'done' });
     const c = await createProject({ userId, input: { title: 'Never rendered' } });
     const theirs = await createProject({ userId: other, input: { title: 'Theirs' } });
     const row = (project, version, status, file_url = null) => ({ project_id: project.id, version, status, file_url });

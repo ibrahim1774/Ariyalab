@@ -1,4 +1,5 @@
-import { useEffect, useId, useRef } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import styles from './Modal.module.css';
 
 const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -10,6 +11,8 @@ const FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]), selec
 export default function Modal({ open, onClose, title, children, footer }) {
   const titleId = useId();
   const dialogRef = useRef(null);
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => { setMounted(true); }, []);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -47,10 +50,11 @@ export default function Modal({ open, onClose, title, children, footer }) {
       document.removeEventListener('keydown', onKey);
       if (previous && typeof previous.focus === 'function' && document.contains(previous)) previous.focus();
     };
-  }, [open]);
+  }, [open, mounted]);
 
-  if (!open) return null;
-  return (
+  // Rendered into document.body so no card or transformed parent can clip it; nothing on the server.
+  if (!open || !mounted) return null;
+  return createPortal(
     <div className={styles.backdrop} onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
       <div ref={dialogRef} className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby={title ? titleId : undefined} tabIndex={-1}>
         {title && (
@@ -62,5 +66,5 @@ export default function Modal({ open, onClose, title, children, footer }) {
         {footer && <div className={styles.footer}>{footer}</div>}
       </div>
     </div>
-  );
+  , document.body);
 }

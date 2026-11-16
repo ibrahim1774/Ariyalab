@@ -1,4 +1,5 @@
 // Task 20: the finished video. Renders real mp4s from ffmpeg-made fixtures (mock storage, mock transcription).
+import { titleSlug } from '../../lib/story/filenames.js';
 import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
@@ -236,7 +237,8 @@ describe('render', () => {
     const ctx = await newProject();
     const row = await renderOnce(ctx);
     expect(row).toMatchObject({ status: 'done', version: 1, error: null });
-    expect(row.storage_key).toMatch(new RegExp(`^story/${ctx.project.id}/render/v1-`));
+    expect(row.storage_key).toMatch(new RegExp(`^story/${ctx.project.id}/render/[0-9a-f-]{36}/[a-z0-9-]+-v1\\.mp4$`));
+    expect(row.storage_key.split('/').pop()).toBe(`${titleSlug(ctx.project.title)}-v1.mp4`);
     expect(row.storage_key.endsWith('.mp4')).toBe(true);
     const file = localPathFor(row.file_url);
     const m = measure(file);

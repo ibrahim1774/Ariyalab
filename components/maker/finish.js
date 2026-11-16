@@ -1,18 +1,6 @@
 // Pure helpers for the Finish screen and the project cards. No React.
 
-const MAX_NAME = 60;
-
-/** A safe download name from the project title: letters and digits joined by hyphens, ending .mp4. */
-export function downloadFilename(title) {
-  const base = String(title ?? '')
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, MAX_NAME)
-    .replace(/-+$/g, '');
-  return `${base || 'my-video'}.mp4`;
-}
+export { downloadFilename } from '../../lib/story/filenames.js';
 
 /**
  * The render URL asking the file host for an attachment. Blob URLs are cross-origin, so the `download` attribute alone

@@ -178,3 +178,31 @@ describe('StepFinish', () => {
     expect(screen.getByTestId('render-progress')).toHaveTextContent('0:15');
   });
 });
+
+describe('round 1', () => {
+  it('keeps Make it again busy until the refresh has answered', async () => {
+    client.startRender.mockResolvedValue({ id: 'r3', version: 3, status: 'queued' });
+    let release;
+    const refresh = vi.fn(() => new Promise((res) => { release = res; }));
+    const r = done();
+    render(<StepFinish project={project} status={{ render: r, renders: [r] }} refresh={refresh} />);
+    fireEvent.click(screen.getByRole('button', { name: /make it again/i }));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: /^make it again/i })).toBeNull();
+    expect(screen.getByRole('button', { name: /starting|making your video/i })).toBeDisabled();
+    await act(async () => { release(); });
+  });
+
+  it('the delete dialog is rendered in document.body, outside any card', async () => {
+    const { default: Modal } = await import('../../components/ui/Modal');
+    const { container } = render(<div style={{ overflow: 'hidden' }}><Modal open title="T" onClose={() => {}}>x</Modal></div>);
+    const dialog = await screen.findByRole('dialog');
+    expect(container.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
+  });
+
+  it('names the stored render after the title', async () => {
+    const { renderFilename } = await import('../../lib/story/filenames');
+    expect(renderFilename('The line outside the barbershop', 2)).toBe('the-line-outside-the-barbershop-v2.mp4');
+  });
+});

@@ -12,8 +12,8 @@ const EMPTY = { project: null, shots: [], cast: [], jobs: [], balance: null, ren
 /**
  * Loads a project and keeps it fresh.
  *
- * Expects GET /projects/[id]/status -> { project, shots, cast, jobs, balance, render }
- * (optional: `rerolls: { included, used, credits }`). Until that route exists a 404 falls back to
+ * Expects GET /projects/[id]/status -> { project, shots, cast, jobs, balance, render, renders }
+ * (`render` is the latest public render row, `renders` up to 10, newest first; optional: `rerolls: { included, used, credits }`). Until that route exists a 404 falls back to
  * GET /projects/[id], so `degraded` is true and shots, cast and jobs are empty.
  *
  * Polls every 3 s while any job is queued or running, every 15 s otherwise, pauses while the tab is
