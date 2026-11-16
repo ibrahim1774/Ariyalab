@@ -2,6 +2,7 @@ import { handleUpload } from '@vercel/blob/client';
 import { getUserFromRequest } from '../../lib/supabaseServer';
 import { storyDb } from '../../lib/story/db.js';
 import { REFERENCE_LIMITS, VIDEO_EXTENSION, VIDEO_TYPES } from '../../lib/story/referenceRules.js';
+import { AUDIO_LIMITS, audioExtension } from '../../lib/story/voiceRules.js';
 
 /*
  * Issues short-lived client upload tokens for @vercel/blob/client.
@@ -28,6 +29,11 @@ import { REFERENCE_LIMITS, VIDEO_EXTENSION, VIDEO_TYPES } from '../../lib/story/
  * story-uploads/. The analyze action then checks the size, the magic bytes and
  * the length again on the server, and only accepts uploads under that
  * project's prefix.
+ *
+ * Story audio (Task 24: a voice sample, the customer's own narration or music) sends clientPayload
+ * {"surface":"story-audio"}: it needs a session, the pathname must be story-audio/<userId>/<name>.<mp3|wav|m4a>
+ * (the caller's own folder), and the token allows those audio types up to 20 MB. POST /api/story/assets then checks
+ * the stored file again (size, first bytes, length and codec) before it is used.
  */
 
 const ANON_SURFACE = 'anon-image';
@@ -42,6 +48,12 @@ const STORY_LIMITS = {
   maximumSizeInBytes: REFERENCE_LIMITS.maxBytes,
 };
 const STORY_TOKEN_TTL_MS = 15 * 60 * 1000;
+const AUDIO_SURFACE = 'story-audio';
+const AUDIO_UPLOAD_LIMITS = {
+  allowedContentTypes: ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave', 'audio/mp4', 'audio/x-m4a', 'audio/m4a', 'audio/aac'],
+  maximumSizeInBytes: AUDIO_LIMITS.maxBytes,
+};
+const AUDIO_TOKEN_TTL_MS = 15 * 60 * 1000;
 const SIGNED_IN_LIMITS = {
   allowedContentTypes: ['video/*', 'image/*'],
   maximumSizeInBytes: 1024 * 1024 * 1024,
@@ -75,6 +87,13 @@ async function checkStoryUpload(userId, pathname, clientPayload) {
   if (!rows.length) throw new Error('Upload not allowed.');
 }
 
+/** Throws unless the pathname is story-audio/<userId>/<name>.<mp3|wav|m4a> for the signed-in user. */
+function checkAudioUpload(userId, pathname) {
+  const prefix = `story-audio/${userId}/`;
+  const name = typeof pathname === 'string' && pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
+  if (!name || name.includes('/') || name.includes('..') || !audioExtension(name)) throw new Error('Upload not allowed.');
+}
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
@@ -89,6 +108,10 @@ export default async function handler(req, res) {
     if (surface === STORY_SURFACE) {
       if (!session) return res.status(401).json({ error: 'Authentication required.' });
       limits = STORY_LIMITS;
+      storyUser = session.user.id;
+    } else if (surface === AUDIO_SURFACE) {
+      if (!session) return res.status(401).json({ error: 'Authentication required.' });
+      limits = AUDIO_UPLOAD_LIMITS;
       storyUser = session.user.id;
     } else if (session) {
       limits = SIGNED_IN_LIMITS;
@@ -108,8 +131,12 @@ export default async function handler(req, res) {
           await checkStoryUpload(storyUser, pathname, clientPayload);
           return { ...STORY_LIMITS, validUntil: Date.now() + STORY_TOKEN_TTL_MS, addRandomSuffix: true };
         }
-        // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix).
-        if (typeof pathname !== 'string' || pathname.replace(/^\/+/, '').startsWith('story-uploads/')) throw new Error('Upload not allowed.');
+        if (limits === AUDIO_UPLOAD_LIMITS) {
+          checkAudioUpload(storyUser, pathname);
+          return { ...AUDIO_UPLOAD_LIMITS, validUntil: Date.now() + AUDIO_TOKEN_TTL_MS, addRandomSuffix: true };
+        }
+        // story-uploads/ belongs to story reference uploads (the analyze action trusts that prefix), story-audio/ to audio uploads.
+        if (typeof pathname !== 'string' || /^(story-uploads|story-audio)\//.test(pathname.replace(/^\/+/, ''))) throw new Error('Upload not allowed.');
         return {
           ...(limits || ANON_LIMITS),
           ...(limits === SIGNED_IN_LIMITS ? {} : { validUntil: Date.now() + ANON_TOKEN_TTL_MS }),

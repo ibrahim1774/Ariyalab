@@ -258,7 +258,9 @@ describe('audio plan', () => {
     await expect(bad({ captions: { style: 'rainbow' } })).rejects.toMatchObject({ status: 422 });
     await expect(bad({ captions: { on: 'yes' } })).rejects.toMatchObject({ status: 422 });
     await expect(bad({ music: { type: 'radio' } })).rejects.toMatchObject({ status: 422 });
-    await expect(bad({ voiceId: 'not-a-voice' })).rejects.toMatchObject({ status: 422, field: 'voiceId' });
+    // Task 24: a voice id that is not the caller's is a 404, so another customer's clone cannot be told from an unknown id.
+    await expect(bad({ voiceId: 'not-a-voice' })).rejects.toMatchObject({ status: 404 });
+    await expect(bad({ voiceId: 7 })).rejects.toMatchObject({ status: 422, field: 'voiceId' });
     await expect(bad({ mode: 'talking' })).rejects.toMatchObject({ status: 422 });
     await expect(bad({ nope: 1 })).rejects.toMatchObject({ status: 422 });
     await expect(bad({ music: { prompt: 'x'.repeat(400) } })).rejects.toMatchObject({ status: 422 });

@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import Link from 'next/link';
+
 import Button from '../ui/Button';
 import Card from '../ui/Card';
-import { getAudio, makeMusic, makeNarration, saveAudioPlan } from '../../lib/story/client';
+import { getAudio, makeMusic, makeNarration, saveAudioPlan, uploadAudio } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
 import FilesNote from './FilesNote';
 import { useMakerNav } from './MakerNav';
 import { usePricing } from './PricingContext';
-import { AssetPickerSlot } from './slots';
 import StepFooter from './StepFooter';
 import { Icon, Skeleton, Tile } from './Tiles';
+import VoicePreview from './VoicePreview';
 import steps from './Steps.module.css';
 import styles from './StepAudio.module.css';
 
@@ -89,6 +91,21 @@ function TrackBody({ track, kind, regen, ready, none, failedTitle, busy, onMake,
   );
 }
 
+/** "Use my own recording" / "Use my own track": a button that opens the file picker. Free, so it says so. */
+function UploadRow({ label, uploading, disabled, onFile }) {
+  const input = useRef(null);
+  return (
+    <div className={styles.own}>
+      <input ref={input} type="file" accept=".mp3,.wav,.m4a,audio/mpeg,audio/wav,audio/mp4" className={styles.file} tabIndex={-1} aria-hidden="true"
+        onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) onFile(f); }} />
+      <Button variant="ghost" arrow={false} onClick={() => input.current?.click()} disabled={disabled || Boolean(uploading)}>
+        {uploading ? `Uploading ${uploading.percent}%…` : label}
+      </Button>
+      <span className={steps.hint}>Free. MP3, WAV or M4A, up to 20 MB.</span>
+    </div>
+  );
+}
+
 function Section({ icon, title, children, ...rest }) {
   return (
     <Card className={styles.card} {...rest}>
@@ -105,6 +122,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
   const [loadError, setLoadError] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState('');
+  const [uploading, setUploading] = useState(null); // { kind, percent } while the customer's own file goes up
   const [prompt, setPrompt] = useState('');
   const promptTouched = useRef(false);
   const promptBox = useRef(null);
@@ -158,6 +176,16 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
   }
 
   const savePlan = (patch, kind = 'plan') => run(kind, () => saveAudioPlan(project.id, patch));
+  // The customer's own file: uploaded and checked by the server, then put in the plan. Nothing is charged.
+  const useOwnFile = (file, kind, planFor) => run('upload', async () => {
+    setUploading({ kind, percent: 0 });
+    try {
+      const asset = await uploadAudio(file, kind, { onProgress: (percent) => { if (alive.current) setUploading({ kind, percent }); } });
+      return await saveAudioPlan(project.id, planFor(asset));
+    } finally {
+      if (alive.current) setUploading(null);
+    }
+  });
   const typed = () => prompt.replace(/\s+/g, ' ').trim();
   const saving = useRef(null);
   const saved = useRef({ prompt: null, audio: null }); // the last view the server gave and the description it holds
@@ -213,6 +241,9 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
   }
 
   const { plan, voices, narration, music, applicable } = audio;
+  const uploads = audio.uploads || { voiceTrack: null, music: null };
+  const picked = voices.find((v) => v.id === plan.voiceId);
+  const ownVoices = voices.some((v) => v.own);
   const own = Boolean(plan.voiceTrackAssetId);
   const noNarrator = applicable.narration && applicable.narrationLines === 0;
   const musicType = plan.music.type;
@@ -244,17 +275,25 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
                   <label key={v.id} className={`${styles.voice} ${plan.voiceId === v.id && !own ? styles.voiceOn : ''}`}>
                     <input type="radio" name="voice" value={v.id} checked={plan.voiceId === v.id} onChange={() => savePlan({ voiceId: v.id })} />
                     <strong>{v.name}</strong>
-                    {v.gender && <small>{v.gender}</small>}
+                    {v.own ? <small>Your voice</small> : v.gender && <small>{v.gender}</small>}
                   </label>
                 ))}
               </fieldset>
-              {voices.find((v) => v.id === plan.voiceId)?.sampleUrl && !own && (
-                <audio className={styles.player} controls preload="none" src={voices.find((v) => v.id === plan.voiceId).sampleUrl} aria-label="Voice sample" />
+              {picked && !own && <VoicePreview sampleUrl={picked.sampleUrl} name={picked.name} label="Voice sample" />}
+              {!own && (
+                <Link href="/app/voices" className={styles.cloneLink}>{ownVoices ? 'Manage my voices' : 'Clone my voice'}</Link>
               )}
               {own ? (
-                <p className={steps.hint}>Using your own recording. It costs nothing.</p>
+                <div className={styles.ownFile}>
+                  <p className={styles.ownName}><strong>{uploads.voiceTrack?.name || 'Your recording'}</strong>{uploads.voiceTrack?.seconds ? <span>{clock(uploads.voiceTrack.seconds)}</span> : null}</p>
+                  <p className={steps.hint}>Using your own recording. It costs nothing.</p>
+                  <div className={styles.actions}>
+                    <Button variant="ghost" arrow={false} onClick={() => savePlan({ voiceTrackAssetId: null })} disabled={busy === 'plan'} aria-label="Remove my recording">Remove</Button>
+                  </div>
+                </div>
               ) : (
-                <div className={styles.picker}><AssetPickerSlot label="Use my own recording" kind="audio" /></div>
+                <UploadRow label="Use my own recording" uploading={uploading?.kind === 'voice_track' ? uploading : null} disabled={busy !== '' && busy !== 'upload'}
+                  onFile={(f) => useOwnFile(f, 'voice_track', (a) => ({ voiceTrackAssetId: a.id }))} />
               )}
               <TrackBody
                 track={narration}
@@ -292,12 +331,22 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
             ))}
             {musicType === 'upload' && <label className={styles.segOn}><input type="radio" name="music" value="upload" checked readOnly />My own track</label>}
           </div>
-          {musicType === 'none' && <Tile icon="music" title="No music" text="Your video will have the narration only. Switch back any time." className={styles.state} />}
-          {musicType === 'upload' && (
+          {musicType === 'none' && (
             <>
+              <Tile icon="music" title="No music" text="Your video will have the narration only. Switch back any time." className={styles.state} />
+              <UploadRow label="Use my own track" uploading={uploading?.kind === 'music' ? uploading : null} disabled={busy !== '' && busy !== 'upload'}
+                onFile={(f) => useOwnFile(f, 'music', (a) => ({ music: { type: 'upload', assetId: a.id } }))} />
+            </>
+          )}
+          {musicType === 'upload' && (
+            <div className={styles.ownFile}>
+              <p className={styles.ownName}><strong>{uploads.music?.name || 'Your track'}</strong>{uploads.music?.seconds ? <span>{clock(uploads.music.seconds)}</span> : null}</p>
               <p className={steps.hint}>Using your own track. It costs nothing.</p>
               {music.url && <audio className={styles.player} controls preload="metadata" src={music.url} aria-label="Your track" />}
-            </>
+              <div className={styles.actions}>
+                <Button variant="ghost" arrow={false} onClick={() => savePlan({ music: { type: 'generated' } })} disabled={busy === 'plan'}>Make music for me instead</Button>
+              </div>
+            </div>
           )}
           {musicType === 'generated' && (
             <>
@@ -321,7 +370,8 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
                 onMake={() => makeTrack('music', false)}
                 onRetry={() => makeTrack('music', true)}
               />
-              <div className={styles.picker}><AssetPickerSlot label="Use my own track" kind="audio" /></div>
+              <UploadRow label="Use my own track" uploading={uploading?.kind === 'music' ? uploading : null} disabled={busy !== '' && busy !== 'upload'}
+                onFile={(f) => useOwnFile(f, 'music', (a) => ({ music: { type: 'upload', assetId: a.id } }))} />
             </>
           )}
         </Section>
