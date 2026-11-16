@@ -19,7 +19,7 @@ import { AUDIO_LIMITS, uploadPrefix } from '../../../lib/story/voices.js';
  * POST looks at the file the browser uploaded (size, type, first bytes, length and codec) and keeps it as an asset only
  * when it is what it says. A refused file is deleted and answered with a specific 422.
  */
-export const config = { api: { bodyParser: { sizeLimit: '16kb' } }, maxDuration: 60 };
+export const config = { api: { bodyParser: { sizeLimit: '16kb' } }, maxDuration: 300 };
 
 const first = (value) => (Array.isArray(value) ? value[0] : value);
 

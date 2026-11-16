@@ -8,7 +8,7 @@ import ErrorNotice from './ErrorNotice';
 import { EmptyState, Icon, Skeleton } from './Tiles';
 import styles from './AssetPicker.module.css';
 
-const KIND_WORDS = { logo: 'logo', product: 'product picture', mascot: 'mascot', recording: 'screen recording', clip: 'clip' };
+const KIND_WORDS = { logo: 'logo', product: 'product picture', mascot: 'mascot', image: 'picture', recording: 'screen recording', clip: 'clip' };
 const ACCEPT = {
   image: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp',
   video: '.mp4,.mov,video/mp4,video/quicktime',
@@ -36,7 +36,8 @@ export function AssetThumb({ asset, className = '' }) {
  * the top. Picking one calls onPick(asset) (it may be async; the chooser closes when it settles without an error).
  *
  *   kinds        which kinds to list: 'logo' | 'product' | 'mascot' | 'recording' | 'clip'
- *   uploadKind   the kind a new upload is kept as (default: the first of kinds)
+ *   uploadKind   the kind a new upload is kept as (default: the first of kinds); 'image' is a neutral picture
+ *   inBrandKit   a new upload also joins the brand kit (default false: only the brand page does that)
  *   label        the button's text
  *   title        the chooser's title
  *   disabled     the button is off
@@ -44,7 +45,7 @@ export function AssetThumb({ asset, className = '' }) {
  *   onPick       (asset) => void | Promise
  *   returnTo     where the sign-in link leads back to
  */
-export default function AssetPicker({ kinds, uploadKind, label = 'Use my own file', title, disabled = false, selectedId = null, onPick, returnTo, className = '', buttonClass = '' }) {
+export default function AssetPicker({ kinds, uploadKind, label = 'Use my own file', title, disabled = false, selectedId = null, inBrandKit = false, onPick, returnTo, className = '', buttonClass = '' }) {
   const [open, setOpen] = useState(false);
   const [assets, setAssets] = useState(null);
   const [error, setError] = useState(null);
@@ -85,7 +86,7 @@ export default function AssetPicker({ kinds, uploadKind, label = 'Use my own fil
     setError(null);
     setProgress(0);
     try {
-      const made = await uploadMedia(file, kind, { onProgress: (p) => alive.current && setProgress(p), inBrandKit: isImageUpload });
+      const made = await uploadMedia(file, kind, { onProgress: (p) => alive.current && setProgress(p), inBrandKit });
       if (alive.current) setAssets((list) => [made, ...(list || [])]);
     } catch (err) {
       if (alive.current) setError(err);

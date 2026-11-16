@@ -3,7 +3,7 @@ import { getUserFromRequest } from '../../lib/supabaseServer';
 import { storyDb } from '../../lib/story/db.js';
 import { REFERENCE_LIMITS, VIDEO_EXTENSION, VIDEO_TYPES } from '../../lib/story/referenceRules.js';
 import { AUDIO_LIMITS, audioExtension } from '../../lib/story/voiceRules.js';
-import { ASSET_LIMITS, brandPrefix, imageExtension, videoExtension } from '../../lib/story/assetRules.js';
+import { ASSET_LIMITS, IMAGE_MIME, VIDEO_MIME, brandPrefix, imageExtension, videoExtension } from '../../lib/story/assetRules.js';
 
 /*
  * Issues short-lived client upload tokens for @vercel/blob/client.
@@ -61,8 +61,8 @@ const AUDIO_UPLOAD_LIMITS = {
 };
 const AUDIO_TOKEN_TTL_MS = 15 * 60 * 1000;
 const BRAND_SURFACE = 'story-brand';
-const BRAND_IMAGE_LIMITS = { allowedContentTypes: ['image/png', 'image/jpeg', 'image/webp'], maximumSizeInBytes: ASSET_LIMITS.imageMaxBytes };
-const BRAND_VIDEO_LIMITS = { allowedContentTypes: ['video/mp4', 'video/quicktime'], maximumSizeInBytes: ASSET_LIMITS.videoMaxBytes };
+// The token allows exactly the type the extension promises (a .png may only be uploaded as image/png).
+const BRAND_TYPES = { png: IMAGE_MIME.png, jpg: IMAGE_MIME.jpg, jpeg: IMAGE_MIME.jpeg, webp: IMAGE_MIME.webp, mp4: VIDEO_MIME.mp4, mov: VIDEO_MIME.mov };
 const BRAND_TOKEN_TTL_MS = 15 * 60 * 1000;
 const SIGNED_IN_LIMITS = {
   allowedContentTypes: ['video/*', 'image/*'],
@@ -109,8 +109,10 @@ function checkBrandUpload(userId, pathname) {
   const prefix = brandPrefix(userId);
   const name = typeof pathname === 'string' && pathname.startsWith(prefix) ? pathname.slice(prefix.length) : '';
   if (!name || name.includes('/') || name.includes('..')) throw new Error('Upload not allowed.');
-  if (imageExtension(name)) return BRAND_IMAGE_LIMITS;
-  if (videoExtension(name)) return BRAND_VIDEO_LIMITS;
+  const image = imageExtension(name);
+  if (image) return { allowedContentTypes: [BRAND_TYPES[image]], maximumSizeInBytes: ASSET_LIMITS.imageMaxBytes };
+  const video = videoExtension(name);
+  if (video) return { allowedContentTypes: [BRAND_TYPES[video]], maximumSizeInBytes: ASSET_LIMITS.videoMaxBytes };
   throw new Error('Upload not allowed.');
 }
 
@@ -122,6 +124,7 @@ export default async function handler(req, res) {
 
   let limits = null;
   let storyUser = null;
+  let brandSurface = false;
   if (req.body?.type === 'blob.generate-client-token') {
     const session = await getUserFromRequest(req, res);
     const surface = surfaceFrom(req.body?.payload?.clientPayload);
@@ -131,7 +134,8 @@ export default async function handler(req, res) {
       storyUser = session.user.id;
     } else if (surface === BRAND_SURFACE) {
       if (!session) return res.status(401).json({ error: 'Authentication required.' });
-      limits = BRAND_SURFACE;
+      limits = {}; // the limits come from the pathname's extension (checkBrandUpload), decided where the token is made
+      brandSurface = true;
       storyUser = session.user.id;
     } else if (surface === AUDIO_SURFACE) {
       if (!session) return res.status(401).json({ error: 'Authentication required.' });
@@ -155,7 +159,7 @@ export default async function handler(req, res) {
           await checkStoryUpload(storyUser, pathname, clientPayload);
           return { ...STORY_LIMITS, validUntil: Date.now() + STORY_TOKEN_TTL_MS, addRandomSuffix: true };
         }
-        if (limits === BRAND_SURFACE) {
+        if (brandSurface) {
           return { ...checkBrandUpload(storyUser, pathname), validUntil: Date.now() + BRAND_TOKEN_TTL_MS, addRandomSuffix: true };
         }
         if (limits === AUDIO_UPLOAD_LIMITS) {

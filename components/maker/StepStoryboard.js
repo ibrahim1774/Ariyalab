@@ -38,7 +38,7 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
       await (confirm ? buildShots(project.id, { confirm }) : buildShots(project.id));
     } catch (err) {
       if (err?.code !== 'rebuild_loses_clips') throw err;
-      setClipsToReplace({ count: Number(err.body?.count) || 0, token: err.body?.token || null });
+      setClipsToReplace({ count: Number(err.body?.count) || 0, own: Number(err.body?.own) || 0, token: err.body?.token || null });
     }
   });
   const confirmRebuild = () => {
@@ -121,7 +121,12 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
           </>
         )}
       >
-        <p>This rebuild replaces {clipsToReplace?.count} finished {clipsToReplace?.count === 1 ? 'clip' : 'clips'}. Rebuild anyway?</p>
+        <p>
+          This rebuild replaces {[
+            clipsToReplace?.count > 0 ? `${clipsToReplace.count} finished ${clipsToReplace.count === 1 ? 'clip' : 'clips'}` : null,
+            clipsToReplace?.own > 0 ? `${clipsToReplace.own} ${clipsToReplace.own === 1 ? 'shot' : 'shots'} with your own footage or picture-in-picture` : null,
+          ].filter(Boolean).join(' and ')}. Rebuild anyway?
+        </p>
       </Modal>
     </div>
   );

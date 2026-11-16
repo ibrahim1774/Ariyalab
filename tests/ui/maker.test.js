@@ -768,11 +768,10 @@ describe('slots', () => {
         <slots.ReferenceBreakdownSlot />
         <slots.VoiceSoundSlot />
         <slots.ChatPanelSlot />
-        <slots.AssetPickerSlot />
         <slots.StartFromVideoSlot />
       </>,
     );
-    for (const name of ['reference-breakdown', 'voice-sound', 'chat-panel', 'asset-picker', 'start-from-video']) {
+    for (const name of ['reference-breakdown', 'voice-sound', 'chat-panel', 'start-from-video']) {
       expect(container.querySelector(`[data-slot="${name}"]`)).not.toBeNull();
     }
   });
@@ -816,7 +815,7 @@ describe('copy rules', () => {
         { render: { id: 'd', version: 1, status: 'done', url: '/x.mp4', warnings: [{ code: 'loudness', message: 'The music is a little loud under the voice.' }], created_at: '2026-11-14T10:00:00Z' }, renders: [] },
       ].map((st, i) => <StepFinish key={`m${i}`} project={p} status={{ ...st, renders: [st.render].filter(Boolean) }} />),
       <StepFinish key="mx" project={{ ...p, status: 'expired', files_expire_at: '2020-01-01T00:00:00Z' }} status={{ render: null, renders: [] }} />,
-      <div key="l"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.ChatPanelSlot /><slots.AssetPickerSlot /><slots.StartFromVideoSlot /></div>,
+      <div key="l"><slots.ReferenceBreakdownSlot /><slots.VoiceSoundSlot /><slots.ChatPanelSlot /><slots.StartFromVideoSlot /></div>,
     ];
     for (const view of views) {
       const { container, unmount } = render(view);

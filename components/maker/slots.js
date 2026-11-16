@@ -34,17 +34,6 @@ export function ChatPanelSlot() {
   );
 }
 
-// SLOT: asset picker. Filled by the brand kit task. Lets the customer pick their own image or clip.
-// Props: { label, kind: 'image' | 'footage' }. Renders disabled until the brand kit exists.
-export function AssetPickerSlot({ label = 'Use my own image' }) {
-  return (
-    <button type="button" className={styles.slotButton} disabled data-slot="asset-picker" aria-label={`${label} (coming with brand kit)`}>
-      {label}
-      <small>coming with brand kit</small>
-    </button>
-  );
-}
-
 // SLOT: "Start from a video" door on the first screen. Filled by the reference analysis task.
 // Props: { onStart(source) } where source is { type: 'upload', assetId } or { type: 'link', url }.
 export function StartFromVideoSlot() {

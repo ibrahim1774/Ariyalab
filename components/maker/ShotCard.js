@@ -238,8 +238,8 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
               </Button>
             )}
             <AssetPicker
-              kinds={['product', 'logo', 'mascot', 'clip', 'recording']}
-              uploadKind="product"
+              kinds={['image', 'product', 'logo', 'mascot', 'clip', 'recording']}
+              uploadKind="image"
               label={shot.inset_asset_id ? 'Change my picture-in-picture' : 'Add a picture-in-picture'}
               title="Pick a picture or clip to put over this shot"
               selectedId={shot.inset_asset_id}

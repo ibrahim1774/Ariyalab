@@ -19,10 +19,12 @@ import {
   registerAsset, saveBrand, withBrandDefaults,
 } from '../../lib/story/assets.js';
 import { brandPrefix } from '../../lib/story/assetRules.js';
-import { generateStills, markStale, sceneSig, shotsView, updateShot } from '../../lib/story/storyboard.js';
+import { buildShotList, generateStills, markStale, sceneSig, shotsView, updateShot } from '../../lib/story/storyboard.js';
 import { quoteGeneration, startGeneration } from '../../lib/story/shots.js';
 import { getScript, updateScene } from '../../lib/story/script.js';
 import { pickCast, setCastImage } from '../../lib/story/cast.js';
+import { createProject } from '../../lib/story/projects.js';
+import { duplicateProject } from '../../lib/story/projects.js';
 import { registerAudio } from '../../lib/story/voices.js';
 import { setAudioPlan } from '../../lib/story/audio.js';
 import { imageInputArgs, imageMime } from '../../lib/story/mediaArgs.js';
@@ -115,7 +117,8 @@ function store(userId, name, bytes, prefix = brandPrefix(userId)) {
   return { url: `/api/mock/storage/${key}`, key, file };
 }
 const put = (userId, fixture, name = `${randomUUID()}.${fixture.split('.').pop()}`) => store(userId, name, files[fixture]).url;
-const upload = (userId, kind, fixture, over = {}) => registerAsset({ userId, kind, url: put(userId, fixture), name: fixture, ...over });
+// Like the brand page: pictures join the kit unless a test says otherwise (the default of registerAsset itself is out of the kit).
+const upload = (userId, kind, fixture, over = {}) => registerAsset({ userId, kind, url: put(userId, fixture), name: fixture, inBrandKit: ['logo', 'product', 'mascot'].includes(kind), ...over });
 const assetRow = async (id) => (await storyDb().select('story_assets', { id }))[0];
 
 const SCENES = [
@@ -152,6 +155,22 @@ describe('registering pictures and clips', () => {
     expect(rows.map((r) => [r.kind, r.mime, r.user_id])).toEqual([['logo', 'image/png', userId], ['product_photo', 'image/jpeg', userId], ['mascot', 'image/webp', userId]]);
     expect(screenImage).toHaveBeenCalledTimes(3);
     expect(screenImage.mock.calls[0][0]).toBe(logo.url);
+  });
+
+  it('a picture stays out of the brand kit unless the brand page asks, so it is never attached to new projects or used as a product reference', async () => {
+    const userId = await newUser();
+    const plain = await registerAsset({ userId, kind: 'logo', url: put(userId, 'logo.png') });
+    expect(plain.inBrandKit).toBe(false);
+    const inset = await upload(userId, 'image', 'photo.jpg', { inBrandKit: undefined });
+    const face = await upload(userId, 'image', 'photo.webp', { inBrandKit: undefined });
+    expect(inset).toMatchObject({ kind: 'image', inBrandKit: false });
+    expect((await assetRow(inset.id)).kind).toBe('image');
+    expect((await listAssets({ userId, kinds: ['image'] })).map((a) => a.id).sort()).toEqual([inset.id, face.id].sort());
+    expect(await listAssets({ userId, brandOnly: true })).toEqual([]);
+    const kept = await upload(userId, 'product', 'photo.jpg');
+    const project = await createProject({ userId, input: { title: 'Fresh' } });
+    expect((await listProjectAssets({ userId, projectId: project.id })).map((a) => a.id)).toEqual([kept.id]);
+    expect(await upload(userId, 'clip', 'clip.mp4')).toMatchObject({ inBrandKit: false });
   });
 
   it('keeps an mp4 and a mov clip, with their length and size, and does not send a clip to the picture check', async () => {
@@ -298,6 +317,13 @@ describe('the assets route', () => {
     await route(makeReq({ method, query, body }), res);
     return res;
   };
+
+  it('the route is allowed 300 s for a 200 MB download, and the download stays inside it', async () => {
+    const { config } = await import('../../pages/api/story/assets.js');
+    expect(config.maxDuration).toBe(300);
+    const { downloadToFile } = await import('../../lib/providers/http.js');
+    expect(downloadToFile).toBeTypeOf('function');
+  });
 
   it('GET with no query still answers the audio upload folder, and adds the picture folder', async () => {
     const userId = await newUser();
@@ -457,6 +483,16 @@ describe('the brand kit', () => {
     await expect(saveBrand({ userId: maya, patch: { logoAssetId: theirs.id } })).rejects.toMatchObject({ field: 'logoAssetId' });
     await expect(saveBrand({ userId: maya, patch: { logoAssetId: product.id } })).rejects.toMatchObject({ field: 'logoAssetId' });
     expect(await storyDb().select('story_brand', { user_id: maya })).toEqual([]);
+  });
+
+  it('saving the brand moves updated_at', async () => {
+    const userId = await newUser();
+    await saveBrand({ userId, patch: { tone: 'warm' } });
+    const [first] = await storyDb().select('story_brand', { user_id: userId });
+    await new Promise((r) => setTimeout(r, 20));
+    await saveBrand({ userId, patch: { tone: 'plain' } });
+    const [second] = await storyDb().select('story_brand', { user_id: userId });
+    expect(Date.parse(second.updated_at)).toBeGreaterThan(Date.parse(first.updated_at));
   });
 
   it('screens the offer, audience and tone with the content rules, but not the words to avoid', async () => {
@@ -708,9 +744,34 @@ describe('footage shots and insets', () => {
     await markStale({ projectId: project.id, sceneIds: ['s1'] });
     expect((await shotRow(shots[0].id)).stale).toBe(true);
     expect((await shotsView(project.id))[0].needs_rebuild).toBe(true);
-    // a rebuild keeps the footage choice for a scene that did not change
+    // the other scene's shot still carries its own sig
     const other = await shotRow(shots[1].id);
     expect(other.scene_sig).toBe(sceneSig(SCENES[1]));
+  });
+
+  it('switching a shot to footage clears the stale flags left from its generated state', async () => {
+    const { userId, project, shots } = await newProject();
+    const clip = await upload(userId, 'clip', 'clip.mp4');
+    await storyDb().update('story_shots', { id: shots[0].id }, { stale: true, clip_mismatch: true, clip_url: '/c.mp4', clip_key: 'c' });
+    const { shot } = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { source: 'footage', footage_asset_id: clip.id } });
+    expect(shot).toMatchObject({ stale: false, clip_mismatch: false });
+  });
+
+  it('a rebuild that would remove a footage shot or a picture-in-picture asks first, and applies the confirmed plan', async () => {
+    const { userId, project, shots } = await newProject({ shots: 4 });
+    await storyDb().insert('story_cast', ['Maya', 'Leo'].map((name, ord) => ({ project_id: project.id, ord, name, status: 'ready', image_url: `/p/${name}.png`, image_key: name })));
+    const clip = await upload(userId, 'clip', 'clip.mp4');
+    const photo = await upload(userId, 'image', 'photo.jpg');
+    await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { source: 'footage', footage_asset_id: clip.id } });
+    await updateShot({ userId, projectId: project.id, shotId: shots[2].id, patch: { inset_asset_id: photo.id } });
+    // scene s1 leaves the script: its shots (0 and 2) go
+    await storyDb().update('story_scripts', { project_id: project.id, version: 1 }, { scenes: [SCENES[1]] });
+    const err = await buildShotList({ userId, projectId: project.id }).catch((e) => e);
+    expect(err).toMatchObject({ status: 409, code: 'rebuild_loses_clips', extra: { count: 0, own: 2 } });
+    expect(err.message).toMatch(/2 shots with your own footage or picture-in-picture/);
+    expect((await storyDb().select('story_shots', { project_id: project.id })).length).toBe(4);
+    await buildShotList({ userId, projectId: project.id, confirm: err.extra.token });
+    expect((await storyDb().select('story_shots', { project_id: project.id })).map((s) => s.id).sort()).toEqual([shots[1].id, shots[3].id].sort());
   });
 
   it('cannot change a shot that is being made', async () => {
@@ -771,6 +832,29 @@ describe('a character with the customer\'s own picture', () => {
     await expect(setCastImage({ userId, projectId: project.id, castId: maya.id, assetId: logo.id })).rejects.toMatchObject({ status: 409 });
   });
 
+  it('picking another drawn option marks the shots with that character stale; picking the same one again marks nothing', async () => {
+    const { userId, project, shots, maya } = await withCast();
+    await storyDb().update('story_cast', { id: maya.id }, { candidates: [{ url: '/pick/Maya.png', key: 'pick-Maya' }, { url: '/pick/Maya2.png', key: 'pick-Maya2' }] });
+    await pickCast({ userId, projectId: project.id, castId: maya.id, candidateIndex: 0 });
+    for (const s of shots) expect((await shotRow(s.id)).stale).toBe(false);
+    await pickCast({ userId, projectId: project.id, castId: maya.id, candidateIndex: 1 });
+    expect(await shotRow(shots[0].id)).toMatchObject({ stale: true, clip_mismatch: true });
+    expect(await shotRow(shots[1].id)).toMatchObject({ stale: true, clip_mismatch: false });
+    expect((await shotRow(shots[2].id)).stale).toBe(false);
+    await storyDb().update('story_shots', { project_id: project.id }, { stale: false, clip_mismatch: false });
+    await pickCast({ userId, projectId: project.id, castId: maya.id, candidateIndex: 1 });
+    for (const s of shots) expect((await shotRow(s.id)).stale).toBe(false);
+  });
+
+  it('giving up the own picture for a drawn option marks the shots stale too', async () => {
+    const { userId, project, shots, maya } = await withCast();
+    const face = await upload(userId, 'image', 'photo.webp');
+    await setCastImage({ userId, projectId: project.id, castId: maya.id, assetId: face.id });
+    await storyDb().update('story_shots', { project_id: project.id }, { stale: false, clip_mismatch: false });
+    await pickCast({ userId, projectId: project.id, castId: maya.id, candidateIndex: 0 });
+    expect(await shotRow(shots[1].id)).toMatchObject({ stale: true });
+  });
+
   it('picking one of the drawn options again takes the own picture off the character, so the file can be deleted', async () => {
     const { userId, project, maya } = await withCast();
     const face = await upload(userId, 'mascot', 'photo.webp');
@@ -779,6 +863,18 @@ describe('a character with the customer\'s own picture', () => {
     const { cast } = await pickCast({ userId, projectId: project.id, castId: maya.id, candidateIndex: 0 });
     expect(cast).toMatchObject({ asset_id: null, image_url: '/pick/Maya.png', chosen_index: 0 });
     expect(await deleteAsset({ userId, assetId: face.id })).toEqual({ id: face.id });
+  });
+
+  it('an expired project copy keeps a character\'s own picture (kit files do not expire) and drops only the drawn options', async () => {
+    const { userId, project, maya, leo } = await withCast();
+    const face = await upload(userId, 'image', 'photo.webp');
+    await setCastImage({ userId, projectId: project.id, castId: maya.id, assetId: face.id });
+    await storyDb().update('story_projects', { id: project.id }, { status: 'expired' });
+    const copy = await duplicateProject({ userId, id: project.id });
+    const rows = await storyDb().select('story_cast', { project_id: copy.id }, { order: 'ord' });
+    expect(rows[0]).toMatchObject({ name: 'Maya', status: 'ready', asset_id: face.id, image_url: face.url, candidates: [], sheet: {} });
+    expect(rows[1]).toMatchObject({ name: 'Leo', status: 'draft', asset_id: null, image_url: null });
+    expect(leo.id).toBeTruthy();
   });
 
   it('works through the cast-image action', async () => {
@@ -812,9 +908,11 @@ describe('the upload token route, story-brand surface', () => {
     const me = { user: { id: userId } };
     const image = await token(me, `story-brand/${userId}/my logo.png`);
     expect(image.statusCode).toBe(200);
-    expect(image.body.options).toMatchObject({ maximumSizeInBytes: 5 * 1024 * 1024, addRandomSuffix: true, allowedContentTypes: ['image/png', 'image/jpeg', 'image/webp'] });
+    expect(image.body.options).toMatchObject({ maximumSizeInBytes: 5 * 1024 * 1024, addRandomSuffix: true, allowedContentTypes: ['image/png'] });
     const video = await token(me, `story-brand/${userId}/take.mov`);
-    expect(video.body.options).toMatchObject({ maximumSizeInBytes: 200 * 1024 * 1024, allowedContentTypes: ['video/mp4', 'video/quicktime'] });
+    expect(video.body.options).toMatchObject({ maximumSizeInBytes: 200 * 1024 * 1024, allowedContentTypes: ['video/quicktime'] });
+    expect((await token(me, `story-brand/${userId}/a.jpeg`)).body.options.allowedContentTypes).toEqual(['image/jpeg']);
+    expect((await token(me, `story-brand/${userId}/a.mp4`)).body.options.allowedContentTypes).toEqual(['video/mp4']);
     for (const name of ['jpg', 'jpeg', 'webp', 'mp4']) expect((await token(me, `story-brand/${userId}/a.${name}`)).statusCode).toBe(200);
     const bad = [
       `story-brand/${randomUUID()}/a.png`, `story-brand/${userId}/a.gif`, `story-brand/${userId}/a.html`, `story-brand/${userId}/a.svg`, `story-brand/${userId}/sub/a.png`,
@@ -838,9 +936,9 @@ describe('the upload token route, story-brand surface', () => {
 
 describe('the demuxer helpers', () => {
   it('force the image demuxer the type promised, and only the file protocol', () => {
-    expect(imageInputArgs('image/png')).toEqual(['-protocol_whitelist', 'file', '-f', 'image2', '-c:v', 'png']);
-    expect(imageInputArgs('image/jpeg')).toEqual(['-protocol_whitelist', 'file', '-f', 'image2', '-c:v', 'mjpeg']);
-    expect(imageInputArgs('image/webp')).toEqual(['-protocol_whitelist', 'file', '-f', 'image2', '-c:v', 'webp']);
+    expect(imageInputArgs('image/png')).toEqual(['-protocol_whitelist', 'file', '-f', 'image2', '-pattern_type', 'none', '-c:v', 'png']);
+    expect(imageInputArgs('image/jpeg')).toEqual(['-protocol_whitelist', 'file', '-f', 'image2', '-pattern_type', 'none', '-c:v', 'mjpeg']);
+    expect(imageInputArgs('image/webp')).toEqual(['-protocol_whitelist', 'file', '-f', 'image2', '-pattern_type', 'none', '-c:v', 'webp']);
     expect(() => imageInputArgs('image/gif')).toThrow();
     expect(imageMime('image/png', 'x.bin')).toBe('image/png');
     expect(imageMime(null, 'https://abc.public.blob.vercel-storage.com/story-brand/u/a-1.JPG?x=1')).toBe('image/jpeg');

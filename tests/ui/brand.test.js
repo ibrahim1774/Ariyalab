@@ -149,6 +149,16 @@ describe('the asset picker', () => {
     expect(await within(dialog).findByRole('button', { name: 'Use take' })).toBeInTheDocument();
   });
 
+  it('an upload from the picker stays out of the brand kit; only the brand page puts a file in it', async () => {
+    client.getAssets.mockResolvedValue([]);
+    client.uploadMedia.mockResolvedValue(asset({ id: 'n3', kind: 'image', name: 'inset' }));
+    render(<AssetPicker kinds={['image', 'product']} uploadKind="image" label="Add a picture-in-picture" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Add a picture-in-picture' }));
+    const dialog = await screen.findByRole('dialog');
+    await act(async () => { fireEvent.change(dialog.querySelector('input[type="file"]'), { target: { files: [file('inset.png')] } }); });
+    await waitFor(() => expect(client.uploadMedia).toHaveBeenCalledWith(expect.any(File), 'image', expect.objectContaining({ inBrandKit: false })));
+  });
+
   it('refuses a wrong file type before anything is uploaded, in the server words', async () => {
     client.getAssets.mockResolvedValue([]);
     const dialog = await open();
@@ -255,7 +265,7 @@ describe('a character with the customer\'s own picture', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Use my own image' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Use my mascot' }));
     await waitFor(() => expect(client.setCastImage).toHaveBeenCalledWith('p1', 'c1', 'm1'));
-    expect(client.getAssets).toHaveBeenCalledWith({ kinds: ['mascot', 'product', 'logo'] });
+    expect(client.getAssets).toHaveBeenCalledWith({ kinds: ['image', 'mascot', 'product', 'logo'] });
   });
 
   it('shows the picture in use, and lets the character continue', () => {

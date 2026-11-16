@@ -53,7 +53,11 @@ export function describeError(err, { returnTo } = {}) {
   }
   if (code === 'rebuild_loses_clips') {
     const n = Number(err?.body?.count);
-    const what = Number.isFinite(n) && n > 0 ? `${n} finished ${n === 1 ? 'clip' : 'clips'}` : 'finished clips';
+    const own = Number(err?.body?.own);
+    const what = [
+      Number.isFinite(n) && n > 0 ? `${n} finished ${n === 1 ? 'clip' : 'clips'}` : null,
+      Number.isFinite(own) && own > 0 ? `${own} ${own === 1 ? 'shot' : 'shots'} with your own footage or picture-in-picture` : null,
+    ].filter(Boolean).join(' and ') || 'finished clips';
     return { ...out, title: 'Finished clips would be replaced', message: `This rebuild replaces ${what}. Confirm to rebuild anyway.` };
   }
   if (code === 'needs_rebuild') {

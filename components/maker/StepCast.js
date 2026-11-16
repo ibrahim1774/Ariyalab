@@ -144,8 +144,8 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
               {busy === 'regen' ? 'Making new pictures…' : regenCost > 0 ? `Regenerate (${regenCost} credits)` : 'Regenerate'}
             </Button>
             <AssetPicker
-              kinds={['mascot', 'product', 'logo']}
-              uploadKind="mascot"
+              kinds={['image', 'mascot', 'product', 'logo']}
+              uploadKind="image"
               label="Use my own image"
               title={`Use your own picture for ${cast.name}`}
               selectedId={cast.asset_id}

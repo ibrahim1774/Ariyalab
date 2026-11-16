@@ -386,6 +386,21 @@ describe('money', () => {
     expect(await storyDb().select('story_cast', { project_id: projectId })).toHaveLength(0);
   });
 
+  it('create_project starts with the brand kit: offer and audience unless given, and the kit pictures attached', async () => {
+    const user = newUser();
+    const client = await connect(await tokenFor(user));
+    await storyDb().insert('story_brand', { user_id: user.id, offer: 'Haircuts that last', audience: 'busy dads' });
+    const [pic] = await storyDb().insert('story_assets', { user_id: user.id, kind: 'product_photo', in_brand_kit: true, name: 'bottle', url: '/p/bottle.png' });
+    const [other] = await storyDb().insert('story_assets', { user_id: user.id, kind: 'image', in_brand_kit: false, name: 'inset', url: '/p/inset.png' });
+    const { data } = await use(client, 'create_project', { title: 'Branded', purpose: 'service' });
+    const row = (await storyDb().select('story_projects', { id: data.project.id }))[0];
+    expect(row).toMatchObject({ offer: 'Haircuts that last', audience: 'busy dads' });
+    expect((await storyDb().select('story_project_assets', { project_id: data.project.id })).map((l) => [l.asset_id, l.role])).toEqual([[pic.id, 'product']]);
+    expect(other.id).toBeTruthy();
+    const own = await use(client, 'create_project', { title: 'Own words', purpose: 'service', offer: 'Beard trims' });
+    expect((await storyDb().select('story_projects', { id: own.data.project.id }))[0]).toMatchObject({ offer: 'Beard trims', audience: 'busy dads' });
+  });
+
   it('analyze_reference needs the rights statement confirmed and refuses anything but a supported link', async () => {
     const user = newUser();
     const client = await connect(await tokenFor(user));
