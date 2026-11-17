@@ -101,7 +101,7 @@ vi.mock('../lib/supabaseServer', () => {
 
 import { PLANS, planFromPrice, topupFromPrice, parseV2LookupKey, v2PlanLookupKey, v2TopupLookupKey, planInfoFromPrice } from '../lib/stripe';
 import { setCreditsDb, getBalance } from '../lib/credits.js';
-import { setPricingDb, _resetPricingCache, v2Offers, getPricing } from '../lib/pricing.js';
+import { setPricingDb, _resetPricingCache, v2Offers, getPricing, PLANS_V2 } from '../lib/pricing.js';
 import { setGrantsDb, grantYearlyMonths, dueYearlyMonths, yearlyRef, addMonthsUtc } from '../lib/grants.js';
 import webhook from '../pages/api/stripe-webhook.js';
 import checkout from '../pages/api/checkout.js';
@@ -354,7 +354,7 @@ describe('Task 27 round 1: checkout minors', () => {
     await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { plan: 'creator', returnTo: '/ugc-2' } }, res);
     expect(res.statusCode).toBe(200);
     const created = S.state.created.at(-1);
-    expect(created.line_items[0].price).toBe(`price_${CREATOR_M}`);
+    expect(created.line_items[0].price).toBe(`price_${v2PlanLookupKey({ plan: 'creator', interval: 'month', amountCents: 4900, credits: PLANS_V2.creator.credits })}`);
     expect(created.success_url).toContain('/ugc-2/claim?session_id=');
     expect(created.metadata.pending_supabase_link).toBe('true');
   });

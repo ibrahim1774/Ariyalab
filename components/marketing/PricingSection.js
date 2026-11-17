@@ -20,6 +20,7 @@ const CARDS = [
 const TICKS = ['Cancel any time', 'Secure checkout', 'Plan credits roll over for one month', 'Top-up credits never expire'];
 
 function videoCount(n) {
+  if (n < 1) return 'Under 1 video';
   return `${n} ${n === 1 ? 'video' : 'videos'}`;
 }
 
@@ -73,7 +74,7 @@ export default function PricingSection() {
                 </p>
                 <ul className={styles.list}>
                   <li>{plan.credits.toLocaleString('en-US')} credits each month</li>
-                  <li>About {videosPerPlan({ credits: plan.credits, quality: 'pro_narrated', seconds: CARD_VIDEO_SECONDS })} videos of {CARD_VIDEO_SECONDS} seconds</li>
+                  <li>About {videoCount(videosPerPlan({ credits: plan.credits, quality: 'pro_narrated', seconds: CARD_VIDEO_SECONDS }))} of {CARD_VIDEO_SECONDS} seconds</li>
                   <li>Captions and music included</li>
                 </ul>
                 <Button href={startHref} variant={dark ? 'primary' : 'ghost'} className={styles.cta}>

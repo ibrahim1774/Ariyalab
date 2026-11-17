@@ -195,15 +195,15 @@ describe('v2 offers from pricing config', () => {
     await setConfig('yearlyDiscount', undefined);
     const o = v2Offers(await getPricing());
     expect(o.yearlyDiscount).toBe(0.15);
-    expect(o.plans.creator).toMatchObject({ usd: 49, credits: 2600, monthlyCents: 4900, yearlyCents: 49980 });
-    expect(o.topups.s).toEqual({ usd: 15, credits: 700, cents: 1500 });
+    expect(o.plans.creator).toMatchObject({ usd: 49, credits: 1500, monthlyCents: 4900, yearlyCents: 49980 });
+    expect(o.topups.s).toEqual({ usd: 15, credits: 450, cents: 1500 });
   });
   it('config overrides, a discount, and bad values fall back to defaults', async () => {
     await setConfig('plans', { creator: { usd: 59 }, studio: { usd: -1, credits: 1.5 } });
     await setConfig('yearlyDiscount', 0.2);
     const o = v2Offers(await getPricing());
-    expect(o.plans.creator).toMatchObject({ usd: 59, credits: 2600, monthlyCents: 5900, yearlyCents: 56640 });
-    expect(o.plans.studio).toMatchObject({ usd: 99, credits: 5400 });
+    expect(o.plans.creator).toMatchObject({ usd: 59, credits: 1500, monthlyCents: 5900, yearlyCents: 56640 });
+    expect(o.plans.studio).toMatchObject({ usd: 99, credits: 3100 });
     await setConfig('plans', undefined);
     await setConfig('yearlyDiscount', undefined);
   });
@@ -231,19 +231,19 @@ describe('checkout', () => {
     let res = makeRes();
     await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { plan: 'creator' } }, res);
     expect(res.statusCode).toBe(200);
-    expect(S.state.v2Prices.at(-1)).toEqual({ kind: 'plan', plan: 'creator', interval: 'month', amountCents: 4900, credits: 2600 });
-    expect(S.state.created.at(-1).line_items[0].price).toBe(`price_${CREATOR_M}`);
+    expect(S.state.v2Prices.at(-1)).toEqual({ kind: 'plan', plan: 'creator', interval: 'month', amountCents: 4900, credits: 1500 });
+    expect(S.state.created.at(-1).line_items[0].price).toBe(`price_${v2PlanLookupKey({ plan: "creator", interval: "month", amountCents: 4900, credits: 1500 })}`);
     expect(res.body.meta.value).toBe(49);
 
     res = makeRes();
     await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { plan: 'studio', interval: 'year' } }, res);
     expect(res.statusCode).toBe(200);
-    expect(S.state.v2Prices.at(-1)).toEqual({ kind: 'plan', plan: 'studio', interval: 'year', amountCents: 106920, credits: 5400 });
+    expect(S.state.v2Prices.at(-1)).toEqual({ kind: 'plan', plan: 'studio', interval: 'year', amountCents: 106920, credits: 3100 });
 
     res = makeRes();
     await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { mode: 'topup', pack: 'm', catalog: 'v2' } }, res);
     expect(res.statusCode).toBe(200);
-    expect(S.state.v2Prices.at(-1)).toEqual({ kind: 'topup', pack: 'm', amountCents: 4000, credits: 1900 });
+    expect(S.state.v2Prices.at(-1)).toEqual({ kind: 'topup', pack: 'm', amountCents: 4000, credits: 1240 });
 
     // A page that drew the legacy packs ($50 for 7,600) never buys the v2 pack behind the same key.
     const before = S.state.created.length;

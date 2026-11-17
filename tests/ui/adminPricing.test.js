@@ -24,7 +24,7 @@ describe('admin pricing editor', () => {
     render(<PricingEditor />);
     await waitFor(() => expect(screen.getByText(/Billing v2 is/)).toBeInTheDocument());
     expect(screen.getByRole('alert')).toHaveTextContent('plans');
-    expect(document.querySelector('[data-offer="studio"]')).toHaveTextContent('$0.0183');
+    expect(document.querySelector('[data-offer="studio"]')).toHaveTextContent('$0.0319');
     expect(document.querySelector('[data-quality="pro_talking"]')).toBeInTheDocument();
   });
 

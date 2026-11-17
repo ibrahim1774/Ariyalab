@@ -72,11 +72,11 @@ describe('homepage', () => {
     renderPage();
     for (const p of ['$29', '$49', '$99']) expect(screen.getByText(p)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /yearly/i }));
-    // No yearly discount until the owner sets one (pricing_config yearlyDiscount): same per-month price, billed yearly.
-    for (const p of ['$29.00', '$49.00', '$99.00']) expect(screen.getByText(p)).toBeInTheDocument();
-    expect(screen.getByText('Billed yearly at $348.00')).toBeInTheDocument();
-    expect(screen.queryByText(/save \d+%/i)).toBeNull();
-    expect(screen.getAllByText(/about \d+ videos/i)).toHaveLength(3);
+    // 15% off yearly (owner decision 2026-11-16).
+    for (const p of ['$24.65', '$41.65', '$84.15']) expect(screen.getByText(p)).toBeInTheDocument();
+    expect(screen.getByText('Billed yearly at $295.80')).toBeInTheDocument();
+    expect(screen.getByText(/save 15%/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/about \d+ videos? of/i)).toHaveLength(3);
   });
 
   it('has eight FAQ questions', () => {
@@ -104,19 +104,19 @@ describe('what each plan makes', () => {
     const { container } = renderPage();
     expect(screen.getByRole('heading', { name: 'What each plan makes' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pro narrated' })).toHaveAttribute('aria-pressed', 'true');
-    expect(rowCells(container, 45)).toEqual(['2 videos', '3 videos', '7 videos']);
+    expect(rowCells(container, 45)).toEqual(['1 video', '2 videos', '4 videos']);
     const cards = [...container.querySelectorAll('[data-plan]')].map((c) => c.textContent);
-    expect(cards[0]).toMatch(/About 2 videos of 45 seconds/);
-    expect(cards[1]).toMatch(/About 3 videos of 45 seconds/);
-    expect(cards[2]).toMatch(/About 7 videos of 45 seconds/);
+    expect(cards[0]).toMatch(/About 1 video of 45 seconds/);
+    expect(cards[1]).toMatch(/About 2 videos of 45 seconds/);
+    expect(cards[2]).toMatch(/About 4 videos of 45 seconds/);
   });
 
   it('switches quality levels', () => {
     const { container } = renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Standard' }));
-    expect(rowCells(container, 30)).toEqual(['3 videos', '6 videos', '12 videos']);
+    expect(rowCells(container, 30)).toEqual(['2 videos', '3 videos', '7 videos']);
     fireEvent.click(screen.getByRole('button', { name: 'Pro talking' }));
-    expect(rowCells(container, 60)).toEqual(['1 video', '1 video', '4 videos']);
+    expect(rowCells(container, 60)).toEqual(['Under 1 video', '1 video', '2 videos']);
   });
 
   it('explains the levels and the cost line', () => {
@@ -129,10 +129,10 @@ describe('what each plan makes', () => {
 
 describe('pricing data', () => {
   it('matches the starting plans', () => {
-    expect(PLANS.starter).toEqual({ usd: 29, credits: 1500 });
-    expect(PLANS.creator).toEqual({ usd: 49, credits: 2600 });
-    expect(PLANS.studio).toEqual({ usd: 99, credits: 5400 });
-    expect(YEARLY_DISCOUNT).toBe(0);
+    expect(PLANS.starter).toEqual({ usd: 29, credits: 900 });
+    expect(PLANS.creator).toEqual({ usd: 49, credits: 1500 });
+    expect(PLANS.studio).toEqual({ usd: 99, credits: 3100 });
+    expect(YEARLY_DISCOUNT).toBe(0.15);
     expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(2);
     expect(videosPerPlan({ credits: 5400, quality: 'pro_narrated', seconds: 45 })).toBe(7);
   });

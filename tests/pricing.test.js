@@ -135,9 +135,9 @@ describe('getPricing', () => {
 
 describe('constants', () => {
   it('exposes the v2 plans, topups and discounts', () => {
-    expect(PLANS_V2.starter).toEqual({ usd: 29, credits: 1500 });
-    expect(PLANS_V2.studio).toEqual({ usd: 99, credits: 5400 });
-    expect(TOPUPS_V2.l).toEqual({ usd: 100, credits: 5000 });
+    expect(PLANS_V2.starter).toEqual({ usd: 29, credits: 900 });
+    expect(PLANS_V2.studio).toEqual({ usd: 99, credits: 3100 });
+    expect(TOPUPS_V2.l).toEqual({ usd: 100, credits: 3100 });
     expect(YEARLY_DISCOUNT).toBe(0.15); // owner decision 2026-11-16: 15% off yearly
     expect(LEGACY_TO_V2).toBe(21 / 100);
   });
@@ -174,29 +174,30 @@ describe('labels', () => {
   });
 });
 
-describe('the 2x rule', () => {
-  const QUALITIES = ['standard', 'pro_narrated', 'pro_talking'];
+describe('the 70% rule', () => {
+  const QUALITIES = ['economy', 'standard', 'pro_narrated', 'pro_talking'];
   const LENGTHS = [15, 30, 45, 60];
-  const studio = PLANS_V2.studio.usd / PLANS_V2.studio.credits;
-  const starter = PLANS_V2.starter.usd / PLANS_V2.starter.credits;
+  const OFFERS = [...Object.values(PLANS_V2), ...Object.values(TOPUPS_V2)];
+  const net = (usd) => usd - 0.029 * usd - 0.3; // after Stripe's 2.9% + $0.30
 
   it('keeps provider costs as agreed', () => {
     expect(PROVIDER_COSTS_USD.projectFixed).toBe(0.84);
     expect(PROVIDER_COSTS_USD.rerollAllowance).toBe(0.2);
   });
-  it('charges at least 1.95x cost at the cheapest credit price sold', () => {
-    for (const quality of QUALITIES) {
-      for (const seconds of LENGTHS) {
-        expect(markup({ quality, seconds, usdPerCredit: studio }), `${quality} ${seconds}s`).toBeGreaterThanOrEqual(1.95);
+  it('keeps at least 70% margin on every plan and top-up when every credit is used', () => {
+    for (const offer of OFFERS) {
+      for (const quality of QUALITIES) {
+        for (const seconds of LENGTHS) {
+          const costPerCredit = costOfVideoUsd({ quality, seconds }) / creditsForVideo({ quality, seconds });
+          const margin = 1 - (offer.credits * costPerCredit) / net(offer.usd);
+          expect(margin, `${offer.usd} ${quality} ${seconds}s`).toBeGreaterThanOrEqual(0.7);
+        }
       }
     }
   });
-  it('charges at most 2.4x cost at the Starter price', () => {
-    for (const quality of QUALITIES) {
-      for (const seconds of LENGTHS) {
-        expect(markup({ quality, seconds, usdPerCredit: starter }), `${quality} ${seconds}s`).toBeLessThanOrEqual(2.4);
-      }
-    }
+  it('stays under 80% on the Starter plan for standard video (credits not cut too far)', () => {
+    const costPerCredit = costOfVideoUsd({ quality: 'standard', seconds: 30 }) / creditsForVideo({ quality: 'standard', seconds: 30 });
+    expect(1 - (PLANS_V2.starter.credits * costPerCredit) / net(PLANS_V2.starter.usd)).toBeLessThan(0.8);
   });
   it('computes exact credits per video', () => {
     expect(creditsForVideo({ quality: 'pro_narrated', seconds: 45 })).toBe(720);
