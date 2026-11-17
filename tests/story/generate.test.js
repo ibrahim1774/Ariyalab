@@ -715,7 +715,7 @@ describe('carry 1: GET /status', () => {
     const res = await getStatus(ctx);
     expect(res.statusCode).toBe(200);
     const body = res.body;
-    expect(Object.keys(body).sort()).toEqual(['audio', 'balance', 'cast', 'jobs', 'project', 'render', 'renders', 'rerolls', 'shots']);
+    expect(Object.keys(body).sort()).toEqual(['audio', 'balance', 'cast', 'jobs', 'project', 'render', 'renderPrice', 'renders', 'rerolls', 'shots']);
     expect(body.project.id).toBe(ctx.project.id);
     expect(body.project).not.toHaveProperty('gen_claim_id');
     expect(body.project).not.toHaveProperty('pending_shots');

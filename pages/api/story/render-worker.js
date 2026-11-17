@@ -9,7 +9,8 @@ import { workerAuthorized } from '../../../lib/story/workers.js';
  *
  * At most ONE render per invocation, claimed at the start with the run's
  * deadline: a second render would start with less than the window left. The
- * cron kicks again every minute for the rest. A render never charges credits.
+ * cron kicks again every minute for the rest. The first render of a project is free; later ones hold
+ * credits that are spent only when the render finishes.
  */
 export const config = { maxDuration: 300 };
 

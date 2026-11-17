@@ -188,6 +188,35 @@ describe('render price', () => {
   });
 });
 
+describe('onDone gives up', () => {
+  it('a free first render whose project-step update keeps failing ends failed (file deleted) and the next render is still free', async () => {
+    const ctx = await newProject({ credits: 100 });
+    const { render } = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    // Written done with its stored file; then every story_projects update throws, so onDone never finishes.
+    await raw.query(`update story_renders set storage_key = $2, file_url = $3, status = 'done' where id = $1`, [render.id, `story/x/render/${render.id}.mp4`, `/api/mock/storage/${render.id}.mp4`]);
+    const real = storyDb();
+    const flaky = new Proxy(real, {
+      get: (target, prop, recv) => (prop === 'update'
+        ? (table, ...rest) => (table === 'story_projects' ? Promise.reject(new Error('db flaky')) : target.update(table, ...rest))
+        : Reflect.get(target, prop, recv)),
+    });
+    setStoryDb(flaky);
+    try {
+      await runWorkerJob('render', {});
+      for (let i = 1; i <= 12; i += 1) await sweep({ now: new Date(Date.now() + i * 3_600_000) });
+    } finally {
+      setStoryDb(real);
+    }
+    const row = await rowOf(render.id);
+    expect(row.status).toBe('failed');
+    expect((await jobOf(row)).status).toBe('failed');
+    expect(await renderPrice(ctx.project)).toEqual({ credits: 0 });
+    const next = await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+    expect((await rowOf(next.render.id)).cost_credits).toBe(0);
+    expect((await balance(ctx.userId)).available).toBe(100);
+  });
+});
+
 describe('killed requests', () => {
   async function pricedProject() {
     const ctx = await newProject({ credits: 100 });
