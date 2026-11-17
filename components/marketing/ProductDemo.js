@@ -254,7 +254,6 @@ function SceneWatch({ lt, press, active, still, playing }) {
   const ready = still || lt >= PLAY_AT;
   const picked = !still && lt >= 6800;
   const saved = !still && lt >= 9000;
-  const making = Math.min(4, made + 1);
 
   useEffect(() => {
     const v = ref.current;
@@ -281,7 +280,7 @@ function SceneWatch({ lt, press, active, still, playing }) {
         )}
         <span className={`${styles.renderLayer} ${ready ? styles.gone : ''}`}>
           <span className={styles.renderCard}>
-            <span className={styles.renderTitle}>Making scene {making} of 4</span>
+            <span className={styles.renderTitle}>{made >= 4 ? 'Putting it together' : `Making scene ${made + 1} of 4`}</span>
             <span className={styles.track}><span style={{ transform: `scaleX(${clamp01((lt - MAKE_FROM) / (4 * MAKE_EACH)).toFixed(3)})` }} /></span>
           </span>
         </span>
@@ -486,7 +485,8 @@ export default function ProductDemo() {
     const prev = (scene.index + SCENES.length - 1) % SCENES.length;
     panels.unshift({ index: prev, lt: SCENES[prev].ms, role: 'leaving' });
   }
-  if (!still && scene.index < SCENES.length - 1) panels.push({ index: scene.index + 1, lt: 0, role: 'next' });
+  // The screen after this one waits hidden, so its pictures are loaded and it never shows blank on the way in. After the last screen that is the first one (the loop).
+  if (!still) panels.push({ index: (scene.index + 1) % SCENES.length, lt: 0, role: 'next' });
 
   const spent = scene.id === 'watch';
   const balance = spent ? BALANCE - COST : BALANCE;

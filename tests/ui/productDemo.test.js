@@ -225,3 +225,46 @@ describe('ProductDemo', () => {
     expect(text).not.toMatch(/[–—]| - /);
   });
 });
+
+describe('polish', () => {
+  it('never says "Making scene 4 of 4" once the badge says Ready', () => {
+    reduceMotion(false);
+    const { container } = render(<ProductDemo />);
+    advance(startOf('watch'));
+    let sawMaking = false;
+    for (let ms = 0; ms < SCENES[3].ms; ms += 50) {
+      advance(50);
+      const text = container.querySelector('[data-panel="active"]')?.textContent || '';
+      if (text.includes('Ready')) expect(text).not.toMatch(/Making scene/);
+      if (/Making scene/.test(text)) sawMaking = true;
+    }
+    expect(sawMaking).toBe(true);
+  });
+
+  it('the badge says Making until the last scene is done', () => {
+    reduceMotion(false);
+    const { container } = render(<ProductDemo />);
+    advance(startOf('watch') + 200 + 3 * 900 + 400);
+    const text = container.querySelector('[data-panel="active"]').textContent;
+    expect(text).toMatch(/Making scene 4 of 4/);
+    expect(text).toMatch(/Making your video/);
+    expect(text).not.toMatch(/Ready/);
+  });
+
+  it('on loop restart the step and its panel switch together and the first screen was already waiting', () => {
+    reduceMotion(false);
+    const { container } = render(<ProductDemo />);
+    advance(startOf('watch') + 500);
+    // While the last screen shows, the first one is already mounted (hidden) so it is never blank on the way in.
+    expect(container.querySelector('[data-panel="next"]')).not.toBeNull();
+    advance(TOTAL - startOf('watch') - 500 + 60);
+    expect(step(container)).toBe('describe');
+    const active = container.querySelectorAll('[data-panel="active"]');
+    expect(active).toHaveLength(1);
+    expect(active[0].textContent).toContain('Describe your video');
+    expect(container.querySelector('[data-demo-rail] li[data-state="current"]').getAttribute('data-step')).toBe('describe');
+    expect(container.querySelectorAll('[data-demo-rail] li[data-state="current"]')).toHaveLength(1);
+    // The old screen is gone from view at once, not left lit under the new one.
+    expect(container.querySelector('[data-panel="leaving"]')?.getAttribute('aria-hidden') ?? 'true').toBe('true');
+  });
+});
