@@ -244,13 +244,13 @@ describe('an incomplete plan brings screen 3 back, even after clips exist', () =
     const s = clipped({ shots: [shot({ status: 'ready', still_url: '/s.png', needs_rebuild: true })] });
     expect(deriveScreen(s)).toBe('plan');
     expect(furthestScreen(s)).toBe('watch');
-    expect(planReason(s)).toBe('Your script changed, so some pictures need making again.');
+    expect(planReason(s)).toBe('The storyboard needs updating to match your changes.');
   });
   it('a shot with no picture (a rebuild, a flag switch) -> plan', () => {
     const s = clipped({ shots: [shot({ status: 'draft', still_url: null }), shot({ id: 's2', ord: 1, status: 'ready', still_url: null, clip_url: '/c.mp4' })] });
     expect(deriveScreen(s)).toBe('plan');
     expect(planGaps(s).pictures).toBe(true);
-    expect(planReason(s)).toMatch(/pictures need making again/);
+    expect(planReason(s)).toBe('Some pictures are missing and need making.');
   });
   it('the switch to the same characters on a project with no cast -> plan, asking for the cast', () => {
     const s = clipped({ cast: [] });
@@ -265,5 +265,48 @@ describe('an incomplete plan brings screen 3 back, even after clips exist', () =
   it('pictures a clip outlived (ready, no picture) are made again like any other missing picture', () => {
     const s = clipped({ shots: [shot({ status: 'ready', still_url: null, clip_url: '/c.mp4', still_credits: 2 })] });
     expect(nextPlanAction(s)).toEqual({ type: 'ask', what: 'pictures', credits: 2, ids: ['s1'] });
+  });
+});
+
+describe('guards: the plan screen always has something to press or watch', () => {
+  const clipped = (over = {}) => st({ project: project({ step: 'generate' }), cast: [castRow()], shots: [shot({ status: 'ready', still_url: '/s.png', clip_url: '/c.mp4' })], ...over });
+  const leftovers = [
+    castRow({ id: 'x1', status: 'blocked', chosen_index: null, image_url: null, candidates: [] }),
+    castRow({ id: 'x2', status: 'failed', chosen_index: null, image_url: null, candidates: [] }),
+    castRow({ id: 'x3', status: 'ready', chosen_index: null, image_url: null, candidates: [] }),
+    castRow({ id: 'x4', status: 'ready', chosen_index: null, image_url: null, candidates: [{ url: '/a.png' }] }),
+  ];
+
+  it('different people in every scene: leftover characters are not a gap, and a finished video is never sent to Finish the plan', () => {
+    for (const row of leftovers) {
+      const s = clipped({ project: project({ step: 'generate', consistent_cast: false }), cast: [row], renders: [{ status: 'done', created_at: '2026-11-16T12:00:00Z' }] });
+      expect(planGaps(s).pick).toBe(false);
+      expect(planReason(s)).toBeNull();
+      expect(deriveScreen(s)).toBe('watch');
+    }
+  });
+
+  it('every state that sends the customer to the plan screen has an action, an ask, a wait or a blocked card, never done', () => {
+    const states = [
+      clipped({ shots: [shot({ status: 'ready', still_url: '/s.png', needs_rebuild: true })] }),
+      clipped({ shots: [shot({ status: 'draft', still_url: null })] }),
+      clipped({ shots: [shot({ status: 'ready', still_url: null, clip_url: '/c.mp4' })] }),
+      clipped({ shots: [shot({ status: 'failed', still_url: null })] }),
+      clipped({ shots: [shot({ status: 'blocked', still_url: null })] }),
+      clipped({ shots: [shot({ status: 'still_pending', still_url: null })] }),
+      clipped({ cast: [] }),
+      ...leftovers.map((row) => clipped({ cast: [row] })),
+    ];
+    for (const s of states) {
+      expect(deriveScreen(s), JSON.stringify(s.cast.map((c) => c.status)) + JSON.stringify(s.shots.map((x) => x.status))).toBe('plan');
+      expect(['done', 'none']).not.toContain(nextPlanAction(s).type);
+    }
+  });
+
+  it('a healthy finished project never gets Finish the plan, whatever cast rows are left', () => {
+    const ok = [castRow(), castRow({ id: 'c2', status: 'ready', chosen_index: 1 })];
+    const s = clipped({ cast: ok, renders: [{ status: 'done' }], render: { status: 'done' } });
+    expect(deriveScreen(s)).toBe('watch');
+    expect(planReason(s)).toBeNull();
   });
 });

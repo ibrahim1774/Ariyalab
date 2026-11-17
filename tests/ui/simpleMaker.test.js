@@ -864,7 +864,7 @@ describe('screen 4: no dead ends', () => {
     client.buildShots.mockResolvedValue({});
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     // The plan screen comes back with the reason; the same button lives there.
-    expect(await screen.findByTestId('plan-reason')).toHaveTextContent(/script changed/i);
+    expect(await screen.findByTestId('plan-reason')).toHaveTextContent(/storyboard needs updating/i);
     expect(client.startRender).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Update the storyboard' }));
     await waitFor(() => expect(client.buildShots).toHaveBeenCalledWith('p1'));
@@ -942,7 +942,7 @@ describe('finish the plan', () => {
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     // The plan screen comes back, with the reason in plain words and the one button.
     expect(await screen.findByRole('heading', { name: /Check the plan/ })).toBeInTheDocument();
-    expect(screen.getByTestId('plan-reason')).toHaveTextContent('Your script changed, so some pictures need making again.');
+    expect(screen.getByTestId('plan-reason')).toHaveTextContent('The storyboard needs updating to match your changes.');
     fireEvent.click(await screen.findByRole('button', { name: 'Update the storyboard' }));
     // The pictures are made (nothing to pay), then the plan is complete and the video comes back to Watch and fix.
     await waitFor(() => expect(calls.find((c) => c[0] === 'stills')).toEqual(['stills', ['sh2'], 0]), { timeout: 8000 });
@@ -1019,5 +1019,34 @@ describe('finish the plan', () => {
     expect(screen.queryByText(/Your scenes are being made/)).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Finish the plan' }));
     expect(await screen.findByRole('heading', { name: /Check the plan/ })).toBeInTheDocument();
+  });
+});
+
+describe('fix round 3', () => {
+  beforeEach(() => { client.getScript.mockResolvedValue(SCRIPT); client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 40)); });
+  const finished = (extra = {}) => ({ project: project({ step: 'review', fee_charged: true }), cast: [castRow()], shots: [ready(1, 'a'), ready(2, 'b')], jobs: [{ id: 'j1', kind: 'clip', status: 'done', updated_at: T(1), payload: {} }], audio: done, renderPrice: { credits: 5 }, render: { id: 'r', version: 1, status: 'done', url: '/v.mp4', created_at: T(5), warnings: [] }, renders: [{ id: 'r', version: 1, status: 'done', url: '/v.mp4', created_at: T(5), warnings: [] }], ...extra });
+
+  it('a leftover blocked character on a different-people video is not a gap: the video shows its Download button', async () => {
+    fakeServer(finished({ project: project({ step: 'review', fee_charged: true, consistent_cast: false }), cast: [castRow({ status: 'blocked', chosen_index: null, image_url: null, candidates: [] })] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByRole('heading', { name: /Watch and fix/ })).toBeInTheDocument();
+    expect(await screen.findByRole('link', { name: /Download/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Finish the plan' })).toBeNull();
+  });
+
+  it('the marker is cleared once the plan is complete even when clips already exist', async () => {
+    const { calls } = fakeServer(finished({ project: project({ step: 'review', fee_charged: true, plan_requested: true }) }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await waitFor(() => expect(calls).toContainEqual(['marker', false]));
+  });
+
+  it('a failed price read on the cast ask says so and offers Try again, not an endless wait', async () => {
+    fakeServer(finished({ project: project({ step: 'cast', fee_charged: true }), cast: [], shots: [ready(1, 'a', { needs_rebuild: true, still_url: null })], render: null, renders: [] }));
+    client.getPlanQuote.mockRejectedValueOnce(new StoryApiError({ status: 503, code: 'busy' }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByText('We could not get the price.')).toBeInTheDocument();
+    client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [] });
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(await screen.findByRole('button', { name: 'Carry on designing (included)' })).toBeEnabled();
   });
 });

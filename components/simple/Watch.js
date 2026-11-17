@@ -343,13 +343,6 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
           <p>{gap} The plan needs finishing before more scenes can be made.</p>
         </div>
       )}
-      {needsRebuild && !gap && (
-        <div className={styles.askCard} data-testid="watch-stale">
-          <p>Your script changed after these scenes were made. Update the storyboard so the pictures match, then remake the scenes that changed. Each price shows before anything is charged.</p>
-          <Button onClick={() => rebuild.run()} disabled={rebuild.busy}>{rebuild.busy ? 'Updating…' : 'Update the storyboard'}</Button>
-          <ErrorNotice error={rebuild.error} returnTo={returnTo} onRefresh={refresh} />
-        </div>
-      )}
       {issues.map((i) => (
         <div key={i.kind} className={styles.askCard} data-testid={`watch-${i.kind}`}>
           <p>{i.kind === 'voice' ? 'The narration' : 'The music'} {i.status === 'none' ? 'is not made yet' : i.status === 'blocked' ? 'was blocked' : 'did not come out'}, so the video cannot be put together yet.</p>

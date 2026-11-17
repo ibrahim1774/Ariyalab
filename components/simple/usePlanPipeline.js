@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, pickCast, setPlanRequested, startCast } from '../../lib/story/client';
-import { FREE_STARTS, actionKey, confirmedFrom, nextPlanAction } from './derive';
+import { FREE_STARTS, actionKey, clipsStarted, confirmedFrom, nextPlanAction } from './derive';
 
 const COOL_MS = 4000;
 // A wait older than this gets a message and a next step instead of a spinner.
@@ -135,10 +135,12 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
 
   // The plan is complete: clear the marker (once) so a later visit never starts anything by itself.
   useEffect(() => {
-    if (action.type !== 'done' || !marker || cleared.current || !projectId || screen !== 'plan') return;
+    // Also once clips exist: the same refresh that completes the plan moves the screen on to Watch, so 'plan' is never seen again.
+    if (action.type !== 'done' || !marker || cleared.current || !projectId || armed) return;
+    if (screen !== 'plan' && !clipsStarted(status)) return;
     cleared.current = true;
     Promise.resolve(setPlanRequested(projectId, false)).then(() => refresh?.()).catch(() => { cleared.current = false; });
-  }, [action.type, marker, projectId, screen, refresh]);
+  }, [action.type, marker, projectId, screen, armed, status, refresh]);
 
   // Nothing waits forever: a wait that lasts too long says so (and the screen offers a next step).
   const waitKey = action.type === 'wait' ? action.what.join(',') : '';

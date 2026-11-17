@@ -48,7 +48,8 @@ export function planGaps(status) {
   const begun = shots.length > 0 || clipsStarted(status);
   return {
     cast: project.consistent_cast !== false && cast.length === 0 && begun,
-    pick: cast.some((c) => c.status === 'failed' || c.status === 'blocked' || (c.status === 'ready' && c.chosen_index == null && !c.image_url)),
+    // Leftover characters mean nothing on a different-people video: the cast is not used there.
+    pick: project.consistent_cast !== false && cast.some((c) => c.status === 'failed' || c.status === 'blocked' || (c.status === 'ready' && c.chosen_index == null && !c.image_url)),
     rebuild: shots.some((s) => s.needs_rebuild),
     pictures: gen.some((s) => !s.still_url && !IN_FLIGHT.includes(s.status)),
   };
@@ -58,7 +59,8 @@ export function planGaps(status) {
 export function planReason(status) {
   const g = planGaps(status);
   if (g.cast) return 'This video now uses the same characters throughout, so they need making first.';
-  if (g.rebuild || g.pictures) return 'Your script changed, so some pictures need making again.';
+  if (g.rebuild) return 'The storyboard needs updating to match your changes.';
+  if (g.pictures) return 'Some pictures are missing and need making.';
   if (g.pick) return 'A character needs a look before the video can go on.';
   return null;
 }

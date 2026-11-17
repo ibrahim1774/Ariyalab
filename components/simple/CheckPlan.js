@@ -211,7 +211,8 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         <div className={styles.askCard} data-testid="plan-ask">
           {action.what === 'cast' ? (
             <>
-              <p>{Number.isInteger(action.credits) ? 'Nothing is charged until you press the button.' : 'Working out the price…'}</p>
+              <p>{Number.isInteger(action.credits) ? 'Nothing is charged until you press the button.' : plan.quoteError ? 'We could not get the price.' : 'Working out the price…'}</p>
+              {!Number.isInteger(action.credits) && plan.quoteError && <Button variant="ghost" arrow={false} onClick={plan.reloadQuote}>Try again</Button>}
               <Button disabled={!Number.isInteger(action.credits)} onClick={plan.confirm}>{Number.isInteger(action.credits) ? withPrice('Carry on designing', action.credits) : 'Carry on designing'}</Button>
             </>
           ) : (
@@ -224,7 +225,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
       )}
       {action.type === 'stale' && (
         <div className={styles.askCard} data-testid="plan-stale">
-          <p>Your script changed after the storyboard was made. Update the storyboard so the pictures match the new script.</p>
+          <p>The storyboard needs updating to match your changes. Update it so the pictures match.</p>
           <Button onClick={() => rebuild.run()} disabled={rebuild.busy}>{rebuild.busy ? 'Updating…' : 'Update the storyboard'}</Button>
         </div>
       )}
