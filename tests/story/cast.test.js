@@ -205,6 +205,28 @@ describe('generateCast', () => {
     expect((await feeEntries(userId))[0].amount).toBe(45);
   }));
 
+  it('the website start sends the price on the button: after a length change the price differs, so it is 409 quote_changed and nothing is spent', () => withShortFee(async () => {
+    const { userId, project } = await newProject({ seconds: 10 });
+    // The page showed 45 credits for a 10 second project; the length moved to 30 before the click, so 90 is due.
+    await storyDb().update('story_projects', { id: project.id }, { seconds: 30 });
+    const before = await available(userId);
+    const { generateCastAction } = await import('../../lib/story/cast.js');
+    await expect(generateCastAction({ userId, projectId: project.id, body: { expected_credits: 45 } })).rejects.toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(await available(userId)).toBe(before);
+    expect(await feeEntries(userId)).toHaveLength(0);
+    expect(await castRows(project.id)).toHaveLength(0);
+    // The same click with the refreshed price goes through, once.
+    await generateCastAction({ userId, projectId: project.id, body: { expected_credits: 90 } });
+    expect(before - (await available(userId))).toBe(90);
+  }));
+
+  it('the website start with no expected price still works (the old buttons and other callers)', async () => {
+    const { userId, project } = await newProject();
+    const { generateCastAction } = await import('../../lib/story/cast.js');
+    await generateCastAction({ userId, projectId: project.id, body: {} });
+    expect(await feeEntries(userId)).toHaveLength(1);
+  });
+
   it('reads the fee from pricing, not from a number in the code', async () => {
     await raw.query(`insert into pricing_config (key, value) values ('projectFee', '40'::jsonb) on conflict (key) do update set value = excluded.value`);
     _resetPricingCache();

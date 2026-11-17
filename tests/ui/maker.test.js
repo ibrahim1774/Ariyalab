@@ -535,6 +535,25 @@ describe('cast step', () => {
     candidates: [0, 1, 2].map((i) => ({ url: `/api/mock/storage/c${i}.png`, key: `c${i}`, prompt: 'p' })), ...over,
   });
 
+  it('sends the setup fee it shows as the expected price, and refreshes on a changed price (409)', async () => {
+    client.startCast.mockRejectedValue(new StoryApiError({ status: 409, code: 'quote_changed', message: 'The price is now 90 credits.', total: 90 }));
+    const refresh = vi.fn();
+    render(<StepCast {...props([], { refresh, project: project({ step: 'cast', seconds: 10, fee_charged: false }) })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Make my cast' }));
+    await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(1));
+    const [, expected] = client.startCast.mock.calls[0];
+    expect(Number.isInteger(expected)).toBe(true);
+    expect(screen.getByText(new RegExp(`setup fee of ${expected} credits`))).toBeInTheDocument();
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
+  it('expects 0 credits when the setup fee was already paid', async () => {
+    client.startCast.mockResolvedValue({});
+    render(<StepCast {...props([], { project: project({ step: 'cast', fee_charged: true }) })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Make my cast' }));
+    await waitFor(() => expect(client.startCast).toHaveBeenCalledWith('p1', 0));
+  });
+
   it('shows a top up prompt with the shortfall when making the cast needs more credits', async () => {
     client.startCast.mockRejectedValue(new StoryApiError({ status: 402, code: 'insufficient_credits', needed: 300, available: 100 }));
     render(<StepCast {...props([])} />);

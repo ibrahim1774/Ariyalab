@@ -30,6 +30,7 @@ describe('lib/story/client', () => {
     await client.reviseScript('p1', 'Funnier');
     await client.updateScene('p1', 's1', { visual: 'x' });
     await client.startCast('p1');
+    await client.startCast('p1', 45);
     await client.regenCast('p1', 'c1', 'glasses');
     await client.pickCast('p1', 'c1', 2);
     await client.buildShots('p1');
@@ -45,6 +46,7 @@ describe('lib/story/client', () => {
       ['POST', '/revise', { instruction: 'Funnier' }],
       ['PATCH', '/scene', { sceneId: 's1', patch: { visual: 'x' } }],
       ['POST', '/cast', {}],
+      ['POST', '/cast', { expected_credits: 45 }],
       ['POST', '/cast-regen', { castId: 'c1', note: 'glasses' }],
       ['POST', '/cast-pick', { castId: 'c1', candidateIndex: 2 }],
       ['POST', '/shots', {}],

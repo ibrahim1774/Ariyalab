@@ -211,6 +211,18 @@ describe('shot planning at 7 and 120 seconds', () => {
     expect(sumOf(shots)).toBe(120);
   });
 
+  it('gives the shot plan enough output tokens for 40 shots (the budget grows with the shot count)', async () => {
+    let asked = null;
+    registerMock('story_shots', (input) => {
+      asked = input.maxTokens;
+      return { shots: Array.from({ length: 40 }, (_, i) => ({ sceneId: manyScenes[i % 16].id, description: `Shot ${i + 1} of the long story.`, line: '', seconds: 3, cast: [] })) };
+    });
+    const { userId, project } = await newProject({ scenes: manyScenes, seconds: 120 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots).toHaveLength(40);
+    expect(asked).toBeGreaterThanOrEqual(12000);
+  });
+
   it('asks for about 40 shots at 120 seconds and 3 to 6 seconds each at 7', () => {
     expect(buildShotsSystem({ seconds: 120 })).toMatch(/between 108 and 132/);
     expect(buildShotsSystem({ seconds: 7 })).toMatch(/between 7 and 7/);

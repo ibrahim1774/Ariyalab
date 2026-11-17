@@ -171,14 +171,18 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
+  // The fee the page shows is the fee it asks for: a different price on the server is 409 and nothing is charged.
+  const shownFee = project.fee_charged ? 0 : projectFeeFor(pricing, project.seconds);
+
   async function start() {
     setBusy(true);
     setError(null);
     try {
-      await startCast(project.id);
+      await startCast(project.id, shownFee);
       await refresh?.();
     } catch (err) {
       setError(err);
+      if (err?.status === 409) await refresh?.();
     } finally {
       setBusy(false);
     }
