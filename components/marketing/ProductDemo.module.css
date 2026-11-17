@@ -712,8 +712,33 @@
   .chips .chip { flex: 1 1 0; min-width: 0; padding: 5px 4px; }
   .chip small { white-space: normal; text-align: center; line-height: 1.15; }
 }
+@container demo (max-width: 700px) {
+  .frame { aspect-ratio: 1 / 1; --player-w: 132px; }
+  /* Watch: player and title side by side, the scene strip across the bottom. */
+  .watch {
+    display: grid;
+    grid-template-columns: var(--player-w) minmax(0, 1fr);
+    grid-template-rows: auto auto auto 1fr auto auto;
+    column-gap: 12px;
+    row-gap: 6px;
+    align-items: start;
+  }
+  .player { grid-column: 1; grid-row: 1 / 6; width: var(--player-w); height: auto; border-radius: 10px; }
+  .watchInfo { display: contents; }
+  .watchInfo > .status { grid-column: 2; grid-row: 1; justify-self: start; }
+  .watchTitle { grid-column: 2; grid-row: 2; }
+  .watchInfo > .sub { grid-column: 2; grid-row: 3; }
+  .watchInfo > .ghostBtn, .doneList { grid-column: 2; grid-row: 4; align-self: end; justify-self: start; }
+  .download { grid-column: 2; grid-row: 5; justify-self: start; margin-top: 0; }
+  .strip { grid-column: 1 / -1; grid-row: 6; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+  .stripImg { aspect-ratio: 1 / 1; border-radius: 8px; }
+  /* The make button already shows the price, so the plan screen gives the dock to the two buttons. */
+  .frame[data-demo-step='plan'] .quote { display: none; }
+  .frame[data-demo-step='plan'] .dock { justify-content: flex-end; }
+  .frame[data-demo-step='plan'] .arrow { display: none; }
+}
 @container demo (max-width: 600px) {
-  .frame { --gap: 10px; aspect-ratio: 3 / 4; border-radius: 14px; font-size: 12px; }
+  .frame { --gap: 10px; --player-w: 104px; aspect-ratio: 3 / 4; border-radius: 14px; font-size: 12px; }
   .chrome { height: 30px; padding: 0 10px; }
   .dots { gap: 5px; }
   .dots i { width: 8px; height: 8px; }
@@ -769,24 +794,6 @@
   .shotImg { border-radius: 6px; }
   .shotNum { width: 14px; height: 14px; font-size: 8px; top: 3px; left: 3px; }
   .chips .chip { padding: 4px 2px; }
-  /* Watch: player and title side by side, the scene strip across the bottom. */
-  .watch {
-    display: grid;
-    grid-template-columns: 104px minmax(0, 1fr);
-    grid-template-rows: auto auto auto 1fr auto auto;
-    column-gap: 12px;
-    row-gap: 6px;
-    align-items: start;
-  }
-  .player { grid-column: 1; grid-row: 1 / 6; width: 104px; height: auto; border-radius: 10px; }
-  .watchInfo { display: contents; }
-  .watchInfo > .status { grid-column: 2; grid-row: 1; justify-self: start; }
-  .watchTitle { grid-column: 2; grid-row: 2; }
-  .watchInfo > .sub { grid-column: 2; grid-row: 3; }
-  .watchInfo > .ghostBtn, .doneList { grid-column: 2; grid-row: 4; align-self: end; justify-self: start; }
-  .download { grid-column: 2; grid-row: 5; justify-self: start; margin-top: 0; }
-  .strip { grid-column: 1 / -1; grid-row: 6; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-  .stripImg { aspect-ratio: 1 / 1; border-radius: 8px; }
   .renderCard { padding: 8px 10px; max-width: 110px; }
   .renderTitle { font-size: 10px; }
   .watchInfo { gap: 7px; padding-top: 0; }
@@ -799,9 +806,6 @@
   .quoteLabel, .quoteMeta { display: none; }
   .quoteTotal { font-size: 13px; }
   .dockButtons { gap: 5px; }
-  /* The make button already shows the price, so the plan screen gives the dock to the two buttons. */
-  .frame[data-demo-step='plan'] .quote { display: none; }
-  .frame[data-demo-step='plan'] .dock { justify-content: flex-end; }
   .cta { padding: 8px 11px; font-size: 11px; gap: 5px; }
   .arrow { display: none; }
   .ghostBtn { padding: 7px 9px; font-size: 10.5px; }
