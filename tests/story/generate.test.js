@@ -86,10 +86,10 @@ afterEach(() => {
 
 const SCENE = { id: 's1', title: 'The shop', visual: 'Maya sweeps the small barbershop at night.', lines: [{ speaker: 'narrator', text: 'Nobody believed this would work.' }] };
 
-async function newProject({ n = 15, quality = 'pro_narrated', seconds = 3, funds = 2000, feeCharged = true, descriptions = [] } = {}) {
+async function newProject({ n = 15, quality = 'pro_narrated', seconds = 3, funds = 2000, feeCharged = true, descriptions = [], projectSeconds } = {}) {
   const userId = randomUUID();
   const [project] = await storyDb().insert('story_projects', {
-    user_id: userId, title: 'Generate test', style: '3d_family', step: 'generate', seconds: Math.max(15, n * seconds), quality,
+    user_id: userId, title: 'Generate test', style: '3d_family', step: 'generate', seconds: projectSeconds ?? Math.max(15, n * seconds), quality,
     mode: quality === 'pro_talking' ? 'talking' : 'narrated', fee_charged: feeCharged,
   });
   await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: [SCENE], source: 'brief' });
@@ -149,6 +149,26 @@ async function getStatus({ userId, project, method = 'GET' }) {
 // ---------------------------------------------------------------- brief tests
 
 describe('quote', () => {
+  it('the project fee line follows the length: 45 for a 10 second project, 90 for 30 seconds', async () => {
+    await raw.query(`insert into pricing_config (key, value) values ('projectFeeShort', '45'::jsonb) on conflict (key) do update set value = excluded.value`);
+    _resetPricingCache();
+    try {
+      for (const [projectSeconds, fee] of [[7, 45], [10, 45], [30, 90]]) {
+        const ctx = await newProject({ n: 2, feeCharged: false, projectSeconds });
+        const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+        expect(q.lines[0], `${projectSeconds}s`).toEqual({ label: 'Project fee', credits: fee });
+        expect(q.total).toBe(fee + 84);
+        // The same number is spent when the first start is confirmed.
+        const out = await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+        expect(out.charged ?? q.total).toBe(q.total);
+        expect((await ledger(ctx.userId)).some((r) => r.reason === 'story_project_fee' && r.amount === fee)).toBe(true);
+      }
+    } finally {
+      await raw.query(`delete from pricing_config where key = 'projectFeeShort'`);
+      _resetPricingCache();
+    }
+  });
+
   it('quote for 15 pro_narrated 3 second shots is 630', async () => {
     const ctx = await newProject();
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });

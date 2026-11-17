@@ -17,7 +17,7 @@ import { storyCastMock } from '../../lib/story/mocks.js';
 import {
   buildCastSystem, buildCastMessage, candidatePrompt, sheetPrompt, CAST_SCHEMA,
 } from '../../lib/story/prompts/cast.js';
-import { generateCast, regenerateCharacter, pickCast, CAST_MAX } from '../../lib/story/cast.js';
+import { generateCast, regenerateCharacter, pickCast, CAST_MAX, castFeeDue } from '../../lib/story/cast.js';
 import { castImageHandler } from '../../lib/story/castJobs.js';
 import { tick, enqueue } from '../../lib/story/runner.js';
 import { castView } from '../../lib/story/cast.js';
@@ -59,9 +59,9 @@ const SCENES = [
   { id: 's2', title: 'The visit', visual: 'Leo walks in with two coffees.', lines: [{ speaker: 'Leo', text: 'Move over, I brought coffee.' }] },
 ];
 
-async function newProject({ scenes = SCENES, funds = 1000, style = '3d_family' } = {}) {
+async function newProject({ scenes = SCENES, funds = 1000, style = '3d_family', seconds } = {}) {
   const userId = randomUUID();
-  const [project] = await storyDb().insert('story_projects', { user_id: userId, title: 'Cast test', style, step: 'script' });
+  const [project] = await storyDb().insert('story_projects', { user_id: userId, title: 'Cast test', style, step: 'script', ...(seconds ? { seconds } : {}) });
   if (scenes) await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes, source: 'brief' });
   if (funds) await grantCredits({ userId, currency: 'video', amount: funds, bucket: 'topup', reason: 'test', ref: randomUUID() });
   return { userId, project };
@@ -163,6 +163,47 @@ describe('generateCast', () => {
     expect(await castRows(project.id)).toHaveLength(2);
     expect(await jobsOf(project.id)).toHaveLength(6);
   });
+
+  async function withShortFee(fn) {
+    await raw.query(`insert into pricing_config (key, value) values ('projectFeeShort', '45'::jsonb) on conflict (key) do update set value = excluded.value`);
+    _resetPricingCache();
+    try {
+      await fn();
+    } finally {
+      await raw.query(`delete from pricing_config where key = 'projectFeeShort'`);
+      _resetPricingCache();
+    }
+  }
+
+  it('charges the short fee (45) on a 10 second project and the full fee (90) on a 30 second one', () => withShortFee(async () => {
+    for (const [seconds, fee] of [[10, 45], [7, 45], [30, 90], [120, 90]]) {
+      const { userId, project } = await newProject({ seconds });
+      const pricing = await getPricing();
+      expect(await castFeeDue(project, pricing)).toBe(fee);
+      const before = await available(userId);
+      await generateCast({ userId, projectId: project.id });
+      expect(before - (await available(userId)), `${seconds}s`).toBe(fee);
+      expect((await feeEntries(userId))[0]).toMatchObject({ ref: `project-fee:${project.id}`, amount: fee });
+    }
+  }));
+
+  it('with no short fee set, a 10 second project pays the same 90 as a long one (the default)', async () => {
+    const { userId, project } = await newProject({ seconds: 10 });
+    const before = await available(userId);
+    await generateCast({ userId, projectId: project.id });
+    expect(before - (await available(userId))).toBe(90);
+  });
+
+  it('a later length change never charges a second fee or refunds the first', () => withShortFee(async () => {
+    const { userId, project } = await newProject({ seconds: 10 });
+    await generateCast({ userId, projectId: project.id });
+    await storyDb().update('story_projects', { id: project.id }, { seconds: 60 });
+    const after = await available(userId);
+    await generateCast({ userId, projectId: project.id });
+    expect(await available(userId)).toBe(after);
+    expect(await feeEntries(userId)).toHaveLength(1);
+    expect((await feeEntries(userId))[0].amount).toBe(45);
+  }));
 
   it('reads the fee from pricing, not from a number in the code', async () => {
     await raw.query(`insert into pricing_config (key, value) values ('projectFee', '40'::jsonb) on conflict (key) do update set value = excluded.value`);

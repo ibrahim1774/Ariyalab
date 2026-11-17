@@ -372,7 +372,7 @@ describe('stale drafts', () => {
     fireEvent.click(screen.getByRole('radio', { name: '60 seconds' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     await flush();
-    fireEvent.click(screen.getByRole('radio', { name: '75 seconds' }));
+    fireEvent.click(screen.getByRole('radio', { name: '2 minutes' }));
     await screen.findByRole('alert');
     expect(screen.getByRole('radio', { name: '60 seconds' })).toBeChecked();
   });

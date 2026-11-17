@@ -332,10 +332,11 @@ describe('brief steps', () => {
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'standard', mode: 'narrated' }));
   });
 
-  it('offers lengths 15 to 75 and three shapes, saving each choice', async () => {
+  it('offers the five lengths and three shapes, saving each choice', async () => {
     const save = vi.fn().mockResolvedValue({});
     render(<StepLength project={project()} save={save} onNext={vi.fn()} />);
-    for (const n of [15, 30, 45, 60, 75]) expect(screen.getByRole('radio', { name: `${n} seconds` })).toBeInTheDocument();
+    for (const name of ['7 seconds', '10 seconds', '30 seconds', '60 seconds', '2 minutes']) expect(screen.getByRole('radio', { name })).toBeInTheDocument();
+    expect(screen.getAllByRole('radio', { name: /second|minute/ })).toHaveLength(5);
     fireEvent.click(screen.getByRole('radio', { name: '60 seconds' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ seconds: 60 }));
     fireEvent.click(screen.getByRole('radio', { name: /Wide 16:9/ }));
@@ -345,10 +346,10 @@ describe('brief steps', () => {
 
   it('puts the choice back and shows the reason when a save fails', async () => {
     const save = vi.fn().mockRejectedValue(new StoryApiError({ status: 422, code: 'validation_failed', message: 'Talking videos need Pro talking.' }));
-    render(<StepLength project={project()} save={save} onNext={vi.fn()} />);
+    render(<StepLength project={project({ seconds: 30 })} save={save} onNext={vi.fn()} />);
     fireEvent.click(screen.getByRole('radio', { name: '60 seconds' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Talking videos need Pro talking.');
-    expect(screen.getByRole('radio', { name: '45 seconds' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: '30 seconds' })).toBeChecked();
   });
 });
 
@@ -647,8 +648,8 @@ describe('errors', () => {
   });
 
   it('400 and 422 show the server message', () => {
-    render1(new StoryApiError({ status: 422, code: 'validation_failed', message: 'Length must be a whole number from 15 to 75 seconds.' }));
-    expect(screen.getByText('Length must be a whole number from 15 to 75 seconds.')).toBeInTheDocument();
+    render1(new StoryApiError({ status: 422, code: 'validation_failed', message: 'Length must be a whole number from 7 to 120 seconds.' }));
+    expect(screen.getByText('Length must be a whole number from 7 to 120 seconds.')).toBeInTheDocument();
     cleanup();
     render1(new StoryApiError({ status: 400, code: 'BLOCKED_NSFW', message: 'That text cannot be used.' }));
     expect(screen.getByText('That text cannot be used.', { selector: 'span' })).toBeInTheDocument();

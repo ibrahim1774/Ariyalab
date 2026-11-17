@@ -1,7 +1,7 @@
 // The maker's step model. The UI has twelve steps; Project.step has nine values
 // ('brief' covers Start, Purpose, Style and Length). Pure helpers, no React.
 
-import { DEFAULTS } from '../../lib/pricingConstants';
+import { DEFAULTS, projectFeeFor } from '../../lib/pricingConstants';
 
 export const UI_STEPS = [
   { id: 'start', label: 'Start', server: 'brief' },
@@ -87,7 +87,7 @@ export function estimateCredits(project, pricing = DEFAULTS) {
   const seconds = project.seconds || 30;
   const generated = Math.ceil(seconds / GEN_SHOT_SECONDS) * GEN_SHOT_SECONDS;
   const rate = pricing.perSecond[project.quality || 'standard'] ?? 0;
-  const fee = project.fee_charged ? 0 : pricing.projectFee;
+  const fee = project.fee_charged ? 0 : projectFeeFor(pricing, project.seconds);
   return fee + rate * generated;
 }
 

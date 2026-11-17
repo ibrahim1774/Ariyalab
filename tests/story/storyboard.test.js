@@ -6,13 +6,13 @@ import { useRegexOnlyModeration, useTestAccounts } from '../helpers/storyEnv.js'
 import { makeReq, makeRes } from '../helpers/apiMock.js';
 import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { setCreditsDb, grantCredits, getBalance, InsufficientCreditsError } from '../../lib/credits.js';
-import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
+import { setPricingDb, _resetPricingCache, getPricing, generatedSeconds } from '../../lib/pricing.js';
 import { registerMock } from '../../lib/providers/mock.js';
 import { ModerationError } from '../../lib/moderation.js';
 import { FORBIDDEN_NAMES, updateScene } from '../../lib/story/script.js';
 import { STYLES } from '../../lib/story/prompts/styles.js';
 import { storyShotsMock } from '../../lib/story/mocks.js';
-import { buildShotsSystem, buildShotsMessage, stillPrompt, SHOTS_SCHEMA, MAX_CAST_REFS } from '../../lib/story/prompts/shot.js';
+import { buildShotsSystem, buildShotsMessage, stillPrompt, SHOTS_SCHEMA, MAX_CAST_REFS, MAX_SHOTS } from '../../lib/story/prompts/shot.js';
 import {
   buildShotList, generateStills, updateShot, markStale, listShots, fitSeconds, stillAttemptCost,
   _setStoryboardDeps, FREE_FIRST_TRIES, STALE_CLAIM_MS, PENDING_PLAN_MS, sceneSig, _clearSettledStale,
@@ -171,6 +171,58 @@ describe('fitSeconds', () => {
 
   it('returns null when no split of 3 to 6 seconds can reach the target', () => {
     expect(fitSeconds([{ seconds: 6 }, { seconds: 6 }], 60)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------- 7 and 120 seconds
+
+describe('shot planning at 7 and 120 seconds', () => {
+  const oneScene = [{ id: 's1', title: 'The shop', visual: 'Maya sweeps the small barbershop at dawn.', lines: [{ speaker: 'Maya', text: 'Nobody believed one small chair could change my whole year.' }] }];
+  const manyScenes = Array.from({ length: 16 }, (_, i) => ({
+    id: `m${i + 1}`, title: `Moment ${i + 1}`, visual: `Maya and Leo in the shop, moment ${i + 1}.`,
+    lines: [{ speaker: 'Maya', text: `Line number ${i + 1} of the long story.` }],
+  }));
+  const sumOf = (shots) => shots.reduce((n, s) => n + s.seconds, 0);
+
+  it('plans valid shots for a 7 second video: one scene, whole 3 to 6 second shots adding up to 7', async () => {
+    const { userId, project } = await newProject({ scenes: oneScene, seconds: 7 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.length).toBeGreaterThanOrEqual(2);
+    expect(sumOf(shots)).toBe(7);
+    expect(shots.every((s) => s.seconds >= 3 && s.seconds <= 6 && s.scene_id === 's1')).toBe(true);
+  });
+
+  it('plans valid shots for a 120 second video of many scenes', async () => {
+    const { userId, project } = await newProject({ scenes: manyScenes, seconds: 120 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.length).toBeGreaterThanOrEqual(18);
+    expect(sumOf(shots)).toBeGreaterThanOrEqual(108);
+    expect(sumOf(shots)).toBeLessThanOrEqual(132);
+    expect(shots.every((s) => s.seconds >= 3 && s.seconds <= 6)).toBe(true);
+  });
+
+  it('keeps all 40 shots of a 120 second video made of 3 second shots (no cap at 30)', async () => {
+    registerMock('story_shots', () => ({
+      shots: Array.from({ length: 40 }, (_, i) => ({ sceneId: manyScenes[i % 16].id, description: `Shot ${i + 1} of the long story.`, line: '', seconds: 3, cast: [] })),
+    }));
+    const { userId, project } = await newProject({ scenes: manyScenes, seconds: 120 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots).toHaveLength(40);
+    expect(sumOf(shots)).toBe(120);
+  });
+
+  it('asks for about 40 shots at 120 seconds and 3 to 6 seconds each at 7', () => {
+    expect(buildShotsSystem({ seconds: 120 })).toMatch(/between 108 and 132/);
+    expect(buildShotsSystem({ seconds: 7 })).toMatch(/between 7 and 7/);
+    expect(MAX_SHOTS).toBeGreaterThanOrEqual(40);
+  });
+
+  it('an economy 7 second video is priced at the 4 second minimum for each shot', async () => {
+    const { userId, project } = await newProject({ scenes: oneScene, seconds: 7 });
+    await storyDb().update('story_projects', { id: project.id }, { quality: 'economy' });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    const pricing = await getPricing();
+    for (const shot of shots) expect(generatedSeconds(pricing, 'economy', shot.seconds)).toBe(4);
   });
 });
 

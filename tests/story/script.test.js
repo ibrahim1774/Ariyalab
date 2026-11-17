@@ -16,7 +16,7 @@ import { sendError } from '../../lib/story/errors.js';
 import { makeRes } from '../helpers/apiMock';
 import { STYLES } from '../../lib/story/prompts/styles.js';
 import {
-  buildScriptSystem, buildBriefMessage, buildRetryMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, REFERENCE_GUIDANCE, wordBudget, shotTarget,
+  buildScriptSystem, buildBriefMessage, buildRetryMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, REFERENCE_GUIDANCE, wordBudget, shotTarget, sceneTarget,
   MENTION_GUIDANCE, LIGHT_MENTION_GUIDANCE, NO_MENTION_GUIDANCE,
 } from '../../lib/story/prompts/script.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
@@ -362,6 +362,57 @@ function spyOnScriptMock() {
 }
 
 const scriptRows = (projectId) => storyDb().select('story_scripts', { project_id: projectId }, { order: 'version' });
+
+describe('short and long videos (7 to 120 seconds)', () => {
+  const spoken = (scenes) => scenes.reduce((n, sc) => n + sc.lines.reduce((m, l) => m + l.text.split(/\s+/).length, 0), 0);
+
+  it('plans one scene at 7 seconds, one or two at 10, and enough scenes at 120 that none is long', () => {
+    expect(sceneTarget(7)).toBe(1);
+    expect([1, 2]).toContain(sceneTarget(10));
+    expect(sceneTarget(30)).toBeGreaterThanOrEqual(3);
+    expect(sceneTarget(120)).toBeGreaterThanOrEqual(12);
+    expect(120 / sceneTarget(120)).toBeLessThanOrEqual(10);
+  });
+
+  it('tells the model a 7 second video is one scene with one short line', () => {
+    const system = buildScriptSystem({ purpose: 'service', mode: 'narrated', seconds: 7 });
+    expect(system).toMatch(/7 seconds/);
+    expect(system).toMatch(/one scene/i);
+    expect(system).toMatch(/one (short )?line/i);
+    expect(buildScriptSystem({ purpose: 'service', mode: 'narrated', seconds: 120 })).toMatch(/about 40 shots/);
+  });
+
+  it('does not demand a 12 word hook from a 7 second video: one sensible line passes the rules', () => {
+    const scenes = [{ id: 's1', title: 'The shop', visual: 'A barber opens a quiet shop at dawn.', lines: [{ speaker: 'narrator', text: 'Nobody believed one small chair could change my whole year, but it did, and now three towns book me.' }] }];
+    expect(wordBudget(7).min).toBeLessThanOrEqual(spoken(scenes));
+    expect(checkScriptRules(scenes, { seconds: 7, mode: 'narrated', purpose: 'story', offer: '' })).toEqual([]);
+    // A 30 second video still needs a short hook.
+    expect(rulesOf(checkScriptRules([{ ...scenes[0], lines: [{ speaker: 'narrator', text: 'Nobody believed one small chair could change my whole year, but it did, and now three towns book me.' }] }], { seconds: 30, purpose: 'story', offer: '' }))).toContain('hook_length');
+  });
+
+  it('passes a sensible 120 second script of many scenes', () => {
+    const lines = [
+      'Nobody believed this would work, not even me.', 'My family said I should quit and get a normal job.', 'Every night I sat alone and wondered if they were right.',
+      'Then one evening my phone lit up on the counter.', 'Someone I had never met wanted what I made.', 'The next week there were three more, then ten.',
+    ];
+    const scenes = Array.from({ length: 16 }, (_, i) => ({
+      id: `s${i + 1}`, title: `Scene ${i + 1}`, visual: `The shop in the evening light, moment ${i + 1}.`,
+      lines: [{ speaker: 'narrator', text: i === 0 ? lines[0] : `${lines[i % 6]} ${lines[(i + 2) % 6]}` }],
+    }));
+    expect(spoken(scenes)).toBeGreaterThanOrEqual(wordBudget(120).min);
+    expect(spoken(scenes)).toBeLessThanOrEqual(wordBudget(120).max);
+    expect(checkScriptRules(scenes, { seconds: 120, mode: 'narrated', purpose: 'story', offer: '' })).toEqual([]);
+  });
+
+  it.each([[7, 1, 1], [10, 1, 2], [120, 12, 20]])('the written script at %i seconds has %i to %i scenes and passes the rules', async (seconds, minScenes, maxScenes) => {
+    const { userId, project } = await newProject({ seconds });
+    const script = await writeScript({ userId, projectId: project.id });
+    expect(script.violations).toEqual([]);
+    expect(script.scenes.length).toBeGreaterThanOrEqual(minScenes);
+    expect(script.scenes.length).toBeLessThanOrEqual(maxScenes);
+    if (seconds === 7) expect(script.scenes[0].lines).toHaveLength(1);
+  });
+});
 
 describe('writeScript', () => {
   it('writes a version 1 script that passes the rules and moves the project to the script step', async () => {

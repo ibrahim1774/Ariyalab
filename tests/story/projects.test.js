@@ -57,8 +57,8 @@ describe('createProject', () => {
   });
 
   it.each([
-    [{ seconds: 14 }],
-    [{ seconds: 76 }],
+    [{ seconds: 6 }],
+    [{ seconds: 121 }],
     [{ seconds: 30.5 }],
     [{ seconds: '30' }],
     [{ purpose: 'crypto' }],
@@ -86,8 +86,8 @@ describe('createProject', () => {
 
   it('accepts the length bounds', async () => {
     const userId = userA();
-    expect((await createProject({ userId, input: { seconds: 15 } })).seconds).toBe(15);
-    expect((await createProject({ userId, input: { seconds: 75 } })).seconds).toBe(75);
+    expect((await createProject({ userId, input: { seconds: 7 } })).seconds).toBe(7);
+    expect((await createProject({ userId, input: { seconds: 120 } })).seconds).toBe(120);
   });
 
   it('screens customer text', async () => {
@@ -181,7 +181,7 @@ describe('updateProject', () => {
   it('rejects fields outside the patch list and bad values', async () => {
     const userId = userA();
     const p = await createProject({ userId, input: BRIEF });
-    for (const patch of [{ step: 'done' }, { status: 'finished' }, { fee_charged: true }, { user_id: userA() }, { seconds: 90 }, {}]) {
+    for (const patch of [{ step: 'done' }, { status: 'finished' }, { fee_charged: true }, { user_id: userA() }, { seconds: 150 }, {}]) {
       await expect(updateProject({ userId, id: p.id, patch })).rejects.toBeInstanceOf(ValidationError);
     }
   });

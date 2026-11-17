@@ -4,9 +4,12 @@ import Button from '../ui/Button';
 import Card from '../ui/Card';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
+import { SIMPLE_LENGTHS } from '../../lib/pricingConstants';
 import styles from './Steps.module.css';
 
-export const LENGTHS = [15, 30, 45, 60, 75];
+export { SIMPLE_LENGTHS };
+export const LENGTHS = SIMPLE_LENGTHS;
+const lengthLabel = (n) => (n === 120 ? '2 minutes' : `${n} seconds`);
 // Economy stays hidden until it has been tested.
 export const QUALITIES = [
   { id: 'standard', label: 'Standard', helper: 'Clean 720p pictures with a narrator. A good place to start.' },
@@ -65,7 +68,7 @@ export default function StepLength({ project, save, onNext, returnTo }) {
             {LENGTHS.map((n) => (
               <label key={n} className={`${styles.chip} ${seconds === n ? styles.optionOn : ''}`}>
                 <input type="radio" name="seconds" value={n} checked={seconds === n} onChange={() => pickSeconds(n)} />
-                <span>{n} seconds</span>
+                <span>{lengthLabel(n)}</span>
               </label>
             ))}
           </fieldset>

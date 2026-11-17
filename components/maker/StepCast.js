@@ -6,6 +6,7 @@ import { pickCast, regenCast, retryCast, setCastImage, startCast } from '../../l
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
+import { projectFeeFor } from '../../lib/pricingConstants';
 import { usePricing } from './PricingContext';
 import AssetPicker from './AssetPicker';
 import { EmptyState, Skeleton, StyleNote, Tile } from './Tiles';
@@ -198,7 +199,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       )}
 
       {cast.length === 0 && (
-        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${pricing.projectFee} credits is taken when the cast is first made.`}`}>
+        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${projectFeeFor(pricing, project.seconds)} credits is taken when the cast is first made.`}`}>
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={start} />
           <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
         </EmptyState>

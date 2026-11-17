@@ -5,6 +5,7 @@ import {
 } from '../lib/pricing.js';
 import {
   QUALITY_LABELS, PROVIDER_COSTS_USD, costOfVideoUsd, creditsForVideo, videosPerPlan, markup,
+  DEFAULTS, SIMPLE_LENGTHS, projectFeeFor,
 } from '../lib/pricingConstants.js';
 import { isBillingV2 } from '../lib/billingFlags.js';
 
@@ -168,6 +169,42 @@ describe('isBillingV2', () => {
   });
 });
 
+describe('short video fee', () => {
+  it('lists the five simple lengths; the default short fee is the lowest that keeps 70% margin (90 today, see the 70% rule)', () => {
+    expect(SIMPLE_LENGTHS).toEqual([7, 10, 30, 60, 120]);
+    expect(DEFAULTS.projectFeeShort).toBe(90);
+    expect(DEFAULTS.projectFee).toBe(90);
+  });
+  it('projectFeeFor: 10 seconds or less pays the short fee, longer pays the full fee', () => {
+    const pricing = { projectFee: 90, projectFeeShort: 45 };
+    expect(projectFeeFor(pricing, 7)).toBe(45);
+    expect(projectFeeFor(pricing, 10)).toBe(45);
+    expect(projectFeeFor(pricing, 11)).toBe(90);
+    expect(projectFeeFor(pricing, 30)).toBe(90);
+    expect(projectFeeFor(pricing, 120)).toBe(90);
+  });
+  it('projectFeeFor falls back to the full fee when the short fee is not a whole number of 0 or more', () => {
+    for (const bad of [undefined, null, -1, 4.5, '45', NaN]) {
+      expect(projectFeeFor({ projectFee: 90, projectFeeShort: bad }, 7)).toBe(90);
+    }
+    expect(projectFeeFor({ projectFee: 90, projectFeeShort: 0 }, 7)).toBe(0);
+    expect(projectFeeFor({ projectFee: 100, projectFeeShort: 45 }, undefined)).toBe(100);
+  });
+  it('quoteProject shows the same fee a project of that length is charged', async () => {
+    setPricingDb(fakeDb([{ key: 'projectFeeShort', value: 45 }]));
+    const shots = [{ quality: 'standard', seconds: 5 }];
+    const short = await quoteProject({ shots, feeAlreadyCharged: false, seconds: 10 });
+    expect(short.lines[0]).toEqual({ label: 'Project fee', credits: 45 });
+    const long = await quoteProject({ shots, feeAlreadyCharged: false, seconds: 30 });
+    expect(long.lines[0]).toEqual({ label: 'Project fee', credits: 90 });
+    expect(short.total).toBe(45 + 55);
+  });
+  it('getPricing reads projectFeeShort from pricing_config', async () => {
+    setPricingDb(fakeDb([{ key: 'projectFeeShort', value: 50 }]));
+    expect((await getPricing()).projectFeeShort).toBe(50);
+  });
+});
+
 describe('labels', () => {
   it('has display names', () => {
     expect(QUALITY_LABELS).toEqual({ economy: 'Economy', standard: 'Standard', pro_narrated: 'Pro narrated', pro_talking: 'Pro talking' });
@@ -176,7 +213,7 @@ describe('labels', () => {
 
 describe('the 70% rule', () => {
   const QUALITIES = ['economy', 'standard', 'pro_narrated', 'pro_talking'];
-  const LENGTHS = [15, 30, 45, 60];
+  const LENGTHS = [7, 10, 30, 60, 120];
   const OFFERS = [...Object.values(PLANS_V2), ...Object.values(TOPUPS_V2)];
   const net = (usd) => usd - 0.029 * usd - 0.3; // after Stripe's 2.9% + $0.30
 
@@ -194,6 +231,15 @@ describe('the 70% rule', () => {
         }
       }
     }
+  });
+  it('shows what the owner\'s 45 credit short fee would do: under 70% at 7 and 10 seconds, so it is not the default', () => {
+    const at45 = { ...DEFAULTS, projectFeeShort: 45 };
+    const margin = (offer, seconds) => {
+      const credits = projectFeeFor(at45, seconds) + DEFAULTS.perSecond.standard * Math.ceil(seconds / 3) * 3;
+      return 1 - (offer.credits * costOfVideoUsd({ quality: 'standard', seconds }) / credits) / net(offer.usd);
+    };
+    expect(margin(PLANS_V2.studio, 7)).toBeLessThan(0.7);
+    expect(margin(PLANS_V2.studio, 10)).toBeLessThan(0.7);
   });
   it('stays under 80% on the Starter plan for standard video (credits not cut too far)', () => {
     const costPerCredit = costOfVideoUsd({ quality: 'standard', seconds: 30 }) / creditsForVideo({ quality: 'standard', seconds: 30 });

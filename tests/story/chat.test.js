@@ -462,7 +462,7 @@ describe('tools', () => {
   it('reports validation and moderation problems as readable tool errors', async () => {
     const { userId, user, project } = await newProject();
     const ctx = { userId, user, chatProjectId: project.id };
-    expect(await runTool({ ...ctx, name: 'set_length', input: { seconds: 500 } })).toMatchObject({ ok: false, error: 'validation_failed', message: expect.stringMatching(/15 to 75/) });
+    expect(await runTool({ ...ctx, name: 'set_length', input: { seconds: 500 } })).toMatchObject({ ok: false, error: 'validation_failed', message: expect.stringMatching(/7 to 120/) });
     expect(await runTool({ ...ctx, name: 'update_scene', input: { scene_id: 's1', patch: { title: 'nude' } } })).toEqual({ ok: false, error: 'blocked', message: expect.any(String) });
     expect(await runTool({ ...ctx, name: 'drop_tables', input: {} })).toMatchObject({ ok: false, error: 'unknown_tool' });
     expect(await runTool({ ...ctx, name: 'set_length', input: 'sixty' })).toMatchObject({ ok: false, error: 'validation_failed' });

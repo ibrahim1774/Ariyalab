@@ -98,9 +98,9 @@ describe('story schema', () => {
     expect(ok.mode).toBe('talking');
   });
 
-  it('rejects seconds outside 15 to 75', async () => {
-    await expect(db.query(`insert into story_projects (user_id, seconds) values ($1, 10)`, [USER_A])).rejects.toThrow(/check/);
-    await expect(db.query(`insert into story_projects (user_id, seconds) values ($1, 76)`, [USER_A])).rejects.toThrow(/check/);
+  it('rejects seconds outside 7 to 120', async () => {
+    await expect(db.query(`insert into story_projects (user_id, seconds) values ($1, 6)`, [USER_A])).rejects.toThrow(/check/);
+    await expect(db.query(`insert into story_projects (user_id, seconds) values ($1, 121)`, [USER_A])).rejects.toThrow(/check/);
   });
 
   it('checks shot status and source, job kind and status', async () => {
