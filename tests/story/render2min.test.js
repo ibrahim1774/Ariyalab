@@ -102,7 +102,10 @@ describe('a 2 minute video', () => {
     const d = /Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/.exec(info);
     expect(Number(d[1]) * 3600 + Number(d[2]) * 60 + Number(d[3])).toBeGreaterThan(119);
     if (process.env.RENDER_TEST_LOG) console.log('[render 2 min] took ms', took, 'warnings', JSON.stringify(row.warnings));
-    // The work dir is removed.
-    expect(readdirSync(os.tmpdir()).filter((n) => n.startsWith('story-render-') && !before.includes(n))).toEqual([]);
+    // The work dir is removed. Other test files render in the same temp folder at the same time, so a dir that
+    // is theirs may still be there for a moment: wait for those to go; one this render leaked never goes.
+    const left = () => readdirSync(os.tmpdir()).filter((n) => n.startsWith('story-render-') && !before.includes(n));
+    for (let i = 0; i < 60 && left().length; i += 1) await new Promise((r) => setTimeout(r, 500));
+    expect(left()).toEqual([]);
   }, 330_000);
 });
