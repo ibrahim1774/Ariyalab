@@ -12,4 +12,4 @@ export const MATRIX_QUALITIES = [
   { key: 'pro_narrated', label: 'Pro', note: '720p with voice and sound.' },
   { key: 'pro_talking', label: 'Pro Max', note: '1080p with voice and sound.' },
 ];
-export const DEFAULT_MATRIX_QUALITY = 'pro_narrated';
+export const DEFAULT_MATRIX_QUALITY = 'standard';

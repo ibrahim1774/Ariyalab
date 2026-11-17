@@ -17,7 +17,7 @@ async (page) => {
       if (u.endsWith('/status')) return j({ shots: [], cast: [], jobs: [], balance: null, render: null, ...scen[scenario] });
       if (u.endsWith('/script')) return j({ script });
       if (u.endsWith('/billing')) return j({ v2: true, balance: { available: 900 }, history: [] });
-      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, included: { castRegenPerCharacter: 2 }, freeRerollShare: 0.2 } });
+      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 7, standard: 8, pro_narrated: 16, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, included: { castRegenPerCharacter: 2 }, freeRerollShare: 0.2 } });
       if (u.endsWith('/quote')) {
         // Same shape as quoteProject in lib/pricing.js: 'Project fee' plus one line per quality. 3 s shots at 14 credits a second (Pro narrated), fee 90.
         const n = (scen[scenario].shots || []).length || 10;

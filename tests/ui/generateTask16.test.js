@@ -108,7 +108,7 @@ describe('Task 16 maker edits', () => {
   });
 
   it('prices an economy shot at its 4 second minimum and prefers clip_price', () => {
-    expect(shotCredits({ quality: 'economy', seconds: 3 }, DEFAULTS)).toBe(32);
+    expect(shotCredits({ quality: 'economy', seconds: 3 }, DEFAULTS)).toBe(28);
     expect(rerollInfo({ shots: [], rerolls: { included: 1, used: 0 } }, shot(1, { clip_price: 50 })).credits).toBe(50);
   });
 

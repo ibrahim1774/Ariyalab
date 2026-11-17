@@ -38,7 +38,7 @@ const ready = {
 const pending = { ...ready, status: 'pending', beats: [], hook: null, structure: null, mood: null, mode: null, shots: 0 };
 const failed = { ...pending, status: 'failed', error: 'This video is longer than 3 minutes. Trim it to 3 minutes or less and try again.' };
 
-const PRICING = { pricing: { perSecond: { economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, narrationRegen: 5, musicRegen: 5, included: { castRegenPerCharacter: 2, narration: 3, music: 3 }, freeRerollShare: 0.2 } };
+const PRICING = { pricing: { perSecond: { economy: 7, standard: 8, pro_narrated: 16, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, narrationRegen: 5, musicRegen: 5, included: { castRegenPerCharacter: 2, narration: 3, music: 3 }, freeRerollShare: 0.2 } };
 
 async function stub(page, reference, proj = project) {
   await page.route('**/api/story/**', (r) => {

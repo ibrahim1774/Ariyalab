@@ -50,7 +50,7 @@ for (const [w, h] of [[1280, 720], [390, 844]]) {
       const j = (b, s = 200) => r.fulfill({ status: s, contentType: 'application/json', body: JSON.stringify(b) });
       if (u.endsWith('/status')) return j({ project: view.project, shots: scen.scen.review.shots, cast: scen.scen.review.cast || [], jobs: [], balance: null, render: view.render, renders: view.renders });
       if (u.endsWith('/billing')) return j({ v2: true, balance: { available: 900 }, history: [] });
-      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, included: { castRegenPerCharacter: 2 }, freeRerollShare: 0.2 } });
+      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 7, standard: 8, pro_narrated: 16, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, included: { castRegenPerCharacter: 2 }, freeRerollShare: 0.2 } });
       if (u.endsWith('/quote')) return j({ total: 510, lines: [{ label: 'Project fee', credits: 90 }] });
       if (u.endsWith('/script')) return j({ script: scen.script });
       return j({ error: 'not_found' }, 404);

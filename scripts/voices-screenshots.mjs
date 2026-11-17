@@ -72,7 +72,7 @@ for (const [w, h] of [[1280, 720], [390, 844]]) {
       if (u.endsWith('/audio')) return j({ audio: steps[name] });
       if (u.endsWith('/status')) return j({ project, shots: scen.scen.generate.shots, cast: scen.scen.generate.cast || [], jobs: [], balance: null, render: null });
       if (u.endsWith('/billing')) return j({ v2: true, balance: { available: 900 }, history: [] });
-      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, narrationRegen: 5, musicRegen: 5, voiceClone: 20, included: { castRegenPerCharacter: 2, narration: 3, music: 3 }, freeRerollShare: 0.2 } });
+      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 7, standard: 8, pro_narrated: 16, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, narrationRegen: 5, musicRegen: 5, voiceClone: 20, included: { castRegenPerCharacter: 2, narration: 3, music: 3 }, freeRerollShare: 0.2 } });
       if (u.endsWith('/quote')) return j({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro narrated shots', credits: 420 }] });
       return j({ error: 'not_found' }, 404);
     });

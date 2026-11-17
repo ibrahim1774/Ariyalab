@@ -121,6 +121,10 @@ describe('submitClip request bodies', () => {
     expect(noStill.input.image_urls).toHaveLength(6);
   });
 
+  it('standard: the prompt is cut at 2500 characters', () => {
+    expect(buildClipRequest({ ...base, quality: 'standard', prompt: 'x'.repeat(3000) }).input.prompt).toHaveLength(2500);
+  });
+
   it('standard: a short shot is made at the 3 second minimum', () => {
     expect(buildClipRequest({ ...base, quality: 'standard', seconds: 1 }).input.duration).toBe(3);
   });

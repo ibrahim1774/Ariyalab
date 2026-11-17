@@ -43,6 +43,13 @@ describe('QUALITY_INFO', () => {
     for (const q of QUALITY_ORDER) expect(QUALITY_LABELS[q]).toBe(QUALITY_INFO[q].name);
   });
 
+  it('makes no claim the lineup cannot back (no lowest cost, no sharper picture on a 720p level)', () => {
+    expect(QUALITY_INFO.economy.bestFor).toBe('Quick drafts');
+    expect(QUALITY_INFO.pro_narrated.bestFor).not.toMatch(/sharp|picture/i);
+    expect(QUALITY_INFO.pro_talking.bestFor).toBe("Kling's best picture, with movement and acting");
+    expect(JSON.stringify(QUALITY_INFO)).not.toMatch(/lowest|cheapest|sharper/i);
+  });
+
   it('writes the output line', () => {
     expect(outputLine('9:16', 30)).toBe('MP4, 9:16, about 30 seconds');
     expect(outputLine('16:9', 120)).toBe('MP4, 16:9, about 2 minutes');

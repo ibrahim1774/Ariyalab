@@ -108,11 +108,11 @@ describe('what each plan makes', () => {
   const rowCells = (container, seconds) =>
     [...container.querySelector(`[data-matrix] tr[data-seconds="${seconds}"]`).querySelectorAll('td')].map((td) => td.textContent);
 
-  it('defaults to Pro and agrees with the plan cards', () => {
+  it('defaults to Standard and agrees with the plan cards', () => {
     const { container } = renderPage();
     expect(screen.getByRole('heading', { name: 'What each plan makes' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pro' })).toHaveAttribute('aria-pressed', 'true');
-    expect(rowCells(container, 30)).toEqual(['1 video', '2 videos', '5 videos']);
+    expect(screen.getByRole('button', { name: 'Standard' })).toHaveAttribute('aria-pressed', 'true');
+    expect(rowCells(container, 30)).toEqual(['2 videos', '4 videos', '9 videos']);
     const cards = [...container.querySelectorAll('[data-plan]')].map((c) => c.textContent);
     expect(cards[0]).toMatch(/About 1 video of 45 seconds/);
     expect(cards[1]).toMatch(/About 1 video of 45 seconds/);
@@ -121,8 +121,8 @@ describe('what each plan makes', () => {
 
   it('switches quality levels', () => {
     const { container } = renderPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Standard' }));
-    expect(rowCells(container, 30)).toEqual(['2 videos', '4 videos', '9 videos']);
+    fireEvent.click(screen.getByRole('button', { name: 'Pro' }));
+    expect(rowCells(container, 30)).toEqual(['1 video', '2 videos', '5 videos']);
     fireEvent.click(screen.getByRole('button', { name: 'Pro Max' }));
     expect(rowCells(container, 60)).toEqual(['Under 1 video', '1 video', '2 videos']);
   });

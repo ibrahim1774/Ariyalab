@@ -47,7 +47,7 @@ describe('quoting', () => {
   });
   it('omits the fee when already charged', async () => {
     const q = await quoteProject({ shots: [{ quality: 'economy', seconds: 5 }], feeAlreadyCharged: true });
-    expect(q.total).toBe(40);
+    expect(q.total).toBe(35);
     expect(q.lines).toHaveLength(1);
   });
 });
@@ -56,7 +56,7 @@ describe('getPricing', () => {
   it('returns defaults when pricing_config is empty', async () => {
     setPricingDb(fakeDb([]));
     const p = await getPricing();
-    expect(p.perSecond).toEqual({ economy: 8, standard: 8, pro_narrated: 16, pro_talking: 21 });
+    expect(p.perSecond).toEqual({ economy: 7, standard: 8, pro_narrated: 16, pro_talking: 21 });
     expect(p.projectFee).toBe(90);
     expect(p.included).toEqual({ castRegenPerCharacter: 2, narration: 3, music: 3, chat: 150, render: 1 });
   });
@@ -130,7 +130,7 @@ describe('getPricing', () => {
     setPricingDb(fakeDb([]));
     (await getPricing()).perSecond.economy = 1;
     _resetPricingCache();
-    expect((await getPricing()).perSecond.economy).toBe(8);
+    expect((await getPricing()).perSecond.economy).toBe(7);
   });
 });
 

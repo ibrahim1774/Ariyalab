@@ -74,7 +74,7 @@ for (const [w, h] of [[1280, 720], [390, 844]]) {
       }
       if (u.endsWith('/status')) return j({ ...sb, ...(scen.scen[v.scenario] || {}), shots: v.shots || sb.shots, cast: v.cast || scen.scen.cast.cast || [], jobs: [], balance: null, render: null });
       if (u.endsWith('/billing')) return j({ v2: true, balance: { available: 900 }, history: [] });
-      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, included: { castRegenPerCharacter: 2 }, freeRerollShare: 0.2 } });
+      if (u.endsWith('/pricing')) return j({ pricing: { perSecond: { economy: 7, standard: 8, pro_narrated: 16, pro_talking: 21 }, projectFee: 90, stillReroll: 2, castRegen: 5, included: { castRegenPerCharacter: 2 }, freeRerollShare: 0.2 } });
       if (u.endsWith('/quote')) return j({ total: 330, lines: [{ label: 'Project fee', credits: 90 }, { label: '6 Pro narrated shots', credits: 240 }] });
       return j({ error: 'not_found' }, 404);
     });

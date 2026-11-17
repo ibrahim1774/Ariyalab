@@ -255,6 +255,7 @@ Each of these spends real money; run one only after approving it and its cost.
   the download cost.
 - The spec 13a quality comparison.
 - Gemini Omni request shape and Seedance/Omni sound checked against the live API (field names read from kie.ai 2026-11-17: `first_frame_url`, `image_urls`, `duration` as a number, `resolution`, `aspect_ratio`; no audio field is sent, sound is assumed on; Seedance `generate_audio: true`).
+- Check hosted pricing_config rows for saved perSecond rates from before 2026-11-17; an old row overrides the new defaults and breaks the 70% rule.
 - Kling element-name format (accents are dropped from names) and the real kie/Kling refusal strings.
 - Meta Ad Library live check.
 - The real Claude connector: add `APP_URL/api/mcp` in claude.ai and in Claude Code and run one tool.

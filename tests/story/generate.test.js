@@ -845,12 +845,12 @@ describe('carry 8: runner and delete', () => {
 
 describe('carry 9: per-quality minimum seconds', () => {
   it('prices an economy shot at its 4 second minimum and asks the provider for 4', async () => {
-    expect(await quoteShot({ quality: 'economy', seconds: 3 })).toBe(32);
+    expect(await quoteShot({ quality: 'economy', seconds: 3 })).toBe(28);
     expect(await quoteShot({ quality: 'standard', seconds: 3 })).toBe(24);
     const ctx = await newProject({ n: 2, quality: 'economy' });
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
-    expect(q.total).toBe(64);
-    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 64 });
+    expect(q.total).toBe(56);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 56 });
     expect((await clipJobs(ctx.project.id))[0].payload.seconds).toBe(4);
   });
 });
@@ -963,12 +963,12 @@ describe('round 1', () => {
     await raw.query("update story_shots set description = 'A calm shot' where id = $1", [sid]);
     await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'economy' } });
     const v = (await getStatus(ctx)).body.shots[0];
-    expect(v.clip_credits).toBe(6 * 8);
+    expect(v.clip_credits).toBe(6 * 7);
     q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
-    expect(q.total).toBe(48);
+    expect(q.total).toBe(42);
     await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
     await finishJobs(ctx.project.id);
-    expect(charged(await ledger(ctx.userId))).toBe(48);
+    expect(charged(await ledger(ctx.userId))).toBe(42);
   });
 
   it('F-C1 (p5 b): a failed free re-roll is not a free clip of a changed shot', async () => {
