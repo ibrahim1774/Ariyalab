@@ -10,7 +10,7 @@ import { projectFeeFor } from '../../lib/pricingConstants.js';
 import { getActionMethods } from '../../lib/story/actions.js';
 import { generateCast } from '../../lib/story/cast.js';
 import { buildShotList, generateStills } from '../../lib/story/storyboard.js';
-import { quotePlan } from '../../lib/story/quotePlan.js';
+import { quotePlan, setPlanRequested } from '../../lib/story/quotePlan.js';
 import { tick } from '../../lib/story/runner.js';
 import '../../lib/story/actionRoute.js';
 
@@ -87,6 +87,22 @@ describe('quotePlan', () => {
     const q = await quotePlan({ userId, projectId: project.id });
     expect(q.castFee).toBe(0);
     expect(q.total).toBe(0);
+    expect(q.total).toBe(0);
+  });
+
+  it('different people in every scene: the fee line says when it is charged and how much, and is not in the plan total', async () => {
+    const { userId, project } = await newProject({ extra: { consistent_cast: false } });
+    const pricing = await getPricing();
+    const q = await quotePlan({ userId, projectId: project.id });
+    expect(q.feeLater).toBe(projectFeeFor(pricing, 30));
+    expect(line(q, 'fee')).toMatchObject({ credits: 0, included: false, later: projectFeeFor(pricing, 30) });
+    expect(q.total).toBe(0);
+  });
+
+  it('a paid fee has nothing later', async () => {
+    const { userId, project } = await newProject({ extra: { consistent_cast: false, fee_charged: true } });
+    const q = await quotePlan({ userId, projectId: project.id });
+    expect(q.feeLater).toBe(0);
     expect(line(q, 'fee')).toMatchObject({ credits: 0, included: true });
   });
 
@@ -133,5 +149,20 @@ describe('quotePlan', () => {
     const userId = randomUUID();
     const [project] = await storyDb().insert('story_projects', { user_id: userId, title: 'Empty', step: 'brief' });
     await expect(quotePlan({ userId, projectId: project.id })).rejects.toMatchObject({ status: 409 });
+  });
+});
+
+describe('plan-request, the marker that the customer pressed "Looks good"', () => {
+  const row = async (id) => (await storyDb().select('story_projects', { id }))[0];
+  it('is registered, false by default, set and cleared for the owner only', async () => {
+    expect(getActionMethods('plan-request')).toContain('POST');
+    const { userId, project } = await newProject();
+    expect((await row(project.id)).plan_requested).toBe(false);
+    expect(await setPlanRequested({ userId, projectId: project.id, requested: true })).toEqual({ plan_requested: true });
+    expect((await row(project.id)).plan_requested).toBe(true);
+    await setPlanRequested({ userId, projectId: project.id, requested: false });
+    expect((await row(project.id)).plan_requested).toBe(false);
+    await expect(setPlanRequested({ userId: randomUUID(), projectId: project.id, requested: true })).rejects.toMatchObject({ status: 404 });
+    await expect(setPlanRequested({ userId, projectId: project.id, requested: 'yes' })).rejects.toMatchObject({ status: 422 });
   });
 });
