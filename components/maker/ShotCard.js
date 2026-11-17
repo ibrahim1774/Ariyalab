@@ -32,9 +32,9 @@ function toPercent(inset) {
   return { x: pick(inset?.x, 50), y: pick(inset?.y, 30), w: pick(inset?.w, 45) };
 }
 
-/** Qualities a shot can switch between: a talking project stays on pro talking, a narrated one never uses it. */
-export function qualityChoices(project) {
-  return project?.mode === 'talking' ? ['pro_talking'] : ['standard', 'pro_narrated'];
+/** Qualities a shot can switch between: every level makes sound, so the mode (who speaks) does not limit it. */
+export function qualityChoices() {
+  return ['economy', 'standard', 'pro_narrated', 'pro_talking'];
 }
 
 /**
@@ -63,7 +63,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   useEffect(() => { setTrim(String(shot.footage?.trimStart ?? 0)); }, [shot.footage?.trimStart]);
   useEffect(() => { setPlace(toPercent(shot.inset)); }, [shot.inset?.x, shot.inset?.y, shot.inset?.w]);
   const locked = BUSY.has(shot.status) || shot.status === 'still_pending' || Boolean(busy);
-  const choices = qualityChoices(project);
+  const choices = qualityChoices();
   const failed = shot.status === 'failed' || shot.status === 'blocked';
   const waiting = shot.status === 'still_pending' || BUSY.has(shot.status);
   const retryNode =

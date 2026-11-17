@@ -18,7 +18,7 @@ import { transcribe } from '../../lib/providers/stt.js';
 import { runWorkerJob, sweep, enqueue } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
 import { setAudioPlan, checkedAudioExt } from '../../lib/story/audio.js';
-import { startRender, renderTargetSize, _configureRender, planNarration } from '../../lib/story/render.js';
+import { startRender, renderTargetSize, _configureRender, planNarration, CLIP_BED_DB } from '../../lib/story/render.js';
 import { captionFilterAvailable } from '../../lib/story/captions.js';
 import { run as runChecks, scriptWordsOf, wordCoverage } from '../../lib/story/checks.js';
 import { getProjectStatus } from '../../lib/story/status.js';
@@ -123,6 +123,12 @@ beforeAll(async () => {
   clip('c2.mp4', 2.5, 90);
   clip('c3.mp4', 4, 180);
   clip('c4.mp4', 5, 270);
+  // A clip with a sound track that is silent (a model clip with no sound, or a customer's footage).
+  ff([
+    '-f', 'lavfi', '-i', 'testsrc2=size=540x960:rate=24:duration=4',
+    '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono',
+    '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', 'quiet.mp4',
+  ]);
   // Narration tracks: two "lines" of tone (s1, s2) with a 0.3 s breath between.
   const narration = (name, a, b) => ff([
     '-filter_complex',
@@ -159,7 +165,7 @@ beforeAll(async () => {
   ]);
   // A one-second gap, for the silence check.
   ff(['-filter_complex', 'sine=f=300:d=1[a];anullsrc=r=44100:cl=mono,atrim=0:1[g];sine=f=300:d=1[b];[a][g][b]concat=n=3:v=0:a=1[out]', '-map', '[out]', 'gap.wav']);
-  for (const n of ['c1', 'c2', 'c3', 'c4', 'tk1', 'tk2']) media[n] = await store(`${n}.mp4`, 'mp4');
+  for (const n of ['c1', 'c2', 'c3', 'c4', 'quiet', 'tk1', 'tk2']) media[n] = await store(`${n}.mp4`, 'mp4');
   media.narration = await store('narration.wav', 'wav');
   media.short = await store('short.wav', 'wav');
   media.long = await store('long.wav', 'wav');
@@ -192,6 +198,16 @@ afterEach(() => {
 const SCENES = [
   { id: 's1', title: 'Morning', visual: 'A small bakery at dawn.', lines: [{ speaker: 'narrator', text: 'Once upon a time,' }] },
   { id: 's2', title: 'Dream', visual: 'The baker looks out of the window.', lines: [{ speaker: 'Maya', text: 'One day.' }, { speaker: 'narrator', text: 'a baker dreamed big.' }] },
+];
+// A talking video whose characters speak every line: nobody to narrate.
+const TALK_SCENES = [
+  { id: 's1', title: 'Morning', visual: 'A small bakery at dawn.', lines: [{ speaker: 'Maya', text: 'Once upon a time,' }] },
+  { id: 's2', title: 'Dream', visual: 'The baker looks out of the window.', lines: [{ speaker: 'Leo', text: 'a baker dreamed big.' }] },
+];
+// A talking video with a narrator who opens it and a character in the second scene.
+const MIXED_SCENES = [
+  { id: 's1', title: 'Morning', visual: 'A small bakery at dawn.', lines: [{ speaker: 'narrator', text: 'Once upon a time,' }] },
+  { id: 's2', title: 'Dream', visual: 'The baker looks out of the window.', lines: [{ speaker: 'Maya', text: 'a baker dreamed big.' }] },
 ];
 const segs = (a, b) => [
   { sceneId: 's1', lineIndex: 0, text: 'Once upon a time,', start: 0.2, end: 0.2 + a },
@@ -270,7 +286,7 @@ describe('render', () => {
       user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '16:9',
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });
-    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: TALK_SCENES, source: 'brief' });
     const still = await putObject({ key: `test-fixtures/${randomUUID()}.png`, body: readFileSync(path.join(process.cwd(), 'tests/fixtures/still.png')) });
     const [footage, inset] = await storyDb().insert('story_assets', [
       { user_id: userId, kind: 'video_clip', url: media.c4.url, storage_key: media.c4.key, name: 'mine' },
@@ -577,7 +593,8 @@ describe('round 1', () => {
     // R2: the long pause after the scene's line is said instead (no remix).
     const gaps = withMusic.warnings.filter((w) => w.code === 'narration_gap').map((w) => w.message);
     expect(gaps).toContain('The narration for "Morning" ends well before its shots do, so there is a long pause. Lengthen the line or shorten the shots.');
-    const bare = await renderOnce(await newProject({ narration: 'short', music: false }));
+    // Dead air needs clips with no sound of their own: a clip's own sound now fills a pause.
+    const bare = await renderOnce(await newProject({ narration: 'short', music: false, clips: ['quiet', 'quiet', 'quiet', 'quiet'] }));
     expect(codes(bare)).toContain('silence');
     expect(bare.settings.checks.longestSilence).toBeGreaterThan(3);
   }, 240_000);
@@ -657,7 +674,7 @@ describe('round 1', () => {
       user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '9:16',
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });
-    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: TALK_SCENES, source: 'brief' });
     await storyDb().insert('story_shots', [
       { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,' },
     ]);
@@ -710,7 +727,7 @@ describe('round 1', () => {
       user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '9:16',
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });
-    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: SCENES, source: 'brief' });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: TALK_SCENES, source: 'brief' });
     // tk2 speaks from 0.4 to 3.8 s; its shot is 3 s (an economy clip made at 4 s for a 3 s shot).
     await storyDb().insert('story_shots', [
       { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'pro_talking', source: 'generated', status: 'ready', clip_url: media.tk2.url, clip_key: media.tk2.key, line: 'Once upon a time,' },
@@ -916,4 +933,98 @@ describe('round 3', () => {
     const [row] = await storyDb().select('story_renders', { id: render.id });
     expect(row).toMatchObject({ status: 'failed', error: 'One of your picture-in-picture files could not be read. Pick another file for that shot.' });
   }, 240_000);
+});
+
+// ---------------------------------------------------------------- sound in both modes
+
+/** Mean level (dB) of a file's audio inside a narrow band around `hz` (-91 when there is nothing). */
+function bandLevel(file, hz, { from = 0, length = 60 } = {}) {
+  const r = spawnSync(FF, ['-hide_banner', '-nostats', '-ss', String(from), '-t', String(length), '-i', file, '-vn', '-af', `bandpass=f=${hz}:width_type=h:w=10,volumedetect`, '-f', 'null', '-'], { encoding: 'utf8' });
+  const m = /mean_volume:\s*(-?\d+(?:\.\d+)?) dB/.exec(r.stderr);
+  return m ? Number(m[1]) : -91;
+}
+
+async function mixedProject({ narrate = true, music = false } = {}) {
+  const userId = randomUUID();
+  const [project] = await storyDb().insert('story_projects', {
+    fee_charged: true,
+    user_id: userId, title: 'Mixed', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'talking', aspect: '9:16',
+    narration_url: narrate ? media.narration.url : null, narration_key: narrate ? media.narration.key : null, narration_seconds: 2.4,
+    narration_segments: narrate ? [{ sceneId: 's1', lineIndex: 0, text: 'Once upon a time,', start: 0.2, end: 2.4 }] : null,
+    music_url: music ? media.music.url : null, music_key: music ? media.music.key : null,
+    audio_plan: { captions: { on: true, style: 'clean' }, music: { type: music ? 'generated' : 'none', prompt: '', assetId: null } },
+  });
+  await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: MIXED_SCENES, source: 'brief' });
+  await storyDb().insert('story_shots', [
+    { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,' },
+    { project_id: project.id, ord: 1, scene_id: 's2', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.tk1.url, clip_key: media.tk1.key, line: 'a baker dreamed big.' },
+  ]);
+  return { userId, project };
+}
+
+describe('sound in both modes', () => {
+  it('a talking video with narrator lines is rendered with the narration; the narrator line is not a character line', async () => {
+    const ctx = await mixedProject();
+    const row = await renderOnce(ctx);
+    expect(row).toMatchObject({ status: 'done', error: null });
+    expect(row.settings.mode).toBe('talking');
+    expect(row.settings.narrationUrl).toBeTruthy();
+    expect(row.settings.lines.map((l) => l.text)).toEqual(['Once upon a time,']);
+    expect(row.settings.narrationPlan.map((g) => g.sceneId)).toEqual(['s1']);
+    // The narrator's line is voiced by the narration; only the character's line is read from the clip.
+    expect(row.settings.shots.map((s) => s.line)).toEqual([null, 'a baker dreamed big.']);
+    expect(row.settings.scriptWords).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);
+    expect(row.warnings).toEqual([]);
+    const file = localPathFor(row.file_url);
+    expect(measure(file).audioStreams).toBe(1);
+    // The narration's tone (220 Hz) is in the video, and so is the character's clip (300 Hz).
+    expect(bandLevel(file, 220)).toBeGreaterThan(-60);
+    expect(bandLevel(file, 300)).toBeGreaterThan(-60);
+  }, 240_000);
+
+  it('a talking video with narrator lines needs its narration first (the same not ready message as a narrated one)', async () => {
+    const ctx = await mixedProject({ narrate: false });
+    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toMatchObject({
+      status: 409, code: 'audio_not_ready', message: expect.stringMatching(/narration but no voice yet/),
+    });
+    expect(await renders(ctx.project.id)).toHaveLength(0);
+    // Character lines only: nothing to narrate, so it starts.
+    const speakers = await mixedProject({ narrate: false });
+    await storyDb().update('story_scripts', { project_id: speakers.project.id }, { scenes: TALK_SCENES });
+    await expect(startRender({ userId: speakers.userId, projectId: speakers.project.id })).resolves.toMatchObject({ charged: 0 });
+  }, 120_000);
+
+  it('a narrated video with no narrator lines and no music keeps the clips\' own sound (it is not replaced by silence)', async () => {
+    const userId = randomUUID();
+    const [project] = await storyDb().insert('story_projects', {
+      fee_charged: true, user_id: userId, title: 'Ambience', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
+      audio_plan: { captions: { on: false, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: [{ id: 's1', title: 'T', visual: 'v', lines: [] }], source: 'brief' });
+    await storyDb().insert('story_shots', [
+      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key },
+      { project_id: project.id, ord: 1, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.c3.url, clip_key: media.c3.key },
+    ]);
+    const row = await renderOnce({ userId, project });
+    expect(row.status).toBe('done');
+    const file = localPathFor(row.file_url);
+    expect(bandLevel(file, 300)).toBeGreaterThan(-45);
+    expect(Math.abs(measure(file).lufs - -14)).toBeLessThanOrEqual(1);
+  }, 240_000);
+
+  it('a narrated video keeps the clip sound with the narration: heard in the pauses between the narrator\'s scenes, at the bed level', async () => {
+    const ctx = await newProject({ music: false, narration: 'short' });
+    const row = await renderOnce(ctx);
+    const file = localPathFor(row.file_url);
+    // short.wav is spoken at 0 to 2.4 s and 6 to 8.7 s; 3.2 to 5.4 s is the clips' own sound alone.
+    expect(bandLevel(file, 300, { from: 3.2, length: 2.2 })).toBeGreaterThan(-45);
+    expect(bandLevel(file, 220, { from: 0.4, length: 1.8 })).toBeGreaterThan(-45);
+    expect(CLIP_BED_DB).toBeLessThan(0);
+  }, 240_000);
+
+  it('checks count every voiced line: narrator lines and character lines in a talking video, narrator lines only in a narrated one', () => {
+    expect(scriptWordsOf(MIXED_SCENES, 'talking')).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);
+    expect(scriptWordsOf(SCENES, 'narrated')).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);
+    expect(scriptWordsOf(MIXED_SCENES, 'narrated')).toEqual(['once', 'upon', 'a', 'time']);
+  });
 });

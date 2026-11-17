@@ -106,8 +106,18 @@ describe('quotePlan', () => {
     expect(line(q, 'fee')).toMatchObject({ credits: 0, included: true });
   });
 
-  it('a talking project has no narration line', async () => {
+  it('a talking project with narrator lines has the narration line at the same price as a narrated one', async () => {
+    const narrated = await newProject();
+    const talking = await newProject({ extra: { quality: 'pro_talking', mode: 'talking' } });
+    const a = line(await quotePlan({ userId: narrated.userId, projectId: narrated.project.id }), 'voice');
+    const b = line(await quotePlan({ userId: talking.userId, projectId: talking.project.id }), 'voice');
+    expect(b).toBeDefined();
+    expect(b).toEqual(a);
+  });
+
+  it('a talking project whose script has only character lines has no narration line', async () => {
     const { userId, project } = await newProject({ extra: { quality: 'pro_talking', mode: 'talking' } });
+    await storyDb().update('story_scripts', { project_id: project.id }, { scenes: SCENES.map((s) => ({ ...s, lines: s.lines.map((l) => ({ ...l, speaker: 'Maya' })) })) });
     const q = await quotePlan({ userId, projectId: project.id });
     expect(line(q, 'voice')).toBeUndefined();
   });

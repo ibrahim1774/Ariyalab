@@ -157,7 +157,7 @@ describe('screen 1, Describe it', () => {
     fireEvent.click(screen.getByRole('button', { name: /Write my script/ }));
     await waitFor(() => expect(client.writeScript).toHaveBeenCalledWith('p1'));
     expect(client.updateProject).toHaveBeenCalledWith('p1', expect.objectContaining({
-      offer: 'A barber turns a bad haircut into a comeback', style: '3d_family', seconds: 10, quality: 'standard', mode: 'narrated',
+      offer: 'A barber turns a bad haircut into a comeback', style: '3d_family', seconds: 10, quality: 'standard',
     }));
     expect(client.updateProject.mock.invocationCallOrder[0]).toBeLessThan(client.writeScript.mock.invocationCallOrder[0]);
     // The purpose is the server's to decide (the script model picks it): the screen never sends one.
@@ -177,7 +177,7 @@ describe('screen 1, Describe it', () => {
     await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/app/p/new1'));
     expect(client.createProject).toHaveBeenCalledTimes(1);
     expect(client.createProject).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'A baker whose bread can talk.', offer: 'A baker whose bread can talk.\nIt is shy.', seconds: 30, quality: 'standard', mode: 'narrated', style: '3d_family', aspect: '9:16',
+      title: 'A baker whose bread can talk.', offer: 'A baker whose bread can talk.\nIt is shy.', seconds: 30, quality: 'standard', style: '3d_family', aspect: '9:16',
     }));
     expect(client.writeScript).toHaveBeenCalledWith('new1');
   });

@@ -165,8 +165,9 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
         await save(briefFields());
       }
       if (scripted) {
-        // The length (or a talking quality) changed the words the script needs: it is rewritten once, counted as a revise.
-        if (seconds !== project.seconds || quality !== project.quality) {
+        // The length changed the words the script needs: it is rewritten once, counted as a revise. The quality does not
+        // change the words (who speaks is the script's own choice), so changing it never rewrites the script.
+        if (seconds !== project.seconds) {
           setBusy('Fitting your script…');
           await reviseScript(id, `Fit the script to ${seconds} seconds.`);
         }

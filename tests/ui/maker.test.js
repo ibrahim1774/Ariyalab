@@ -321,18 +321,18 @@ describe('brief steps', () => {
     expect(screen.getByRole('button', { name: /Continue/ })).toBeEnabled();
   });
 
-  it('Pro Max sets mode talking; the other three set narrated; Budget is offered again', async () => {
+  it('each card sets the quality only: the mode (who speaks) is not changed by it', async () => {
     const save = vi.fn().mockResolvedValue({});
     render(<StepLength project={project({ quality: 'standard' })} save={save} onNext={vi.fn()} />);
     expect(screen.getAllByRole('radio', { name: /^(Budget|Standard|Pro|Pro Max)$/ })).toHaveLength(4);
     fireEvent.click(screen.getByRole('radio', { name: 'Pro Max' }));
-    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_talking', mode: 'talking' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_talking' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Pro' }));
-    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_narrated', mode: 'narrated' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_narrated' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Budget' }));
-    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'economy', mode: 'narrated' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'economy' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Standard' }));
-    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'standard', mode: 'narrated' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'standard' }));
   });
 
   describe('quality cards', () => {
@@ -387,10 +387,10 @@ describe('brief steps', () => {
   });
 
   it('puts the choice back and shows the reason when a save fails', async () => {
-    const save = vi.fn().mockRejectedValue(new StoryApiError({ status: 422, code: 'validation_failed', message: 'Talking videos need Pro talking.' }));
+    const save = vi.fn().mockRejectedValue(new StoryApiError({ status: 422, code: 'validation_failed', message: 'Length must be a whole number from 7 to 120 seconds.' }));
     render(<StepLength project={project({ seconds: 30 })} save={save} onNext={vi.fn()} />);
     fireEvent.click(screen.getByRole('radio', { name: '60 seconds' }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Talking videos need Pro talking.');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Length must be a whole number from 7 to 120 seconds.');
     expect(screen.getByRole('radio', { name: '30 seconds' })).toBeChecked();
   });
 });
@@ -706,9 +706,9 @@ describe('storyboard step', () => {
     expect(screen.getByRole('button', { name: 'Add a picture-in-picture' })).toBeEnabled();
   });
 
-  it('keeps a talking project on Pro talking', () => {
+  it('a talking project can still change a shot\'s quality (who speaks does not limit it)', () => {
     render(<StepStoryboard project={project({ mode: 'talking', quality: 'pro_talking' })} shots={[shot(1, { quality: 'pro_talking' })]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    expect(screen.getByLabelText('Quality')).toBeDisabled();
+    expect(screen.getByLabelText('Quality')).toBeEnabled();
   });
 });
 

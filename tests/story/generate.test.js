@@ -392,6 +392,109 @@ describe('consistent_cast false: clips and the project fee', () => {
   });
 });
 
+describe('sound in the clip prompt (narrator and character lines)', () => {
+  const SOUND_SCENES = [
+    { id: 's1', title: 'Open', visual: 'Maya sweeps the shop.', lines: [{ speaker: 'narrator', text: 'Nobody believed this would work.' }, { speaker: 'Maya', text: 'Watch me prove them wrong.' }] },
+    { id: 's2', title: 'Close', visual: 'Leo walks in.', lines: [{ speaker: 'Leo', text: 'I will take the first chair.' }, { speaker: 'narrator', text: 'And that was the start.' }] },
+  ];
+  const LINES = ['Nobody believed this would work.', 'Watch me prove them wrong.', 'I will take the first chair.', 'And that was the start.'];
+
+  /** A project with these scenes, one shot per line (the first and last are narrator lines), the cast, and the mode. */
+  async function soundProject({ mode = 'talking', quality = 'pro_narrated', cast = ['Maya', 'Leo'], lines = LINES, consistent = true } = {}) {
+    const ctx = await newProject({ n: 4, quality });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { mode, consistent_cast: consistent });
+    await storyDb().update('story_scripts', { project_id: ctx.project.id }, { scenes: SOUND_SCENES });
+    const rows = [...ctx.shots].sort((a, b) => a.ord - b.ord);
+    for (const [i, shot] of rows.entries()) {
+      await storyDb().update('story_shots', { id: shot.id }, { scene_id: i < 2 ? 's1' : 's2', line: lines[i], scene_sig: sceneSig(SOUND_SCENES[i < 2 ? 0 : 1]) });
+    }
+    const notes = { Maya: 'warm, low and unhurried', Leo: 'bright and quick' };
+    for (const [i, name] of cast.entries()) {
+      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: i, name, description: `${name} in an apron.`, voice_note: notes[name], status: 'ready', image_url: `/pick/${name}.png`, image_key: `p${i}`, sheet: { url: `/sheet/${name}.png`, key: `s${i}`, from_key: `p${i}` } });
+    }
+    return ctx;
+  }
+  const promptsOf = async (ctx) => (await clipJobs(ctx.project.id)).map((j) => ({ shot: j.shot_id, prompt: j.payload.prompt }));
+  const orderedPrompts = async (ctx) => {
+    const byShot = new Map((await promptsOf(ctx)).map((p) => [p.shot, p.prompt]));
+    return [...ctx.shots].sort((a, b) => a.ord - b.ord).map((sh) => byShot.get(sh.id));
+  };
+
+  it('a narrated clip is prompted for ambience and sound effects only, with no speech and no music, and never carries the line', async () => {
+    const ctx = await soundProject({ mode: 'narrated', cast: ['Maya', 'Leo'] });
+    await generateAll(ctx);
+    for (const prompt of await orderedPrompts(ctx)) {
+      expect(prompt).toMatch(/ambience and sound effects only/i);
+      expect(prompt).toMatch(/Nobody speaks/);
+      expect(prompt).toMatch(/No music/);
+      for (const line of LINES) expect(prompt).not.toContain(line);
+      expect(prompt).not.toMatch(/ says/);
+    }
+  });
+
+  it('a talking video: a narrator line never reaches a clip; a character line is said by its speaker with the voice note', async () => {
+    const ctx = await soundProject();
+    await generateAll(ctx);
+    const [first, maya, leo, last] = await orderedPrompts(ctx);
+    expect(first).toMatch(/ambience and sound effects only/i);
+    expect(first).not.toContain(LINES[0]);
+    expect(last).not.toContain(LINES[3]);
+    expect(last).toMatch(/Nobody speaks/);
+    expect(maya).toContain('says, in a warm, low and unhurried voice: "Watch me prove them wrong."');
+    expect(maya).toMatch(/Maya says/);
+    expect(leo).toContain('Leo says, in a bright and quick voice: "I will take the first chair."');
+    expect(maya).not.toContain('The character says');
+    expect(maya).toMatch(/No music/);
+  });
+
+  it('names the speaker by the Kling element when the shot has one', async () => {
+    const ctx = await soundProject({ quality: 'pro_narrated' });
+    const [mayaRow] = await storyDb().select('story_cast', { project_id: ctx.project.id, name: 'Maya' });
+    const mayaShot = [...ctx.shots].sort((a, b) => a.ord - b.ord)[1];
+    await storyDb().update('story_shots', { id: mayaShot.id }, { cast_ids: [mayaRow.id] });
+    await generateAll(ctx);
+    const prompt = (await orderedPrompts(ctx))[1];
+    expect(prompt).toContain('@Maya says, in a warm, low and unhurried voice: "Watch me prove them wrong."');
+  });
+
+  it('a character line whose speaker is not in the cast is refused before anything is claimed, held or queued', async () => {
+    const ctx = await soundProject({ cast: ['Maya'] });
+    const before = await balance(ctx.userId);
+    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved', field: 'line' });
+    expect(await clipJobs(ctx.project.id)).toHaveLength(0);
+    expect(await balance(ctx.userId)).toEqual(before);
+    expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
+    expect((await shotRows(ctx.project.id)).every((s) => s.status === 'still_ready')).toBe(true);
+  });
+
+  it('a character line that is no line of its scene (the script changed) is refused the same way', async () => {
+    const ctx = await soundProject({ lines: [LINES[0], 'Something Maya never says.', LINES[2], LINES[3]] });
+    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved' });
+    expect(await clipJobs(ctx.project.id)).toHaveLength(0);
+  });
+
+  it('different people in every scene: the speaker is named without a cast and there is no voice note to add', async () => {
+    const ctx = await soundProject({ cast: [], consistent: false });
+    await generateAll(ctx);
+    const [, maya] = await orderedPrompts(ctx);
+    expect(maya).toContain('Maya says: "Watch me prove them wrong."');
+  });
+
+  it('the price shown is the price charged: sound changes no price', async () => {
+    const narrated = await soundProject({ mode: 'narrated' });
+    const talking = await soundProject();
+    const a = await quoteGeneration({ userId: narrated.userId, projectId: narrated.project.id });
+    const b = await quoteGeneration({ userId: talking.userId, projectId: talking.project.id });
+    expect(b.total).toBe(a.total);
+    const before = await balance(talking.userId);
+    const out = await startGeneration({ userId: talking.userId, projectId: talking.project.id, confirmTotal: b.total });
+    expect(out.charged).toBe(b.total);
+    expect(before.available - (await balance(talking.userId)).available).toBe(b.total);
+  });
+});
+
 describe('re-roll', () => {
   async function readyProject(n = 15) {
     const ctx = await newProject({ n });

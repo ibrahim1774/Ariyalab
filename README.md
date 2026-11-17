@@ -11,7 +11,7 @@ Customers start at `/app` and make a video in the maker at `/app/p/[id]`. Each s
 1. **Chat**: talk through the idea; the assistant turns it into a brief.
 2. **Brief**: purpose, offer, audience and tone. The brand kit (`/app/brand`) fills these in by default. A reference video (an Instagram, TikTok or Facebook link, or an upload) can be analysed so the story follows its structure.
 3. **Style**: the look of the animation.
-4. **Length**: how many seconds, and narrated or with characters speaking.
+4. **Length**: how many seconds. Whether a narrator tells the story or the characters speak is chosen by the script and can be changed in the chat; every quality level makes its own sound.
 5. **Script**: written by Claude, scene by scene. It can be revised with an instruction or edited by hand.
 6. **Cast**: one character per role, with picture options to pick from (or the customer's own picture).
 7. **Storyboard**: the shot list and a still for each shot.

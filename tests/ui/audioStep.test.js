@@ -72,10 +72,17 @@ describe('the three sections', () => {
     await waitFor(() => expect(screen.getByRole('radio', { name: /Adrian/ })).toBeChecked());
   });
 
-  it('a talking video explains there is no narrator to choose, and offers no narration button', async () => {
+  it('a video with no narrator lines (the characters speak) explains there is no narrator to choose, and offers no narration button', async () => {
     await open(view({ applicable: { narration: false, narrationLines: 0 } }));
-    expect(screen.getByText('This video uses its own voices')).toBeInTheDocument();
+    expect(screen.getByText('The characters speak for themselves')).toBeInTheDocument();
+    expect(screen.getByText(/Add a narrator line in the script/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Make the narration/ })).toBeNull();
+  });
+
+  it('a talking video that has narrator lines offers the narration like any other (the narrator reads those lines)', async () => {
+    await open(view({ applicable: { narration: true, narrationLines: 2 } }));
+    expect(screen.queryByText('The characters speak for themselves')).toBeNull();
+    expect(screen.getByRole('button', { name: /Make the narration/ })).toBeInTheDocument();
   });
 
   it('a script with no narrator lines says so and leads back to the script', async () => {

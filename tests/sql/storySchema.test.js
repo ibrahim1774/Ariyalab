@@ -87,15 +87,11 @@ describe('story schema', () => {
     ).rejects.toThrow(/check constraint/);
   });
 
-  it('keeps mode and quality consistent', async () => {
-    await expect(
-      db.query(`insert into story_projects (user_id, quality, mode) values ($1, 'pro_talking', 'narrated')`, [USER_A])
-    ).rejects.toThrow(/story_projects_mode_quality/);
-    await expect(
-      db.query(`insert into story_projects (user_id, quality, mode) values ($1, 'standard', 'talking')`, [USER_A])
-    ).rejects.toThrow(/story_projects_mode_quality/);
-    const ok = await one(`insert into story_projects (user_id, quality, mode) values ($1, 'pro_talking', 'talking') returning mode`, [USER_A]);
-    expect(ok.mode).toBe('talking');
+  it('lets mode and quality be any pair (the script chooses the mode)', async () => {
+    const a = await one(`insert into story_projects (user_id, quality, mode) values ($1, 'pro_talking', 'narrated') returning mode`, [USER_A]);
+    expect(a.mode).toBe('narrated');
+    const b = await one(`insert into story_projects (user_id, quality, mode) values ($1, 'standard', 'talking') returning mode`, [USER_A]);
+    expect(b.mode).toBe('talking');
   });
 
   it('consistent_cast is a boolean that is never null and defaults to true', async () => {

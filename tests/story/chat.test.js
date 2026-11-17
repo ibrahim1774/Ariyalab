@@ -409,7 +409,7 @@ describe('money', () => {
   it('every tool result is plain data the model can read, and no tool exposes a spend', () => {
     expect(CHAT_TOOLS.map((t) => t.name)).toEqual([
       'get_project', 'revise_script', 'update_scene', 'regenerate_character', 'update_shot', 'set_style', 'set_length', 'get_quote',
-      'make_picture', 'remake_clip', 'set_quality', 'pick_character', 'set_consistent_cast', 'make_scene',
+      'make_picture', 'remake_clip', 'set_quality', 'pick_character', 'set_consistent_cast', 'set_mode', 'make_scene',
     ]);
     for (const t of CHAT_TOOLS) {
       expect(t.description, t.name).toMatch(/\S/);
@@ -821,14 +821,14 @@ describe('simple maker tools', () => {
   const projectRow = async (id) => (await storyDb().select('story_projects', { id }))[0];
 
   describe('set_quality', () => {
-    it('sets the quality, applies the talking rule both ways and returns the new quote, spending nothing', async () => {
+    it('sets the quality only (the mode stays as it is) and returns the new quote, spending nothing', async () => {
       const ctx = await genProject({ n: 2 });
       const before = await ledgerCount(ctx.userId);
       const talking = await run(ctx, 'set_quality', { quality: 'pro_talking' });
-      expect(talking).toMatchObject({ ok: true, changed: 'project', project: { quality: 'pro_talking', mode: 'talking' } });
+      expect(talking).toMatchObject({ ok: true, changed: 'project', project: { quality: 'pro_talking', mode: 'narrated' } });
       expect(talking.quote.total).toBeGreaterThan(0);
       const row = await projectRow(ctx.project.id);
-      expect([row.quality, row.mode]).toEqual(['pro_talking', 'talking']);
+      expect([row.quality, row.mode]).toEqual(['pro_talking', 'narrated']);
       const back = await run(ctx, 'set_quality', { quality: 'economy' });
       expect(back).toMatchObject({ ok: true, project: { quality: 'economy', mode: 'narrated' } });
       expect(back.quote.total).toBeLessThan(talking.quote.total);
@@ -970,6 +970,65 @@ describe('simple maker tools', () => {
       const ctx = await newProject();
       expect(await run(ctx, 'set_consistent_cast', { consistent_cast: 'no' })).toMatchObject({ ok: false, error: 'validation_failed' });
       expect(await run(ctx, 'set_consistent_cast', {})).toMatchObject({ ok: false, error: 'validation_failed' });
+    });
+  });
+
+  describe('set_mode', () => {
+    it('sets who tells the story with no clips made: no card, no credits, and it says the script may need rewriting', async () => {
+      const ctx = await genProject({ n: 2 });
+      const before = await ledgerCount(ctx.userId);
+      const out = await run(ctx, 'set_mode', { mode: 'talking' });
+      expect(out).toMatchObject({ ok: true, changed: 'project', project: { mode: 'talking' } });
+      expect(out.note).toMatch(/rewrite the script/i);
+      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+      // The same value again changes nothing more.
+      expect(await run(ctx, 'set_mode', { mode: 'talking' })).toMatchObject({ ok: true, project: { mode: 'talking' }, note: 'It was already set that way.' });
+    });
+
+    it('with clips already made it changes nothing and returns a card: how many clips need making again, with the plain wording', async () => {
+      const ctx = await genProject({ n: 3, clips: true });
+      const before = await ledgerCount(ctx.userId);
+      const out = await run(ctx, 'set_mode', { mode: 'talking' });
+      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'mode', method: 'POST', body: { mode: 'talking' } } });
+      expect(out.quote.credits).toBe(0);
+      expect(out.quote.clips).toBe(3);
+      expect(out.quote.remake_credits).toBeGreaterThan(0);
+      expect(out.quote.label).toMatch(/^The characters speak: 3 clips will need making again/);
+      const narr = await run(ctx, 'set_mode', { mode: 'narrated' });
+      expect(narr).toMatchObject({ ok: true, project: { mode: 'narrated' } });
+      // Nothing changed yet (the project is narrated: the card for talking is the open one).
+      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
+      await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm });
+      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale && sh.clip_mismatch && sh.clip_url)).toBe(true);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+      const back = await run(ctx, 'set_mode', { mode: 'narrated' });
+      expect(back.quote.label).toMatch(/^A narrator tells the story: 3 clips will need making again/);
+    });
+
+    it('the card goes out of date once the mode already has that value, or the clip count moved', async () => {
+      const ctx = await genProject({ n: 3, clips: true });
+      signIn(ctx.user);
+      const sent = await post({ projectId: ctx.project.id, message: tool('set_mode', { mode: 'talking' }) });
+      const [card] = sent.body.confirms;
+      expect(card.confirm.action).toBe('mode');
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('open');
+      await storyDb().update('story_shots', { id: ctx.shots[2].id }, { clip_url: null, clip_key: null, status: 'still_ready' });
+      const res = await confirmVia({ projectId: ctx.project.id, confirmId: card.id });
+      expect(res.body.error).toBe('confirm_outdated');
+      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'talking' });
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('outdated');
+    });
+
+    it('needs narrated or talking, and refuses while a picture or clip is being made', async () => {
+      const ctx = await genProject({ n: 2 });
+      expect(await run(ctx, 'set_mode', { mode: 'loud' })).toMatchObject({ ok: false, error: 'validation_failed' });
+      expect(await run(ctx, 'set_mode', {})).toMatchObject({ ok: false, error: 'validation_failed' });
+      await storyDb().update('story_shots', { id: ctx.shots[0].id }, { status: 'generating' });
+      expect(await run(ctx, 'set_mode', { mode: 'talking' })).toMatchObject({ ok: false, error: 'shots_busy' });
     });
   });
 

@@ -379,16 +379,29 @@ describe('narration', () => {
     expect(await balance(ctx.userId)).toMatchObject({ available: 3, held: 0 });
   });
 
-  it('needs a paid plan, narrator lines and a narrated video', async () => {
+  it('needs a paid plan and narrator lines (in either mode)', async () => {
     const free = await newProject();
     accounts.set({ paid: false });
     await expect(start(free, 'narration')).rejects.toMatchObject({ status: 402, code: 'plan_required' });
     accounts.set({ paid: true });
     const quiet = await newProject({ scenes: [{ id: 's1', title: 'T', visual: 'v', lines: [{ speaker: 'Maya', text: 'Hi.' }] }] });
     await expect(start(quiet, 'narration')).rejects.toMatchObject({ status: 422 });
-    const talking = await newProject({ mode: 'talking' });
+    // A talking video with only character lines has nothing for a narrator to read.
+    const talking = await newProject({ mode: 'talking', scenes: [{ id: 's1', title: 'T', visual: 'v', lines: [{ speaker: 'Maya', text: 'Hi.' }] }] });
     await expect(start(talking, 'narration')).rejects.toMatchObject({ status: 422 });
     expect(await jobs(talking.project.id, 'narration')).toHaveLength(0);
+  });
+
+  it('a talking video with narrator lines makes the narration of those lines only, at the same included/regen price, never a new charge', async () => {
+    const ctx = await newProject({ mode: 'talking' });
+    const before = await balance(ctx.userId);
+    const { audio, charged } = await start(ctx, 'narration');
+    expect(charged).toBe(0);
+    expect(audio.applicable).toMatchObject({ narration: true, narrationLines: 4 });
+    const [job] = await jobs(ctx.project.id, 'narration');
+    expect(job.payload.text).toBe('Nobody believed this would work.\n\nMaya kept sweeping anyway.\n\nThen Leo walked in with coffee!\n\nHe sat down and stayed.');
+    expect(job.payload.text).not.toMatch(/Watch me/);
+    expect(await balance(ctx.userId)).toEqual(before);
   });
 
   it('refuses a second start while one is running (409), and two at once make one job and one hold', async () => {
@@ -889,9 +902,11 @@ describe('getAudio', () => {
     expect((await audioOf(ctx)).narration.outdated).toBe(true);
   });
 
-  it('a talking video needs no narration', async () => {
-    const ctx = await newProject({ mode: 'talking' });
-    expect((await audioOf(ctx)).applicable.narration).toBe(false);
+  it('a talking video needs a narration only when the script has narrator lines', async () => {
+    const withNarrator = await newProject({ mode: 'talking' });
+    expect((await audioOf(withNarrator)).applicable).toEqual({ narration: true, narrationLines: 4 });
+    const characters = await newProject({ mode: 'talking', scenes: [{ id: 's1', title: 'T', visual: 'v', lines: [{ speaker: 'Maya', text: 'Hi.' }] }] });
+    expect((await audioOf(characters)).applicable).toEqual({ narration: false, narrationLines: 0 });
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { QUALITY_INFO, QUALITY_ORDER, MUSIC_AND_CAPTIONS, outputLine } from '../lib/qualityInfo.js';
+import { QUALITY_INFO, QUALITY_ORDER, MUSIC_AND_CAPTIONS, outputLine, qualityPatch } from '../lib/qualityInfo.js';
 import { QUALITY_MAP } from '../lib/providers/config.js';
 import { QUALITY_LABELS, DEFAULTS } from '../lib/pricingConstants.js';
 
@@ -50,5 +50,9 @@ describe('QUALITY_INFO', () => {
 
   it('never mentions a price or a provider id', () => {
     expect(JSON.stringify(QUALITY_INFO)).not.toMatch(/credit|\$|kie|bytedance|kling-3/i);
+  });
+
+  it('qualityPatch changes the quality only (mode is the script\'s, not the quality\'s)', () => {
+    for (const q of QUALITY_ORDER) expect(qualityPatch(q)).toEqual({ quality: q });
   });
 });

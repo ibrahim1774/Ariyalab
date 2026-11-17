@@ -353,6 +353,56 @@ describe('shot planning at 7 and 120 seconds', () => {
   });
 });
 
+// ---------------------------------------------------------------- speakers in a talking video
+
+describe('buildShotList: who says each line (talking video)', () => {
+  const TALK = [
+    { id: 's1', title: 'Open', visual: 'Maya sweeps the shop.', lines: [{ speaker: 'narrator', text: 'Nobody believed this would work.' }, { speaker: 'Maya', text: 'Watch me prove them wrong.' }] },
+    { id: 's2', title: 'Close', visual: 'Leo walks in.', lines: [{ speaker: 'Leo', text: 'I will take the first chair.' }, { speaker: 'narrator', text: 'And that was the start.' }] },
+  ];
+  const talking = (opts = {}) => newProject({ scenes: TALK, seconds: 12, ...opts }).then(async (ctx) => {
+    await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'talking' });
+    return ctx;
+  });
+
+  it('plans a talking video: narrator and character lines stay on their shots in order', async () => {
+    const { userId, project } = await talking();
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.map((s) => s.line).filter(Boolean)).toEqual(TALK.flatMap((s) => s.lines.map((l) => l.text)));
+  });
+
+  it('refuses a plan with a character line that is no line of its scene (the speaker cannot be told), asking the model once more', async () => {
+    let calls = 0;
+    registerMock('story_shots', (input) => {
+      calls += 1;
+      const out = storyShotsMock(input);
+      return { shots: out.shots.map((s) => (s.line === 'Watch me prove them wrong.' ? { ...s, line: 'Something Maya never says.' } : s)) };
+    });
+    const { userId, project } = await talking();
+    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved' });
+    expect(calls).toBe(2);
+    expect(await shotRows(project.id)).toHaveLength(0);
+    registerMock('story_shots', storyShotsMock);
+  });
+
+  it('refuses a character line whose speaker is not in the cast', async () => {
+    const { userId, project } = await talking({ cast: ['Maya'] });
+    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved' });
+    expect(await shotRows(project.id)).toHaveLength(0);
+  });
+
+  it('a narrated video does not check speakers (character lines are never spoken there)', async () => {
+    registerMock('story_shots', (input) => {
+      const out = storyShotsMock(input);
+      return { shots: out.shots.map((s) => (s.line ? { ...s, line: 'Reworded line.' } : s)) };
+    });
+    const { userId, project } = await newProject({ scenes: TALK, seconds: 12 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.length).toBeGreaterThan(0);
+    registerMock('story_shots', storyShotsMock);
+  });
+});
+
 // ---------------------------------------------------------------- buildShotList
 
 describe('buildShotList', () => {

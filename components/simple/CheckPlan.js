@@ -163,6 +163,8 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
   const pipelineBusy = action.type === 'wait' || plan.busy || (plan.armed && action.type !== 'done');
   const noCast = project.consistent_cast === false;
   const model = audio?.narration;
+  // A narrator reads the narrator lines in either mode; a talking script with none has only the characters' voices.
+  const narrates = audio?.applicable ? audio.applicable.narration : project.mode !== 'talking';
 
   async function start(quote, kind) {
     if (!quote || busy) return;
@@ -291,7 +293,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         <div className={styles.soundRow}>
           <button type="button" className={styles.pill} onClick={() => setAudioOpen(true)} data-pill="voice">
             <Icon name="mic" size={15} />
-            <span><strong>{project.mode === 'talking' ? 'Voices' : 'Narrator'}</strong> {project.mode === 'talking' ? 'The people speak' : model?.status === 'ready' ? 'Ready' : model?.status === 'pending' ? 'Recording…' : model?.status === 'failed' ? 'Needs a look' : 'Included'}</span>
+            <span><strong>{narrates ? 'Narrator' : 'Voices'}</strong> {!narrates ? 'The people speak' : model?.status === 'ready' ? 'Ready' : model?.status === 'pending' ? 'Recording…' : model?.status === 'failed' ? 'Needs a look' : 'Included'}</span>
           </button>
           <button type="button" className={styles.pill} onClick={() => setAudioOpen(true)} data-pill="music">
             <Icon name="music" size={15} />

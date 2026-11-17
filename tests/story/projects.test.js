@@ -87,9 +87,11 @@ describe('createProject', () => {
     expect(project.id).toMatch(/^[0-9a-f-]{36}$/);
   });
 
-  it('defaults mode to talking for pro_talking', async () => {
-    const project = await createProject({ userId: userA(), input: { quality: 'pro_talking' } });
-    expect(project.mode).toBe('talking');
+  it('does not tie mode to quality: any quality is narrated or talking', async () => {
+    const userId = userA();
+    expect((await createProject({ userId, input: { quality: 'pro_talking' } })).mode).toBe('narrated');
+    expect((await createProject({ userId, input: { quality: 'economy', mode: 'talking' } })).mode).toBe('talking');
+    expect(await createProject({ userId, input: { quality: 'pro_talking', mode: 'narrated' } })).toMatchObject({ quality: 'pro_talking', mode: 'narrated' });
   });
 
   it.each([
@@ -107,17 +109,6 @@ describe('createProject', () => {
     [{ fee_charged: true }],
   ])('rejects %j', async (input) => {
     await expect(createProject({ userId: userA(), input })).rejects.toBeInstanceOf(ValidationError);
-  });
-
-  it('keeps mode and quality consistent', async () => {
-    const userId = userA();
-    expect((await createProject({ userId, input: { quality: 'pro_talking', mode: 'talking' } })).mode).toBe('talking');
-    await expect(createProject({ userId, input: { mode: 'talking' } })).rejects.toMatchObject({
-      field: 'mode', message: expect.stringMatching(/pro_talking/),
-    });
-    await expect(createProject({ userId, input: { quality: 'pro_talking', mode: 'narrated' } })).rejects.toBeInstanceOf(
-      ValidationError
-    );
   });
 
   it('accepts the length bounds', async () => {
@@ -222,18 +213,13 @@ describe('updateProject', () => {
     }
   });
 
-  it('keeps mode and quality consistent on PATCH', async () => {
+  it('changes quality and mode independently on PATCH', async () => {
     const userId = userA();
     const p = await createProject({ userId, input: BRIEF });
-    const talking = await updateProject({ userId, id: p.id, patch: { quality: 'pro_talking' } });
-    expect(talking).toMatchObject({ quality: 'pro_talking', mode: 'talking' });
-    await expect(updateProject({ userId, id: p.id, patch: { quality: 'standard' } })).rejects.toMatchObject({
-      field: 'quality', message: expect.stringMatching(/mode to narrated/),
-    });
-    await expect(updateProject({ userId, id: p.id, patch: { mode: 'narrated' } })).rejects.toBeInstanceOf(ValidationError);
-    const back = await updateProject({ userId, id: p.id, patch: { quality: 'standard', mode: 'narrated' } });
-    expect(back).toMatchObject({ quality: 'standard', mode: 'narrated' });
-    await expect(updateProject({ userId, id: p.id, patch: { mode: 'talking' } })).rejects.toMatchObject({ field: 'mode' });
+    expect(await updateProject({ userId, id: p.id, patch: { quality: 'pro_talking' } })).toMatchObject({ quality: 'pro_talking', mode: 'narrated' });
+    expect(await updateProject({ userId, id: p.id, patch: { mode: 'talking' } })).toMatchObject({ quality: 'pro_talking', mode: 'talking' });
+    expect(await updateProject({ userId, id: p.id, patch: { quality: 'standard' } })).toMatchObject({ quality: 'standard', mode: 'talking' });
+    expect(await updateProject({ userId, id: p.id, patch: { mode: 'narrated' } })).toMatchObject({ quality: 'standard', mode: 'narrated' });
   });
 
   it('screens changed text and refuses other owners', async () => {

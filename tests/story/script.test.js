@@ -17,7 +17,7 @@ import { makeRes } from '../helpers/apiMock';
 import { STYLES } from '../../lib/story/prompts/styles.js';
 import {
   buildScriptSystem, buildBriefMessage, buildRetryMessage, PURPOSE_GUIDANCE, MODE_GUIDANCE, REFERENCE_GUIDANCE, wordBudget, shotTarget, sceneTarget,
-  MENTION_GUIDANCE, LIGHT_MENTION_GUIDANCE, NO_MENTION_GUIDANCE,
+  MENTION_GUIDANCE, LIGHT_MENTION_GUIDANCE, NO_MENTION_GUIDANCE, SCRIPT_SCHEMA,
 } from '../../lib/story/prompts/script.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
 import {
@@ -165,7 +165,7 @@ describe('checkScriptRules', () => {
     expect(checkScriptRules(scenes, OPTS)).toContainEqual(expect.objectContaining({ sceneId: 's2', rule: 'narrator_only' }));
   });
 
-  it('allows a narrator only to open or close a talking video', () => {
+  it('allows a narrator line anywhere in a talking video (it is laid over the video, never a character)', () => {
     const talking = goodScenes().map((s, i) => ({ ...s, lines: s.lines.map((l) => ({ ...l, speaker: i === 0 ? 'narrator' : 'Leo' })) }));
     // Talking lines are at most 14 words.
     talking[2].lines[0].text = 'Then my cousin put my chair on a booking site.';
@@ -173,7 +173,8 @@ describe('checkScriptRules', () => {
     const opts = { ...OPTS, mode: 'talking' };
     expect(checkScriptRules(talking, opts)).toEqual([]);
     talking[2].lines = [{ speaker: 'narrator', text: 'Then my cousin put my chair on a booking site, and people just picked a time.' }];
-    expect(checkScriptRules(talking, opts)).toContainEqual(expect.objectContaining({ sceneId: 's3', rule: 'narrator_placement' }));
+    expect(rulesOf(checkScriptRules(talking, opts))).not.toContain('narrator_placement');
+    expect(rulesOf(checkScriptRules(talking, opts))).not.toContain('no_dialogue');
   });
 
   it('flags a talking video where no character speaks', () => {
@@ -262,6 +263,17 @@ describe('script prompt', () => {
     const story = buildScriptSystem({ ...base, purpose: 'story' });
     expect(story).not.toMatch(/ONE scene/);
     expect(story).toMatch(/No scene has "mention": true/);
+  });
+
+  it('with no mode yet the writer is asked to choose it and sees both modes, and the schema has it', () => {
+    const auto = buildScriptSystem({ ...base, purpose: 'app', mode: null });
+    expect(auto).toContain(MODE_GUIDANCE.narrated);
+    expect(auto).toContain(MODE_GUIDANCE.talking);
+    expect(auto).toMatch(/return it as "mode"/);
+    expect(auto).not.toMatch(/[\u2013\u2014]/);
+    expect(SCRIPT_SCHEMA.properties.mode).toEqual({ type: 'string', enum: ['narrated', 'talking'] });
+    expect(SCRIPT_SCHEMA.required).not.toContain('mode');
+    expect(MODE_GUIDANCE.talking).not.toMatch(/first scene or the last/);
   });
 
   it('follows the mode', () => {
@@ -453,7 +465,7 @@ describe('writeScript', () => {
   });
 
   it('follows the mode and gives a story no mention', async () => {
-    const { userId, project } = await newProject({ purpose: 'story', offer: null, quality: 'pro_talking' });
+    const { userId, project } = await newProject({ purpose: 'story', offer: 'Two friends argue over a chair [[mock:talking]]' });
     const script = await writeScript({ userId, projectId: project.id });
     expect(script.violations).toEqual([]);
     expect(script.scenes.some((s) => s.mention)).toBe(false);
@@ -523,6 +535,51 @@ describe('writeScript', () => {
     const first = (await scriptRows(project.id))[0];
     expect(changed).toHaveBeenCalledTimes(1);
     expect(changed.mock.calls[0][0].sceneIds.sort()).toEqual([...first.scenes, ...second.scenes].map((s) => s.id).sort());
+  });
+});
+
+describe('mode from the script model', () => {
+  const projectOf = async (id) => (await storyDb().select('story_projects', { id }))[0];
+
+  it('the first script chooses talking, saves it on the project and passes the rules in that mode', async () => {
+    const { userId, project } = await newProject({ offer: 'Two barbers argue about a booking site [[mock:talking]]' });
+    expect(project.mode).toBe('narrated');
+    const spy = spyOnScriptMock();
+    const script = await writeScript({ userId, projectId: project.id });
+    expect(spy.mock.calls[0][0].system).toContain(MODE_GUIDANCE.talking);
+    expect(spy.mock.calls[0][0].system).toContain(MODE_GUIDANCE.narrated);
+    expect(spy.mock.calls[0][0].messages[0].content).toMatch(/"mode":null/);
+    expect((await projectOf(project.id)).mode).toBe('talking');
+    expect(script.violations).toEqual([]);
+    expect(script.scenes.flatMap((s) => s.lines).some((l) => l.speaker !== 'narrator')).toBe(true);
+  });
+
+  it('a script that is told by a narrator keeps (or sets) narrated, whatever the quality', async () => {
+    const { userId, project } = await newProject({ quality: 'pro_talking' });
+    const script = await writeScript({ userId, projectId: project.id });
+    expect((await projectOf(project.id)).mode).toBe('narrated');
+    expect(script.scenes.flatMap((s) => s.lines).every((l) => l.speaker === 'narrator')).toBe(true);
+  });
+
+  it('a missing or odd mode keeps the project mode', async () => {
+    const { userId, project } = await newProject({ offer: 'Two friends talk [[mock:talking]]' });
+    registerMock('story_script', (input) => ({ ...storyScriptMock(input), mode: 'whispered' }));
+    await writeScript({ userId, projectId: project.id });
+    registerMock('story_script', storyScriptMock);
+    expect((await projectOf(project.id)).mode).toBe('narrated');
+  });
+
+  it('only the first script decides: a later write or a revise keeps the mode the project has', async () => {
+    const { userId, project } = await newProject({ offer: 'Two friends talk [[mock:talking]]' });
+    await writeScript({ userId, projectId: project.id });
+    await storyDb().update('story_projects', { id: project.id }, { mode: 'narrated' });
+    const spy = spyOnScriptMock();
+    const again = await writeScript({ userId, projectId: project.id });
+    expect(spy.mock.calls[0][0].system).not.toContain(MODE_GUIDANCE.talking);
+    expect((await projectOf(project.id)).mode).toBe('narrated');
+    expect(again.scenes.flatMap((s) => s.lines).every((l) => l.speaker === 'narrator')).toBe(true);
+    await reviseScript({ userId, projectId: project.id, instruction: 'Shorter [[mock:talking]]' });
+    expect((await projectOf(project.id)).mode).toBe('narrated');
   });
 });
 

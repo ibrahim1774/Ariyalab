@@ -261,7 +261,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo, doneLabe
       <div className={styles.grid}>
         <Section icon="mic" title="Narration" data-section="narration">
           {!applicable.narration ? (
-            <Tile icon="user" title="This video uses its own voices" text="Talking videos speak with the video model's voices, so there is no narrator to choose." className={styles.state} />
+            <Tile icon="user" title="The characters speak for themselves" text="Your script has no narrator lines, so there is no narrator to choose. The characters speak inside the clips. Add a narrator line in the script if you want a narrator too." className={styles.state} />
           ) : noNarrator ? (
             <>
               <Tile icon="text" title="No narrator lines yet" text="Your script has no lines for a narrator to read. Add some, then come back here." className={styles.state} />
