@@ -511,6 +511,38 @@ describe('the project fee at render (no cast, no clips made)', () => {
     expect(await feeRows(ctx.userId)).toHaveLength(1);
   });
 
+  it('a failing ledger re-read after the hold gives the hold back and leaves no render behind', async () => {
+    const ctx = await newProject({ credits: 300, feeCharged: false });
+    // An earlier finished render makes this one a paid one (a hold is taken), and the fee is still unpaid.
+    const first = await startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 90 });
+    await finish(first.render);
+    await storyDb().update('story_projects', { id: ctx.project.id }, { fee_charged: false });
+    await raw.query(`delete from credit_ledger where user_id = $1 and reason = 'story_project_fee'`, [ctx.userId]).catch(() => {});
+    const before = (await balance(ctx.userId)).available;
+    const realQuery = raw.query.bind(raw);
+    // The price read checks the ledger too; only the re-read after the hold (the last of those checks) goes down.
+    let reads = 0;
+    let holdSeen = false;
+    const { _setRenderDeps } = await import('../../lib/story/render.js');
+    _setRenderDeps({ holdCredits: async (args) => { const out = await holdCredits(args); holdSeen = true; return out; } });
+    raw.query = (sql, params) => {
+      if (holdSeen && /select 1 from public\.credit_ledger/.test(String(sql)) && /story_project_fee/.test(JSON.stringify(params || []))) { reads += 1; return Promise.reject(new Error('ledger down')); }
+      return realQuery(sql, params);
+    };
+    try {
+      await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 95 })).rejects.toThrow('ledger down');
+    } finally {
+      raw.query = realQuery;
+      _setRenderDeps();
+    }
+    expect(reads).toBe(1);
+    expect((await balance(ctx.userId)).available).toBe(before);
+    const open = await raw.query(`select 1 from credit_holds where user_id = $1 and status = 'active'`, [ctx.userId]);
+    expect(open.rows).toHaveLength(0);
+    const queued = (await storyDb().select('story_renders', { project_id: ctx.project.id })).filter((r) => r.status === 'queued');
+    expect(queued).toHaveLength(0);
+  });
+
   it('not enough credits is 402 with nothing spent and no render left behind', async () => {
     const ctx = await newProject({ credits: 50, feeCharged: false });
     await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 90 })).rejects.toBeInstanceOf(InsufficientCreditsError);
