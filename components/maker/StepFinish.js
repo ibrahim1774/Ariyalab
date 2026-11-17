@@ -98,9 +98,10 @@ export default function StepFinish({ project, status, refresh }) {
     setBusy(true);
     setError(null);
     try {
+      // Never start without the price on the button: a start that costs something must carry the number the customer saw.
       const credits = status?.renderPrice?.credits;
-      if (Number.isInteger(credits)) await startRender(project.id, credits);
-      else await startRender(project.id);
+      if (!Number.isInteger(credits)) return;
+      await startRender(project.id, credits);
       setPicked(null);
       // Stay busy until the new render shows up in /status, so the button never flashes back to "Make it again".
       await refresh?.();
@@ -127,6 +128,15 @@ export default function StepFinish({ project, status, refresh }) {
   };
 
   const price = renderPriceLabel(status?.renderPrice);
+  const priceKnown = Number.isInteger(status?.renderPrice?.credits);
+  const priceLines = Array.isArray(status?.renderPrice?.lines) && status.renderPrice.fee > 0 ? status.renderPrice.lines : null;
+  // The price did not come with the status (a read failed): ask again until it does.
+  const needsPrice = !priceKnown && !expired && !active;
+  useEffect(() => {
+    if (!needsPrice || !refresh) return undefined;
+    const t = setTimeout(() => refresh(), 1500);
+    return () => clearTimeout(t);
+  }, [needsPrice, refresh, status]);
   const errorLine = error ? <p className={styles.error} role="alert">{error.server || error.message || error.title}</p> : null;
 
   if (expired) {
@@ -146,6 +156,7 @@ export default function StepFinish({ project, status, refresh }) {
   const inSide = Boolean(shown) && !active && !busy && latest?.status !== 'failed';
   const primary = (() => {
     if (active || busy) return <Button disabled>{busy && !active ? 'Starting…' : 'Making your video…'}</Button>;
+    if (!priceKnown) return <Button disabled>Checking the price…</Button>;
     if (latest?.status === 'failed') return <Button onClick={start}>{`Try again${price}`}</Button>;
     if (shown) return <Button variant="ghost" onClick={start}>{`Make it again${price}`}</Button>;
     return <Button onClick={start}>{`Make my video${price}`}</Button>;
@@ -157,6 +168,14 @@ export default function StepFinish({ project, status, refresh }) {
         <h2>Your finished <span className="accent-word">video</span></h2>
         <p>{shown ? 'Watch it, then download it. Making it again keeps the earlier versions.' : 'Put your clips, voice, music and captions together into one video.'}</p>
       </div>
+
+      {priceLines && !active && (
+        <ul className={styles.meta} data-testid="render-price-lines" aria-label="What this costs">
+          {priceLines.map((l) => (
+            <li key={l.label}>{l.label === 'Render' ? 'Video render' : l.label}: {l.credits === 0 ? 'included' : `${l.credits} ${l.credits === 1 ? 'credit' : 'credits'}`}</li>
+          ))}
+        </ul>
+      )}
 
       {active && <Working render={latest} />}
 
@@ -183,7 +202,7 @@ export default function StepFinish({ project, status, refresh }) {
               <a className={`${buttonStyles.btn} ${buttonStyles.primary}`} data-variant="primary" href={downloadHref(shown.url)} download={downloadFilename(project?.title)}>
                 <span>Download video</span>
               </a>
-              {inSide && <Button variant="ghost" arrow={false} onClick={start}>{`Make it again${price}`}</Button>}
+              {inSide && <Button variant="ghost" arrow={false} onClick={start} disabled={!priceKnown}>{`Make it again${price}`}</Button>}
             </div>
             {doneRenders.length > 1 && (
               <div className={styles.versions} role="group" aria-label="Versions">

@@ -907,7 +907,7 @@ describe('simple maker tools', () => {
       const out = await run(ctx, 'set_consistent_cast', { consistent_cast: false });
       expect(out).toMatchObject({ ok: true, changed: 'project', project: { consistent_cast: false } });
       expect((await projectRow(ctx.project.id)).consistent_cast).toBe(false);
-      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale === true)).toBe(true);
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale === true && !sh.still_url)).toBe(true);
       expect(await ledgerCount(ctx.userId)).toBe(before);
       // The same value again changes nothing more.
       await storyDb().update('story_shots', { id: ctx.shots.map((sh) => sh.id) }, { stale: false });
@@ -945,6 +945,19 @@ describe('simple maker tools', () => {
       await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
       expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('outdated');
       expect(card.confirm.action).toBe('consistent-cast');
+    });
+
+    it('I5: the card re-checks the clip count and cost when pressed: more clips since means outdated', async () => {
+      const ctx = await genProject({ n: 3, clips: true });
+      await storyDb().update('story_shots', { id: ctx.shots[2].id }, { clip_url: null, clip_key: null, status: 'still_ready' });
+      signIn(ctx.user);
+      const sent = await post({ projectId: ctx.project.id, message: tool('set_consistent_cast', { consistent_cast: false }) });
+      const [card] = sent.body.confirms;
+      expect(card.quote.clips).toBe(2);
+      await storyDb().update('story_shots', { id: ctx.shots[2].id }, { clip_url: '/clip/2.mp4', clip_key: 'clip-2', status: 'ready' });
+      const res = await confirmVia({ projectId: ctx.project.id, confirmId: card.id });
+      expect(res.body.error).toBe('confirm_outdated');
+      expect((await projectRow(ctx.project.id)).consistent_cast).toBe(true);
     });
 
     it('I5: the same value again is a no-op', async () => {

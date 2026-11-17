@@ -392,6 +392,25 @@ describe('MCP render', () => {
   });
 });
 
+describe('MCP render with the project fee due', () => {
+  it('N1: quotes the fee and the render as separate lines and says so in the description', async () => {
+    const { MCP_TOOLS } = await import('../../lib/mcp/tools.js');
+    const desc = MCP_TOOLS.find((t) => t.name === 'render').description;
+    expect(desc).toMatch(/project fee/i);
+    expect(desc).not.toMatch(/starts at once/i);
+    const ctx = await newProject({ credits: 300, feeCharged: false });
+    const quote = await runMcpTool({ userId: ctx.userId, name: 'render', args: { project_id: ctx.project.id } });
+    expect(quote.isError, JSON.stringify(quote.data)).toBe(false);
+    expect(quote.data).toMatchObject({ needs_confirmation: true, quote: { total: 90, lines: [{ label: 'Project fee (once per video)', credits: 90 }, { label: 'Video render (the first one is included)', credits: 0 }] } });
+    expect(await storyDb().select('story_renders', { project_id: ctx.project.id })).toHaveLength(0);
+    const wrong = await runMcpTool({ userId: ctx.userId, name: 'render', args: { project_id: ctx.project.id, confirm_total: 5 } });
+    expect(wrong.data).toMatchObject({ error: 'quote_changed', total: 90, quote: { lines: [{ label: 'Project fee (once per video)', credits: 90 }, { credits: 0 }] } });
+    const ok = await runMcpTool({ userId: ctx.userId, name: 'render', args: { project_id: ctx.project.id, confirm_total: 90 } });
+    expect(ok.isError, JSON.stringify(ok.data)).toBe(false);
+    expect(ok.data.credits).toBe(90);
+  });
+});
+
 describe('render cap fixes', () => {
   it('a crashed render (queued, no job, stale) stops counting: recovery runs before the cap', async () => {
     await raw.query(`insert into pricing_config (key, value) values ('free_limits', '{"rendersPerProjectPer24h": 1}'::jsonb)
@@ -451,9 +470,50 @@ describe('the project fee at render (no cast, no clips made)', () => {
     expect((await balance(ctx.userId)).available).toBe(300);
   });
 
+  it('N2: with the fee due, a start without expected_credits is 409 quote_changed carrying the lines and the total, and nothing is spent', async () => {
+    const ctx = await newProject({ credits: 300, feeCharged: false });
+    for (const bad of [undefined, null]) {
+      const err = await startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: bad }).catch((e) => e);
+      expect(err).toMatchObject({ status: 409, code: 'quote_changed' });
+      expect(err.extra).toMatchObject({ credits: 90, lines: [{ label: 'Project fee', credits: 90 }, { label: 'Render', credits: 0 }] });
+    }
+    expect(await feeRows(ctx.userId)).toHaveLength(0);
+    expect((await balance(ctx.userId)).available).toBe(300);
+    expect(await storyDb().select('story_renders', { project_id: ctx.project.id })).toHaveLength(0);
+    // The route does the same.
+    globalThis.__chargeTestSession = { user: { id: ctx.userId, email: 't@example.test', email_confirmed_at: '2026-01-01T00:00:00.000Z' } };
+    const { default: handler } = await import('../../pages/api/story/projects/[id]/[action].js');
+    const res = makeRes();
+    await handler(makeReq({ method: 'POST', query: { id: ctx.project.id, action: 'render' }, body: {} }), res);
+    expect(res.statusCode).toBe(409);
+    expect(await feeRows(ctx.userId)).toHaveLength(0);
+  });
+
+  it('the no-fee path still starts without expected_credits', async () => {
+    const ctx = await newProject({ credits: 10, feeCharged: true });
+    await startRender({ userId: ctx.userId, projectId: ctx.project.id });
+  });
+
+  it('charged reports only what this call took: a fee someone else paid meanwhile is not counted', async () => {
+    const ctx = await newProject({ credits: 300, feeCharged: false });
+    const { spendCredits } = await import('../../lib/credits.js');
+    const real = await import('../../lib/story/render.js');
+    // The fee lands on the ledger between the price read and the spend (a clip start or cast start in another request).
+    const { setStoryDb: _unused, ...rest } = await import('../../lib/story/db.js');
+    void rest; void real;
+    const price = await renderPrice(ctx.project);
+    expect(price.fee).toBe(90);
+    await spendCredits({ userId: ctx.userId, currency: 'video', amount: 90, reason: 'story_project_fee', ref: `project-fee:${ctx.project.id}`, projectId: ctx.project.id });
+    // A start that still carries the old price (expected 90) is now priced 0: 409, and a start at 0 charges nothing more.
+    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 90 })).rejects.toMatchObject({ code: 'quote_changed' });
+    const { charged } = await startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 0 });
+    expect(charged).toBe(0);
+    expect(await feeRows(ctx.userId)).toHaveLength(1);
+  });
+
   it('not enough credits is 402 with nothing spent and no render left behind', async () => {
     const ctx = await newProject({ credits: 50, feeCharged: false });
-    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toBeInstanceOf(InsufficientCreditsError);
+    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 90 })).rejects.toBeInstanceOf(InsufficientCreditsError);
     expect(await feeRows(ctx.userId)).toHaveLength(0);
     expect((await balance(ctx.userId)).available).toBe(50);
     expect(await storyDb().select('story_renders', { project_id: ctx.project.id })).toHaveLength(0);

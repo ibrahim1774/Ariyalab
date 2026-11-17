@@ -213,25 +213,79 @@ describe('consistent_cast false: shots are described and pictured on their own',
   });
 });
 
-describe('switching consistent_cast after the storyboard exists (I2)', () => {
-  it('false then true: the shots need a rebuild, the rebuild brings the characters back into the shots, and the pictures are remade', async () => {
+describe('switching consistent_cast after the storyboard exists (I2): a clean reset of the plan', () => {
+  async function falseFromTheStart() {
+    const { generateCast } = await import('../../lib/story/cast.js');
+    const ctx = await newProject({ cast: [] });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false, step: 'generate' });
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id });
+    await finishJobs(ctx.project.id);
+    return { ...ctx, generateCast };
+  }
+
+  it('every picture stops being the current one, so Generate cannot make a clip from it, and the step points back at the cast', async () => {
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const { startGeneration, quoteGeneration } = await import('../../lib/story/shots.js');
+    const { userId, project } = await falseFromTheStart();
+    expect((await shotRows(project.id)).every((s) => s.still_url)).toBe(true);
+    await updateProject({ userId, id: project.id, patch: { consistent_cast: true } });
+    const rows = await shotRows(project.id);
+    expect(rows.every((s) => !s.still_url && !s.still_key && s.status === 'draft')).toBe(true);
+    expect((await storyDb().select('story_projects', { id: project.id }))[0].step).toBe('cast');
+    // Nothing can be generated from the old pictures: the plan itself needs rebuilding first.
+    await expect(quoteGeneration({ userId, projectId: project.id })).rejects.toMatchObject({ code: 'needs_rebuild' });
+    await expect(startGeneration({ userId, projectId: project.id, confirmTotal: 0 })).rejects.toBeDefined();
+  });
+
+  it('rebuild and pictures are refused until every character has a pick; then the shots carry the cast and the pictures are remade with references', async () => {
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const { userId, project, generateCast } = await falseFromTheStart();
+    await updateProject({ userId, id: project.id, patch: { consistent_cast: true } });
+    const refused = { status: 409, code: 'cast_needed', message: 'Make your characters first.' };
+    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject(refused);
+    await expect(generateStills({ userId, projectId: project.id })).rejects.toMatchObject(refused);
+    // Characters still being drawn do not count either.
+    await generateCast({ userId, projectId: project.id });
+    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject(refused);
+    await finishJobs(project.id); // the pictures finish and the first one of each is picked automatically
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.some((sh) => (sh.cast_ids || []).length > 0)).toBe(true);
+    expect(shots.every((sh) => !sh.needs_rebuild)).toBe(true);
+    await generateStills({ userId, projectId: project.id });
+    const jobs = await stillJobs(project.id);
+    const fresh = jobs.filter((j) => j.payload.refs?.length);
+    expect(fresh.length).toBeGreaterThan(0);
+    expect(fresh.every((j) => j.payload.refs.every((r) => !r.includes('old')))).toBe(true);
+  });
+
+  it('switching to false needs no cast and clears the pictures too', async () => {
     const { updateProject } = await import('../../lib/story/projects.js');
     const { userId, project } = await newProject();
-    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
     await buildShotList({ userId, projectId: project.id });
     await generateStills({ userId, projectId: project.id });
     await finishJobs(project.id);
-    let rows = await shotRows(project.id);
-    expect(rows.every((s) => (s.cast_ids || []).length === 0 && s.still_url)).toBe(true);
-
-    await updateProject({ userId, id: project.id, patch: { consistent_cast: true } });
-    expect((await listShots({ userId, projectId: project.id })).shots.every((s) => s.needs_rebuild)).toBe(true);
+    await updateProject({ userId, id: project.id, patch: { consistent_cast: false } });
+    expect((await shotRows(project.id)).every((s) => !s.still_url)).toBe(true);
     await buildShotList({ userId, projectId: project.id });
-    rows = await shotRows(project.id);
-    expect(rows.some((s) => (s.cast_ids || []).length > 0)).toBe(true);
-    // The pictures made without the characters are marked for remaking, not cleared by the rebuild.
-    expect(rows.filter((s) => s.still_url).every((s) => s.stale)).toBe(true);
-    expect((await listShots({ userId, projectId: project.id })).shots.some((s) => s.needs_rebuild)).toBe(false);
+  });
+
+  it('is refused while a picture or a clip is being made', async () => {
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const { userId, project } = await newProject();
+    await buildShotList({ userId, projectId: project.id });
+    await generateStills({ userId, projectId: project.id });
+    await expect(updateProject({ userId, id: project.id, patch: { consistent_cast: false } })).rejects.toMatchObject({ status: 409 });
+    expect((await storyDb().select('story_projects', { id: project.id }))[0].consistent_cast).toBe(true);
+  });
+
+  it('a picture that is remade on a shot with no clip is no longer flagged out of date', async () => {
+    const { userId, project, shots } = await stilledProject();
+    await storyDb().update('story_shots', { id: shots[0].id }, { stale: true, clip_mismatch: true, still_url: null, still_key: null, status: 'draft' });
+    await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
+    await finishJobs(project.id);
+    const row = await shotRow(shots[0].id);
+    expect([row.stale, row.clip_mismatch]).toEqual([false, false]);
   });
 });
 

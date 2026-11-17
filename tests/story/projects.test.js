@@ -58,24 +58,24 @@ describe('consistent_cast', () => {
     await expect(updateProject({ userId, id: project.id, patch: { consistent_cast: value } })).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it('changing it marks every shot with a picture or a clip stale and needing a rebuild, once', async () => {
+  it('changing it resets the plan: pictures cleared, shots flagged, rebuild needed, once', async () => {
     const userId = userA();
     const project = await createProject({ userId, input: BRIEF });
-    const [cast] = await storyDb().insert('story_cast', { project_id: project.id, ord: 0, name: 'Maya', description: 'd', status: 'ready' });
-    const rows = await storyDb().insert('story_shots', [
-      { project_id: project.id, ord: 0, scene_id: 's1', description: 'a', seconds: 3, still_url: '/a.png', cast_ids: [cast.id], quality: 'standard' },
+    const [cast] = await storyDb().insert('story_cast', { project_id: project.id, ord: 0, name: 'Maya', description: 'd', status: 'ready', image_url: '/m.png', chosen_index: 0 });
+    await storyDb().insert('story_shots', [
+      { project_id: project.id, ord: 0, scene_id: 's1', description: 'a', seconds: 3, still_url: '/a.png', still_key: 'a', cast_ids: [cast.id], quality: 'standard' },
       { project_id: project.id, ord: 1, scene_id: 's1', description: 'b', seconds: 3, still_url: '/b.png', clip_url: '/b.mp4', cast_ids: [cast.id], quality: 'standard' },
       { project_id: project.id, ord: 2, scene_id: 's1', description: 'c', seconds: 3, still_url: '/c.png', cast_ids: [], quality: 'standard' },
     ]);
     // Saving the same value changes nothing.
     await updateProject({ userId, id: project.id, patch: { consistent_cast: true } });
-    expect((await storyDb().select('story_shots', { project_id: project.id })).some((s) => s.stale)).toBe(false);
+    expect((await storyDb().select('story_shots', { project_id: project.id })).some((s) => s.stale || !s.still_url)).toBe(false);
     await updateProject({ userId, id: project.id, patch: { consistent_cast: false } });
     const after = await storyDb().select('story_shots', { project_id: project.id }, { order: 'ord' });
-    expect(after.map((s) => s.stale)).toEqual([true, true, true]);
-    expect(after.every((s) => s.scene_sig === 'cast-changed')).toBe(true);
-    expect(after[1].clip_mismatch).toBe(true);
-    expect(rows).toHaveLength(3);
+    expect(after.map((s) => [s.still_url, s.status, s.stale, s.clip_mismatch, s.scene_sig])).toEqual([
+      [null, 'draft', true, true, 'cast-changed'], [null, 'draft', true, true, 'cast-changed'], [null, 'draft', true, true, 'cast-changed'],
+    ]);
+    expect(after[1].clip_url).toBe('/b.mp4'); // the clip stays until it is made again, marked out of date
   });
 });
 

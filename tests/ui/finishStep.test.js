@@ -75,11 +75,32 @@ describe('StepFinish', () => {
   it('with no render yet explains what happens and starts one', async () => {
     client.startRender.mockResolvedValue({ id: 'r1', version: 1, status: 'queued' });
     const refresh = vi.fn();
-    render(<StepFinish project={project} status={{ render: null, renders: [] }} refresh={refresh} />);
+    render(<StepFinish project={project} status={{ render: null, renders: [], renderPrice: { credits: 0 } }} refresh={refresh} />);
     expect(screen.getByText(/clips, voice, music and captions/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /make my video/i }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
-    expect(client.startRender).toHaveBeenCalledWith('p1');
+    expect(client.startRender).toHaveBeenCalledWith('p1', 0);
+  });
+
+  it('N2: without a known price it shows Checking the price, starts nothing and asks for the status again', async () => {
+    const refresh = vi.fn();
+    render(<StepFinish project={project} status={{ render: null, renders: [], renderPrice: null }} refresh={refresh} />);
+    expect(screen.getByRole('button', { name: /checking the price/i })).toBeDisabled();
+    await waitFor(() => expect(refresh).toHaveBeenCalled(), { timeout: 4000 });
+    expect(client.startRender).not.toHaveBeenCalled();
+  });
+
+  it('N1: shows the project fee and the render as separate lines and the total on the button', async () => {
+    client.startRender.mockResolvedValue({ id: 'r1', version: 1, status: 'queued' });
+    const price = { credits: 90, fee: 90, render: 0, lines: [{ label: 'Project fee', credits: 90 }, { label: 'Render', credits: 0 }] };
+    render(<StepFinish project={project} status={{ render: null, renders: [], renderPrice: price }} refresh={vi.fn()} />);
+    const lines = screen.getByTestId('render-price-lines');
+    expect(lines).toHaveTextContent('Project fee');
+    expect(lines).toHaveTextContent('90 credits');
+    expect(lines).toHaveTextContent(/Video render/);
+    expect(lines).toHaveTextContent(/free|included/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Make my video (90 credits)' }));
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1', 90));
   });
 
   it('shows progress from /status while the render is queued or running, and blocks a second start', () => {
@@ -95,7 +116,7 @@ describe('StepFinish', () => {
 
   it('plays the finished video and downloads the render URL with a filename from the title', () => {
     const r = done();
-    const { container } = render(<StepFinish project={project} status={{ render: r, renders: [r] }} />);
+    const { container } = render(<StepFinish project={project} status={{ render: r, renders: [r], renderPrice: { credits: 5 } }} />);
     expect(container.querySelector('video')).toHaveAttribute('src', 'https://blob.example/renders/abc.mp4');
     const link = screen.getByRole('link', { name: /download/i });
     expect(link).toHaveAttribute('href', 'https://blob.example/renders/abc.mp4?download=1');
@@ -128,17 +149,17 @@ describe('StepFinish', () => {
     const older = done({ id: 'r1', version: 1, url: 'https://blob.example/renders/old.mp4' });
     const failed = { id: 'r2', version: 2, status: 'failed', url: null, warnings: [], error: 'The video could not be made this time. Try again.', created_at: '2026-11-14T11:00:00Z' };
     client.startRender.mockResolvedValue({ id: 'r3', version: 3, status: 'queued' });
-    const { container } = render(<StepFinish project={project} status={{ render: failed, renders: [failed, older] }} refresh={() => {}} />);
+    const { container } = render(<StepFinish project={project} status={{ render: failed, renders: [failed, older], renderPrice: { credits: 0 } }} refresh={() => {}} />);
     expect(screen.getByRole('alert')).toHaveTextContent('The video could not be made this time. Try again.');
     expect(container.querySelector('video')).toHaveAttribute('src', 'https://blob.example/renders/old.mp4');
     fireEvent.click(screen.getByRole('button', { name: /try again/i }));
-    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1'));
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1', 0));
   });
 
   it('shows why a start was refused in the server words and refreshes on a 409', async () => {
     client.startRender.mockRejectedValue(Object.assign(new Error('x'), { status: 409, code: 'audio_not_ready', serverMessage: 'Your voice or music is still being made. Wait for it to finish, then make your video.' }));
     const refresh = vi.fn();
-    render(<StepFinish project={project} status={{ render: null, renders: [] }} refresh={refresh} />);
+    render(<StepFinish project={project} status={{ render: null, renders: [], renderPrice: { credits: 0 } }} refresh={refresh} />);
     fireEvent.click(screen.getByRole('button', { name: /make my video/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent('Your voice or music is still being made. Wait for it to finish, then make your video.');
     expect(refresh).toHaveBeenCalled();
@@ -185,7 +206,7 @@ describe('round 1', () => {
     let release;
     const refresh = vi.fn(() => new Promise((res) => { release = res; }));
     const r = done();
-    render(<StepFinish project={project} status={{ render: r, renders: [r] }} refresh={refresh} />);
+    render(<StepFinish project={project} status={{ render: r, renders: [r], renderPrice: { credits: 5 } }} refresh={refresh} />);
     fireEvent.click(screen.getByRole('button', { name: /make it again/i }));
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: /^make it again/i })).toBeNull();
@@ -231,11 +252,11 @@ describe('render charge (owner decision 2026-11-16)', () => {
     expect(refresh).toHaveBeenCalled();
   });
 
-  it('without a price (an older /status) the labels stay plain', async () => {
+  it('without a price the label is empty and the button waits for one', async () => {
     const { renderPriceLabel } = await import('../../components/maker/StepFinish');
     expect(renderPriceLabel(null)).toBe('');
     expect(renderPriceLabel({ credits: 1 })).toBe(' (1 credit)');
     render(<StepFinish project={project} status={{ render: null, renders: [] }} />);
-    expect(screen.getByRole('button', { name: 'Make my video' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /checking the price/i })).toBeDisabled();
   });
 });
