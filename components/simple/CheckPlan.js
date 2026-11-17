@@ -9,7 +9,7 @@ import ShotCard from '../maker/ShotCard';
 import StepAudio from '../maker/StepAudio';
 import { Icon, Skeleton, Tile } from '../maker/Tiles';
 import { allStillsReady, isGenerated } from '../maker/steps';
-import { planReason, scenesOf, startableIds } from './derive';
+import { needsRedraw, planReason, scenesOf, startableIds } from './derive';
 import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
 import useStartQuote from './useStartQuote';
@@ -220,8 +220,8 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
             </>
           ) : (
             <>
-              <p>{action.what === 'pictures' ? 'The storyboard pictures now cost credits.' : `The ${action.what} now costs credits.`} Nothing is charged until you press the button.</p>
-              <Button onClick={plan.confirm}>{withPrice(action.what === 'pictures' ? 'Make the pictures' : `Make the ${action.what}`, action.credits)}</Button>
+              <p>{action.what === 'pictures' ? 'The storyboard pictures now cost credits.' : action.what === 'redraw' ? 'Drawing the characters again in the new style now costs credits.' : `The ${action.what} now costs credits.`} Nothing is charged until you press the button.</p>
+              <Button onClick={plan.confirm}>{withPrice(action.what === 'pictures' ? 'Make the pictures' : action.what === 'redraw' ? 'Draw the characters again' : `Make the ${action.what}`, action.credits)}</Button>
             </>
           )}
         </div>
@@ -267,7 +267,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
                     {c.status === 'pending' ? <Skeleton ratio="3 / 4" status="Drawing" /> : castPicture(c) ? <img src={castPicture(c)} alt="" loading="lazy" /> : <span className={styles.shotEmpty}><Icon name="user" size={20} /></span>}
                   </span>
                   <span className={styles.castName}>{c.name}</span>
-                  <span className={styles.castRole}>{c.status === 'failed' || c.status === 'blocked' ? 'Needs a look' : c.status === 'pending' ? 'Drawing…' : c.description}</span>
+                  <span className={styles.castRole}>{c.status === 'failed' || c.status === 'blocked' ? 'Needs a look' : needsRedraw(c) ? 'Needs new pictures' : c.status === 'pending' ? 'Drawing…' : c.description}</span>
                 </button>
               </li>
             ))}

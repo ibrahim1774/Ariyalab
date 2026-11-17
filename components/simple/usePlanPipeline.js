@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, pickCast, setPlanRequested, startCast } from '../../lib/story/client';
+import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, pickCast, regenCast, setPlanRequested, startCast } from '../../lib/story/client';
 import { FREE_STARTS, actionKey, clipsStarted, confirmedFrom, nextPlanAction } from './derive';
 
 const COOL_MS = 4000;
@@ -38,6 +38,7 @@ export function stageText(action) {
   if (!action) return '';
   if (action.type === 'cast') return 'Starting your characters';
   if (action.type === 'build') return 'Planning your shots';
+  if (action.type === 'redraw') return 'Drawing your characters again';
   if (action.type === 'pick') return `Picking a look for ${action.name || 'your character'}`;
   if (action.type === 'resume_cast') return 'Getting your characters going again';
   if (action.type === 'stills') return 'Drawing the storyboard pictures';
@@ -166,6 +167,7 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
     (async () => {
       try {
         if (action.type === 'cast' || action.type === 'resume_cast') await startCast(projectId, action.expected);
+        else if (action.type === 'redraw') for (const item of action.items) await regenCast(projectId, item.castId, '', item.expected);
         else if (action.type === 'pick') await pickCast(projectId, action.castId, 0);
         else if (action.type === 'build') await buildShots(projectId);
         else if (action.type === 'stills') await makeStills(projectId, action.ids, action.expected);
@@ -179,6 +181,7 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
             const next = { ...c };
             if (action.type === 'cast') delete next.fee;
             if (action.type === 'stills') delete next.pictures;
+            if (action.type === 'redraw') delete next.redraw;
             if (action.type === 'narration') delete next.voice;
             if (action.type === 'music') delete next.music;
             return next;
@@ -243,7 +246,7 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   /** Confirms the price of a part that now costs credits ("Make the pictures (2 credits)"). */
   const confirm = useCallback(async () => {
     if (action.type !== 'ask' || !Number.isInteger(action.credits)) return;
-    const field = { pictures: 'pictures', voice: 'voice', music: 'music', cast: 'fee' }[action.what];
+    const field = { pictures: 'pictures', voice: 'voice', music: 'music', cast: 'fee', redraw: 'redraw' }[action.what];
     if (!field) return;
     setError(null);
     setNote('');

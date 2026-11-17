@@ -22,6 +22,9 @@ export const hasScript = (project) => Boolean(project) && stepAt(project) >= ORD
 
 const IN_FLIGHT = ['queued', 'generating'];
 
+/** A character the new art style cleared (style_stale, no pictures, no pick): it is drawn again with a regeneration. */
+export const needsRedraw = (c) => c.style_stale === true && c.status === 'ready' && c.chosen_index == null && !c.image_url && !(c.candidates || []).length;
+
 /** True once any clip was started: the project reached the generate step, a clip job exists, or a shot has a clip state. */
 export function clipsStarted({ project, shots = [], jobs = [] } = {}) {
   if (!project) return false;
@@ -36,20 +39,22 @@ export function clipsStarted({ project, shots = [], jobs = [] } = {}) {
  * incomplete again after clips exist: the script changed (needs_rebuild), a flag switch cleared the pictures, or the project now
  * wants the same characters and has no cast.
  *   cast      same characters wanted, no cast rows, and the plan had begun (shots or clips exist)
+ *   redraw    a new art style cleared a character's pictures: they are drawn again
  *   pick      a character failed, was blocked, or has no look picked
  *   rebuild   a shot needs the storyboard rebuilt
  *   pictures  a generated shot has no picture (and none is a clip in flight)
  */
 export function planGaps(status) {
   const { project, shots = [], cast = [] } = status || {};
-  const none = { cast: false, pick: false, rebuild: false, pictures: false };
+  const none = { cast: false, redraw: false, pick: false, rebuild: false, pictures: false };
   if (!project || !hasScript(project)) return none;
   const gen = shots.filter((s) => (s.source || 'generated') !== 'footage');
   const begun = shots.length > 0 || clipsStarted(status);
   return {
     cast: project.consistent_cast !== false && cast.length === 0 && begun,
     // Leftover characters mean nothing on a different-people video: the cast is not used there.
-    pick: project.consistent_cast !== false && cast.some((c) => c.status === 'failed' || c.status === 'blocked' || (c.status === 'ready' && c.chosen_index == null && !c.image_url)),
+    redraw: project.consistent_cast !== false && cast.some(needsRedraw),
+    pick: project.consistent_cast !== false && cast.some((c) => c.status === 'failed' || c.status === 'blocked' || (c.status === 'ready' && c.chosen_index == null && !c.image_url && !needsRedraw(c))),
     rebuild: shots.some((s) => s.needs_rebuild),
     pictures: gen.some((s) => !s.still_url && !IN_FLIGHT.includes(s.status)),
   };
@@ -59,6 +64,7 @@ export function planGaps(status) {
 export function planReason(status) {
   const g = planGaps(status);
   if (g.cast) return 'This video now uses the same characters throughout, so they need making first.';
+  if (g.redraw) return 'The art style changed, so the characters need drawing again.';
   if (g.rebuild) return 'The storyboard needs updating to match your changes.';
   if (g.pictures) return 'Some pictures are missing and need making.';
   if (g.pick) return 'A character needs a look before the video can go on.';
@@ -114,6 +120,7 @@ const lacksPicture = (s) => isGenerated(s) && !s.still_url;
  *   { type: 'narration' | 'music', expected }
  *   { type: 'ask', what, credits, ids? }  a part now costs credits nobody confirmed: show its price, ask again
  *   { type: 'stale' }                 the script changed since the shots were made: rebuild first
+ *   { type: 'redraw', items: [{ castId, name, expected }], expected }  draw cleared characters again (a regeneration each)
  *   { type: 'pick', castId }          a character is ready with no look picked: its first option
  *   { type: 'resume_cast' }           a character whose start died: start again (nothing to pay)
  *   { type: 'wait', what: [..] }      something is being made
@@ -158,6 +165,12 @@ export function nextPlanAction(status, { confirmed = {}, now = Date.now(), quote
       } else if (castClear && cast.some((c) => c.status === 'pending' || c.status === 'draft')) {
         castClear = false;
         waits.push('characters');
+      } else if (castClear && cast.some(needsRedraw)) {
+        castClear = false;
+        const items = cast.filter(needsRedraw).map((c) => ({ castId: c.id, name: c.name, expected: Number(c.regen_credits) || 0 }));
+        const credits = items.reduce((n, i) => n + i.expected, 0);
+        if (credits === 0 || credits === confirmed.redraw) actions.push({ type: 'redraw', items, expected: credits });
+        else asks.push({ type: 'ask', what: 'redraw', credits });
       } else if (castClear) {
         const open = cast.filter((c) => !picked(c));
         if (open.length) {
@@ -221,15 +234,15 @@ export function nextPlanAction(status, { confirmed = {}, now = Date.now(), quote
 }
 
 /** A stable name for an action, so the same start is never sent twice from one screen. */
-export const actionKey = (a) => (!a ? '' : a.type === 'stills' ? `stills:${a.ids.join(',')}` : a.type === 'pick' ? `pick:${a.castId}` : ['cast', 'build', 'narration', 'music', 'resume_cast'].includes(a.type) ? a.type : '');
+export const actionKey = (a) => (!a ? '' : a.type === 'stills' ? `stills:${a.ids.join(',')}` : a.type === 'pick' ? `pick:${a.castId}` : a.type === 'redraw' ? `redraw:${a.items.map((i) => i.castId).join(',')}` : ['cast', 'build', 'narration', 'music', 'resume_cast'].includes(a.type) ? a.type : '');
 
 /** Parts the pipeline starts without a price: they need the customer's press (the marker) before they run by themselves. */
-export const FREE_STARTS = ['build', 'stills', 'narration', 'music', 'pick', 'resume_cast'];
+export const FREE_STARTS = ['build', 'stills', 'narration', 'music', 'pick', 'resume_cast', 'redraw'];
 
 /** The amounts a quote lists, by part, as the customer confirms them when pressing the button. */
 export function confirmedFrom(quote) {
   const line = (key) => quote?.lines?.find((l) => l.key === key)?.credits;
-  return { fee: quote?.castFee ?? 0, pictures: quote?.stills ?? 0, voice: line('voice'), music: line('music') };
+  return { fee: quote?.castFee ?? 0, pictures: quote?.stills ?? 0, voice: line('voice'), music: line('music'), redraw: quote?.redraw };
 }
 
 // ---- scenes (screens 3 and 4)

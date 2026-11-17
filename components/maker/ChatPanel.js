@@ -11,6 +11,9 @@ const SUGGESTIONS = ['Make the opening funnier', 'Make it 45 seconds', 'What wil
  * stored, once. A used card shows "Started"; an out of date one (the price moved, or a newer card replaced it) cannot
  * be pressed.
  */
+// Cards that change a setting and start no work by themselves (what follows is made, and priced, on the screens).
+const CHANGE_ONLY = ['quality', 'style', 'mode', 'consistent-cast'];
+
 function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
   const [message, setMessage] = useState('');
   const [state, setState] = useState(item.state || 'open'); // open | busy | used | outdated
@@ -21,6 +24,7 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
   const [error, setError] = useState(null);
   const { quote, confirm } = item;
   const note = confirm?.body?.note;
+  const changeOnly = CHANGE_ONLY.includes(confirm?.action);
   const press = async () => {
     setState('busy');
     setError(null);
@@ -45,11 +49,11 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
         <span className={styles.confirmLabel}>{quote.label}</span>
         {note && <span className={styles.confirmNote}>{note}</span>}
       </span>
-      {state === 'used' && <span className={styles.confirmDone} role="status">{message || 'Started'}</span>}
+      {state === 'used' && <span className={styles.confirmDone} role="status">{message || (changeOnly ? 'Changed' : 'Started')}</span>}
       {state === 'outdated' && <span className={styles.confirmOld}>Out of date</span>}
       {(state === 'open' || state === 'busy') && (
         <button type="button" className={styles.confirmButton} onClick={press} disabled={state === 'busy'}>
-          {state === 'busy' ? 'Starting…' : quote.credits > 0 ? `Start for ${quote.credits} credits` : 'Start (included)'}
+          {changeOnly ? (state === 'busy' ? 'Changing…' : 'Change it') : state === 'busy' ? 'Starting…' : quote.credits > 0 ? `Start for ${quote.credits} credits` : 'Start (included)'}
         </button>
       )}
       {error && <ErrorNotice error={error} returnTo={returnTo} onRefresh={onDone} />}

@@ -73,6 +73,15 @@ Apply in this exact order. Every migration is additive (new `credit_` / `story_`
 | 19 | `20261116000400_billing_v2.sql` | Yearly subscriptions, yearly periods and priced plan lines (plan changes credited by money), their functions, and the closed-hold guard (replaces `credit_charge_closed_hold`, same signature). Before deploying the v2 billing code. |
 | 20 | `20261116000500_story_cleanup.sql` | Stale-hold sweeper and retention functions. Before the `story-holds` and `story-cleanup` crons run. |
 | 21 | `20261116000600_story_render_charge.sql` | `story_renders.hold_id` and `cost_credits` (paid re-renders). Before deploying the render-charge code: `startRender` writes both columns. |
+| 22 | `20261116000700_story_length_range.sql` | The 5 to 120 second video length range. Before deploying the length code. |
+| 23 | `20261116000800_story_consistent_cast.sql` | `story_projects.consistent_cast` (same characters or different people in every scene). Before the code that reads it. |
+| 24 | `20261116000910_story_plan_requested.sql` | `story_projects.plan_requested` (the "design my video" marker). Before the simple maker deploys. |
+| 25 | `20261117000100_story_mode_independent.sql` | `mode` (narrated or talking) independent of quality. Before the sound-on code. |
+| 26 | `20261117000200_story_shot_line_index.sql` | `story_shots.line_index` and its use in `story_shots_replace`. Before the speaker-from-script code. |
+| 27 | `20261117000300_story_scene_setting.sql` | `story_shots.setting` (the scene setting line). Before the code that carries it in prompts. |
+| 28 | `20261117000400_story_shots_replace_setting.sql` | Redefines `story_shots_replace` to keep `line_index` and `setting` (same signature). After 26 and 27. |
+| 29 | `20261117000500_story_cast_style_stale.sql` | `story_cast.style_stale` (a character cleared by an art style change and waiting to be drawn again). Before the style-change code. |
+| 30 | `20261117000600_story_settings_repair_at.sql` | `story_projects.settings_repair_at` (the scene settings repair marker, one model try per 10 minutes). Before the code that writes it. |
 
 Checks on the real database after applying (they cannot be tested in the in-memory database):
 
@@ -255,7 +264,6 @@ Each of these spends real money; run one only after approving it and its cost.
   the download cost.
 - The spec 13a quality comparison.
 - Reference pictures with a first frame (read from kie.ai 2026-11-17, not tested live): Seedance 2 Mini says `reference_image_urls` (up to 9) "cannot be combined with first_frame_url" and the modes are mutually exclusive; Gemini Omni says `first_frame_url` cannot be combined with `image_urls` (up to 6). So Seedance and Omni clips send the still as the first frame only, with no reference pictures (the still already carries the characters). Revisit if kie lifts this; only Kling takes character elements. No warning is shown for it.
-- Migration `20261117000500_story_cast_style_stale.sql` (additive, `story_cast.style_stale`) goes in with the others.
 - Gemini Omni request shape and Seedance/Omni sound checked against the live API (field names read from kie.ai 2026-11-17: `first_frame_url`, `image_urls`, `duration` as a number, `resolution`, `aspect_ratio`; no audio field is sent, sound is assumed on; Seedance `generate_audio: true`).
 - Check hosted pricing_config rows for saved perSecond rates from before 2026-11-17; an old row overrides the new defaults and breaks the 70% rule.
 - Kling element-name format (accents are dropped from names) and the real kie/Kling refusal strings.

@@ -82,7 +82,7 @@ describe('ChatPanel', () => {
     client.confirmChatAction.mockResolvedValue({ queued: true, drafting: { task: 'mode', status: 'queued' }, message: 'Your script is being rewritten. This takes a minute.' });
     const onChanged = vi.fn();
     render(<ChatPanel project={project} onChanged={onChanged} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Start (included)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change it' }));
     expect(await screen.findByText('Your script is being rewritten. This takes a minute.')).toBeInTheDocument();
     expect(onChanged).toHaveBeenCalledWith(['script']);
   });
@@ -92,7 +92,7 @@ describe('ChatPanel', () => {
     client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'Shall I?', [card])], usage: { used: 1, limit: 150 } });
     client.confirmChatAction.mockResolvedValue({ queued: false, message: 'It was already set that way.' });
     render(<ChatPanel project={project} onChanged={vi.fn()} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Start (included)' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change it' }));
     expect(await screen.findByText('It was already set that way.')).toBeInTheDocument();
     expect(screen.queryByText('Out of date')).toBeNull();
   });

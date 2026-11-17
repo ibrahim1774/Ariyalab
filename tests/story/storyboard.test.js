@@ -799,9 +799,8 @@ describe('retry', () => {
     await makeNextStillFail(shots[0].id);
     await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
     await finishJobs(project.id);
-    // The retry repeats the failed prompt, so take the fail token out of the stored job first.
-    const failed = (await stillJobs(project.id)).at(-1);
-    await storyDb().update('story_jobs', { id: failed.id }, { payload: { ...failed.payload, prompt: failed.payload.prompt.replace(' [[mock:fail]]', '') } });
+    // A retry is built from the shot as it is now, so take the fail token out of the description first.
+    await storyDb().update('story_shots', { id: shots[0].id }, { description: (await shotRow(shots[0].id)).description.replace(' [[mock:fail]]', '') });
     await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id], retry: true });
     await finishJobs(project.id);
     expect((await shotRow(shots[0].id)).status).toBe('still_ready');
@@ -1721,13 +1720,15 @@ describe('story flow: scene settings and neighbouring shots', () => {
 describe('consistency fixes (sound task 4)', () => {
   const castOf = (projectId) => storyDb().select('story_cast', { project_id: projectId }, { order: 'ord' });
 
-  it('a. editing a description re-matches the cast: an added character is referenced, a removed one is not', async () => {
+  it('a. editing a description adds a newly named character as a reference and never removes one', async () => {
     const { userId, project, shots } = await stilledProject();
     const maya = (await castOf(project.id)).find((c) => c.name === 'Maya');
     const leo = (await castOf(project.id)).find((c) => c.name === 'Leo');
+    await storyDb().update('story_shots', { id: shots[0].id }, { cast_ids: [maya.id] });
+    // Add-only: Leo is named and is added; Maya is not named any more and stays.
     const { shot } = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description: 'Close on Leo, laughing in the doorway.' } });
-    expect(shot.cast_ids).toEqual([leo.id]);
-    const again = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description: 'maya and LEO talk, Leonard watches.' } });
+    expect(shot.cast_ids).toEqual([maya.id, leo.id]);
+    const again = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description: 'Leo and Maya talk, Leonard watches.' } });
     expect(new Set(again.shot.cast_ids)).toEqual(new Set([maya.id, leo.id]));
     await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
     const job = (await stillJobs(project.id)).at(-1);
@@ -1783,5 +1784,54 @@ describe('consistency fixes (sound task 4)', () => {
     expect(job.payload.kind).toBe('retry');
     expect(job.payload.refs).toContain('/sheet/Maya-new.png');
     expect(job.payload.refs).not.toContain('/sheet/Maya.png');
+  });
+
+  it('4. the cast re-match is case-sensitive, whole word and add-only', async () => {
+    const { userId, project, shots } = await stilledProject({ cast: ['Maya', 'Leo', 'May', 'Will'] });
+    const by = Object.fromEntries((await castOf(project.id)).map((c) => [c.name, c.id]));
+    await storyDb().update('story_shots', { id: shots[0].id }, { cast_ids: [by.Maya] });
+    const edit = async (description) => (await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description } })).shot.cast_ids;
+    expect(await edit('Leo may laugh, the art is bright.')).toEqual([by.Maya, by.Leo]);
+    expect(await edit('He will win and she sweeps faster.')).toEqual([by.Maya, by.Leo]);
+    expect(await edit("Maya's broom and Leonard waiting.")).toEqual([by.Maya, by.Leo]);
+  });
+
+  it('3. the project quality prices and makes every clip, whatever a row holds', async () => {
+    const ctx = await stilledProject();
+    await storyDb().update('story_projects', { id: ctx.project.id }, { fee_charged: true });
+    const [project] = await storyDb().select('story_projects', { id: ctx.project.id });
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { quality: 'pro_talking' });
+    const { quoteGeneration, startGeneration } = await import('../../lib/story/shots.js');
+    const { creditsForShot } = await import('../../lib/pricing.js');
+    const pricing = await getPricing();
+    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[0].id] });
+    expect(project.quality).toBe('standard');
+    expect(q.total).toBe(creditsForShot(pricing, 'standard', ctx.shots[0].seconds));
+    expect(q.total).not.toBe(creditsForShot(pricing, 'pro_talking', ctx.shots[0].seconds));
+    const before = await balance(ctx.userId);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[0].id], confirmTotal: q.total });
+    const clip = (await storyDb().select('story_jobs', { project_id: ctx.project.id, kind: 'clip' }))[0];
+    expect(clip.payload.quality).toBe(project.quality);
+    expect((await balance(ctx.userId)).available).toBe(before.available - q.total);
+  });
+
+  it('7. no "no picture" warning while the picture is being drawn, only when nothing is in progress', async () => {
+    const { project } = await builtProject();
+    const { shotsView } = await import('../../lib/story/storyboard.js');
+    const withMaya = async () => (await shotsView(project.id)).find((s) => (s.cast_ids || []).length);
+    await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { image_url: null, image_key: null, sheet: {}, status: 'pending' });
+    expect((await withMaya()).warnings.map((w) => w.code)).not.toContain('character_no_picture');
+    await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { status: 'ready' });
+    expect((await withMaya()).warnings.map((w) => w.code)).toContain('character_no_picture');
+  });
+
+  it('6. a character\'s own photo clears the old-style marker', async () => {
+    const { userId, project } = await builtProject();
+    const { setCastImage } = await import('../../lib/story/cast.js');
+    const [asset] = await storyDb().insert('story_assets', { user_id: userId, kind: 'image', url: '/own/m.png' });
+    const maya = (await castOf(project.id)).find((c) => c.name === 'Maya');
+    await storyDb().update('story_cast', { id: maya.id }, { style_stale: true });
+    await setCastImage({ userId, projectId: project.id, castId: maya.id, assetId: asset.id });
+    expect((await castOf(project.id)).find((c) => c.id === maya.id).style_stale).toBe(false);
   });
 });

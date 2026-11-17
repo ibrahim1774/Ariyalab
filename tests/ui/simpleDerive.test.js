@@ -76,7 +76,7 @@ describe('what the pipeline does next', () => {
     expect(nextPlanAction(st({ cast: [{ ...draft, updated_at: new Date().toISOString() }] })).type).toBe('wait');
   });
   it('lists the free starts that need the customer\'s press first', () => {
-    expect(FREE_STARTS.sort()).toEqual(['build', 'music', 'narration', 'pick', 'resume_cast', 'stills']);
+    expect(FREE_STARTS.sort()).toEqual(['build', 'music', 'narration', 'pick', 'redraw', 'resume_cast', 'stills']);
   });
   it('a failed or blocked character stops the pipeline, it does not wait forever', () => {
     expect(nextPlanAction(st({ cast: [castRow({ status: 'failed', chosen_index: null, image_url: null })] }))).toMatchObject({ type: 'blocked', what: ['characters'] });
@@ -237,8 +237,27 @@ describe('an incomplete plan brings screen 3 back, even after clips exist', () =
   const clipped = (over = {}) => st({ project: project({ step: 'generate' }), cast: [castRow()], shots: [shot({ status: 'ready', still_url: '/s.png', clip_url: '/c.mp4' })], ...over });
   it('a complete plan with clips is Watch and fix, and the furthest screen is Watch and fix', () => {
     expect(deriveScreen(clipped())).toBe('watch');
-    expect(planGaps(clipped())).toEqual({ cast: false, pick: false, rebuild: false, pictures: false });
+    expect(planGaps(clipped())).toEqual({ cast: false, redraw: false, pick: false, rebuild: false, pictures: false });
     expect(planReason(clipped())).toBeNull();
+  });
+  it('a new art style cleared the characters and pictures: plan screen, characters first, then pictures, each priced before it runs', () => {
+    const cleared = (extra = {}) => castRow({ style_stale: true, status: 'ready', chosen_index: null, image_url: null, candidates: [], regen_credits: 0, ...extra });
+    const s = clipped({ cast: [cleared()], shots: [shot({ status: 'draft', still_url: null, still_credits: 2, clip_url: '/c.mp4', stale: true })] });
+    expect(planGaps(s)).toMatchObject({ redraw: true, pick: false, pictures: true });
+    expect(deriveScreen(s)).toBe('plan');
+    expect(planReason(s)).toBe('The art style changed, so the characters need drawing again.');
+    // Included regeneration: starts by itself.
+    expect(nextPlanAction(s)).toMatchObject({ type: 'redraw', expected: 0, items: [{ expected: 0 }] });
+    // A priced one is a question first, and runs only with the confirmed amount.
+    const priced = clipped({ cast: [cleared({ regen_credits: 5 })], shots: s.shots });
+    expect(nextPlanAction(priced)).toEqual({ type: 'ask', what: 'redraw', credits: 5 });
+    expect(nextPlanAction(priced, { confirmed: { redraw: 5 } })).toMatchObject({ type: 'redraw', expected: 5 });
+    expect(nextPlanAction(priced, { confirmed: { redraw: 4 } })).toMatchObject({ type: 'ask', what: 'redraw' });
+    // While they are drawn it waits; once picked, the pictures are next and priced (a delivered picture costs a re-roll).
+    expect(nextPlanAction(clipped({ cast: [cleared({ status: 'pending' })], shots: s.shots }))).toMatchObject({ type: 'wait' });
+    const drawn = clipped({ cast: [castRow()], shots: s.shots });
+    expect(nextPlanAction(drawn)).toEqual({ type: 'ask', what: 'pictures', credits: 2, ids: ['s1'] });
+    expect(nextPlanAction(drawn, { confirmed: { pictures: 2 } })).toMatchObject({ type: 'stills', expected: 2 });
   });
   it('a script that changed (shots need a rebuild) -> plan, with a plain reason', () => {
     const s = clipped({ shots: [shot({ status: 'ready', still_url: '/s.png', needs_rebuild: true })] });
