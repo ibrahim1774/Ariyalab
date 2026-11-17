@@ -610,6 +610,19 @@ describe('cast step', () => {
     expect(client.startCast).not.toHaveBeenCalled();
   });
 
+  it('I4: a 409 sets the button price from the server number and the next click sends it (no loop)', async () => {
+    client.startCast.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'The price is now 0 credits.', body: { total: 0 } }));
+    client.startCast.mockResolvedValue({});
+    render(<StepCast {...props([], { project: project({ step: 'cast', seconds: 30, fee_charged: false }) })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Make my cast' }));
+    await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(1));
+    expect(client.startCast.mock.calls[0][1]).toBeGreaterThan(0);
+    await waitFor(() => expect(screen.queryByText(/setup fee/)).toBeNull());
+    fireEvent.click(screen.getByRole('button', { name: 'Make my cast' }));
+    await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(2));
+    expect(client.startCast.mock.calls[1][1]).toBe(0);
+  });
+
   it('expects 0 credits when the setup fee was already paid', async () => {
     client.startCast.mockResolvedValue({});
     render(<StepCast {...props([], { project: project({ step: 'cast', fee_charged: true }) })} />);

@@ -172,7 +172,9 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
   const [error, setError] = useState(null);
 
   // The fee the page shows is the fee it asks for: a different price on the server is 409 and nothing is charged.
-  const shownFee = project.fee_charged ? 0 : projectFeeFor(pricing, project.seconds);
+  // After a 409 the server's own number (quotedFee) is the price on the button, so one refresh ends the disagreement.
+  const [quotedFee, setQuotedFee] = useState(null);
+  const shownFee = quotedFee !== null ? quotedFee : project.fee_charged ? 0 : projectFeeFor(pricing, project.seconds);
 
   async function start() {
     setBusy(true);
@@ -181,8 +183,13 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       await startCast(project.id, shownFee);
       await refresh?.();
     } catch (err) {
-      setError(err);
-      if (err?.status === 409) await refresh?.();
+      if (err?.status === 409 && Number.isInteger(err?.body?.total)) {
+        setQuotedFee(err.body.total);
+        await refresh?.();
+      } else {
+        setError(err);
+        if (err?.status === 409) await refresh?.();
+      }
     } finally {
       setBusy(false);
     }
@@ -211,7 +218,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       )}
 
       {!noCast && cast.length === 0 && (
-        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${projectFeeFor(pricing, project.seconds)} credits is taken when the cast is first made.`}`}>
+        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged || shownFee === 0 ? '' : ` The project setup fee of ${shownFee} credits is taken when the cast is first made.`}`}>
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={start} />
           <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
         </EmptyState>

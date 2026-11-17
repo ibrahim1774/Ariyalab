@@ -213,6 +213,28 @@ describe('consistent_cast false: shots are described and pictured on their own',
   });
 });
 
+describe('switching consistent_cast after the storyboard exists (I2)', () => {
+  it('false then true: the shots need a rebuild, the rebuild brings the characters back into the shots, and the pictures are remade', async () => {
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const { userId, project } = await newProject();
+    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+    await buildShotList({ userId, projectId: project.id });
+    await generateStills({ userId, projectId: project.id });
+    await finishJobs(project.id);
+    let rows = await shotRows(project.id);
+    expect(rows.every((s) => (s.cast_ids || []).length === 0 && s.still_url)).toBe(true);
+
+    await updateProject({ userId, id: project.id, patch: { consistent_cast: true } });
+    expect((await listShots({ userId, projectId: project.id })).shots.every((s) => s.needs_rebuild)).toBe(true);
+    await buildShotList({ userId, projectId: project.id });
+    rows = await shotRows(project.id);
+    expect(rows.some((s) => (s.cast_ids || []).length > 0)).toBe(true);
+    // The pictures made without the characters are marked for remaking, not cleared by the rebuild.
+    expect(rows.filter((s) => s.still_url).every((s) => s.stale)).toBe(true);
+    expect((await listShots({ userId, projectId: project.id })).shots.some((s) => s.needs_rebuild)).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------- 7 and 120 seconds
 
 describe('shot planning at 7 and 120 seconds', () => {

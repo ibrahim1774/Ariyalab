@@ -564,6 +564,60 @@ describe('automatic cast pick', () => {
     expect((await storyDb().select('story_shots', { id: shot.id }))[0].stale).toBe(true);
   });
 
+  it('I3: when the last picture of the round fails, the character is still picked from the ones that finished', async () => {
+    const { project, row, jobs } = await pendingRound();
+    await castImageHandler.onDone(jobs[0], result(0));
+    await castImageHandler.onDone(jobs[1], result(1));
+    await storyDb().update('story_jobs', { id: jobs[2].id }, { status: 'failed' });
+    await castImageHandler.onFail(jobs[2], { blocked: false, error: 'x', final: true });
+    const after = await castRow(row.id);
+    expect(after.status).toBe('ready');
+    expect(after.chosen_index).toBe(0);
+    expect(await sheetJobs(project.id, row.id)).toHaveLength(1);
+  });
+
+  it('I3: a round where every picture failed has nothing to pick and stays failed', async () => {
+    const { row, jobs } = await pendingRound();
+    await storyDb().update('story_jobs', { id: jobs.map((j) => j.id) }, { status: 'failed' });
+    for (const j of jobs) await castImageHandler.onFail(j, { blocked: false, error: 'x', final: true });
+    const after = await castRow(row.id);
+    expect([after.status, after.chosen_index]).toEqual(['failed', null]);
+  });
+
+  it('I6: the customer can change the look right after the automatic pick; the superseded sheet is ignored', async () => {
+    const { userId, project, row, jobs } = await pendingRound();
+    for (const j of jobs) await castImageHandler.onDone(j, result(j.payload.slot));
+    const [autoSheet] = await sheetJobs(project.id, row.id);
+    expect((await castRow(row.id)).chosen_index).toBe(0);
+    const { cast } = await pickCast({ userId, projectId: project.id, castId: row.id, candidateIndex: 1 });
+    expect(cast).toMatchObject({ chosen_index: 1 });
+    // The automatic sheet finishes late: it is not stored for the new pick.
+    await storyDb().update('story_jobs', { id: autoSheet.id }, { status: 'done' });
+    await castImageHandler.onDone({ ...autoSheet, status: 'done' }, { url: '/api/mock/storage/old.png', key: 'old.png' });
+    const after = await castRow(row.id);
+    expect(after.sheet?.key).not.toBe('old.png');
+    expect(after.image_key).toBe(after.candidates[1].key);
+  });
+
+  it('I6: a sheet the customer asked for (a real pick) still blocks a different pick until it is done', async () => {
+    const { userId, project, row, jobs } = await pendingRound();
+    for (const j of jobs) await castImageHandler.onDone(j, result(j.payload.slot));
+    await finishJobs(project.id);
+    await pickCast({ userId, projectId: project.id, castId: row.id, candidateIndex: 1 });
+    await expect(pickCast({ userId, projectId: project.id, castId: row.id, candidateIndex: 2 })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('I4: expected_credits that is not a whole number is a 422 and nothing is charged', async () => {
+    const { userId, project } = await newProject();
+    const { generateCastAction } = await import('../../lib/story/cast.js');
+    const before = await available(userId);
+    for (const bad of ['90', null, 1.5, -1, NaN]) {
+      await expect(generateCastAction({ userId, projectId: project.id, body: { expected_credits: bad } })).rejects.toMatchObject({ status: 422 });
+    }
+    expect(await available(userId)).toBe(before);
+    expect(await castRows(project.id)).toHaveLength(0);
+  });
+
   it('a regeneration round picks its first new picture too (the old pick was cleared)', async () => {
     const { userId, project, cast } = await readyCast();
     await finishJobs(project.id);

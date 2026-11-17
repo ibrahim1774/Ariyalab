@@ -915,6 +915,44 @@ describe('simple maker tools', () => {
       expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
     });
 
+    it('I5: with clips already made it changes nothing and returns a confirm card with the count and the cost of remaking them', async () => {
+      const ctx = await genProject({ n: 3, clips: true });
+      const [maya] = await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'd', status: 'ready' });
+      await storyDb().update('story_shots', { id: ctx.shots.map((sh) => sh.id) }, { cast_ids: [maya.id] });
+      const before = await ledgerCount(ctx.userId);
+      const out = await run(ctx, 'set_consistent_cast', { consistent_cast: false });
+      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'consistent-cast', method: 'POST', body: { consistent_cast: false } } });
+      expect(out.quote.credits).toBe(0);
+      expect(out.quote.clips).toBe(3);
+      expect(out.quote.remake_credits).toBeGreaterThan(0);
+      expect(out.quote.label).toMatch(/3 clips/);
+      // Nothing changed yet.
+      expect((await projectRow(ctx.project.id)).consistent_cast).toBe(true);
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
+      // Confirming applies it, still for 0 credits.
+      await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm });
+      expect((await projectRow(ctx.project.id)).consistent_cast).toBe(false);
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale)).toBe(true);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+    });
+
+    it('I5: the card goes out of date once the flag already has that value', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      signIn(ctx.user);
+      const sent = await post({ projectId: ctx.project.id, message: tool('set_consistent_cast', { consistent_cast: false }) });
+      const [card] = sent.body.confirms;
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('open');
+      await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('outdated');
+      expect(card.confirm.action).toBe('consistent-cast');
+    });
+
+    it('I5: the same value again is a no-op', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      expect(await run(ctx, 'set_consistent_cast', { consistent_cast: true })).toMatchObject({ ok: true, changed: 'project', project: { consistent_cast: true } });
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
+    });
+
     it('needs a true or false', async () => {
       const ctx = await newProject();
       expect(await run(ctx, 'set_consistent_cast', { consistent_cast: 'no' })).toMatchObject({ ok: false, error: 'validation_failed' });

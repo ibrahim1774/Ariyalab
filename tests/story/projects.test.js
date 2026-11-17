@@ -58,7 +58,7 @@ describe('consistent_cast', () => {
     await expect(updateProject({ userId, id: project.id, patch: { consistent_cast: value } })).rejects.toBeInstanceOf(ValidationError);
   });
 
-  it('changing it marks the shots that have characters and a picture or a clip stale, once', async () => {
+  it('changing it marks every shot with a picture or a clip stale and needing a rebuild, once', async () => {
     const userId = userA();
     const project = await createProject({ userId, input: BRIEF });
     const [cast] = await storyDb().insert('story_cast', { project_id: project.id, ord: 0, name: 'Maya', description: 'd', status: 'ready' });
@@ -72,7 +72,8 @@ describe('consistent_cast', () => {
     expect((await storyDb().select('story_shots', { project_id: project.id })).some((s) => s.stale)).toBe(false);
     await updateProject({ userId, id: project.id, patch: { consistent_cast: false } });
     const after = await storyDb().select('story_shots', { project_id: project.id }, { order: 'ord' });
-    expect(after.map((s) => s.stale)).toEqual([true, true, false]);
+    expect(after.map((s) => s.stale)).toEqual([true, true, true]);
+    expect(after.every((s) => s.scene_sig === 'cast-changed')).toBe(true);
     expect(after[1].clip_mismatch).toBe(true);
     expect(rows).toHaveLength(3);
   });
