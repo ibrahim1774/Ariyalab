@@ -112,7 +112,7 @@ describe('what each plan makes', () => {
     const { container } = renderPage();
     expect(screen.getByRole('heading', { name: 'What each plan makes' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Pro narrated' })).toHaveAttribute('aria-pressed', 'true');
-    expect(rowCells(container, 45)).toEqual(['1 video', '2 videos', '4 videos']);
+    expect(rowCells(container, 30)).toEqual(['1 video', '2 videos', '6 videos']);
     const cards = [...container.querySelectorAll('[data-plan]')].map((c) => c.textContent);
     expect(cards[0]).toMatch(/About 1 video of 45 seconds/);
     expect(cards[1]).toMatch(/About 2 videos of 45 seconds/);
