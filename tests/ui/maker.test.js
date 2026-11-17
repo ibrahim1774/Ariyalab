@@ -194,25 +194,25 @@ describe('review', () => {
   it('works the allowance out from the project when the payload has none', () => {
     const shots = Array.from({ length: 5 }, (_, i) => shot(i + 1, { status: 'ready', clip_url: '/c.mp4', seconds: 5, quality: 'standard' }));
     render(<StepReview project={project()} shots={shots} status={{ shots, project: project({ rerolls_used: 0 }) }} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    expect(screen.getAllByTestId('reroll-info')[0]).toHaveTextContent('1 try included, then 55 credits');
+    expect(screen.getAllByTestId('reroll-info')[0]).toHaveTextContent('1 try included, then 40 credits');
   });
 });
 
 describe('quote bar', () => {
   it('shows the creditsForVideo estimate for 45 seconds of Pro narrated, and the shortfall', async () => {
-    expect(creditsForVideo({ quality: 'pro_narrated', seconds: 45 })).toBe(720);
+    expect(creditsForVideo({ quality: 'pro_narrated', seconds: 45 })).toBe(810);
     client.getBilling.mockResolvedValue({ v2: true, balance: { available: 500 }, history: [] });
     render(<QuoteBar project={project()} shots={[]} />);
-    expect(screen.getByTestId('quote-total')).toHaveTextContent('720 credits');
+    expect(screen.getByTestId('quote-total')).toHaveTextContent('810 credits');
     expect(screen.getByText(`${QUALITY_LABELS.pro_narrated}, 45 seconds`)).toBeInTheDocument();
-    expect(await screen.findByTestId('quote-short')).toHaveTextContent('You need 220 more credits');
+    expect(await screen.findByTestId('quote-short')).toHaveTextContent('You need 310 more credits');
     expect(screen.getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
     expect(screen.getByTestId('quote-balance')).toHaveTextContent('500 credits');
   });
 
   it('leaves out the project fee once it has been paid', () => {
     render(<QuoteBar project={project({ fee_charged: true })} shots={[]} />);
-    expect(screen.getByTestId('quote-total')).toHaveTextContent('630 credits');
+    expect(screen.getByTestId('quote-total')).toHaveTextContent('720 credits');
   });
 
   it('shows no shortfall when the balance covers it', async () => {
@@ -321,11 +321,11 @@ describe('brief steps', () => {
     expect(screen.getByRole('button', { name: /Continue/ })).toBeEnabled();
   });
 
-  it('Pro talking sets mode talking; the other three set narrated; Budget is offered again', async () => {
+  it('Pro Max sets mode talking; the other three set narrated; Budget is offered again', async () => {
     const save = vi.fn().mockResolvedValue({});
     render(<StepLength project={project({ quality: 'standard' })} save={save} onNext={vi.fn()} />);
-    expect(screen.getAllByRole('radio', { name: /^(Budget|Standard|Pro|Pro talking)$/ })).toHaveLength(4);
-    fireEvent.click(screen.getByRole('radio', { name: 'Pro talking' }));
+    expect(screen.getAllByRole('radio', { name: /^(Budget|Standard|Pro|Pro Max)$/ })).toHaveLength(4);
+    fireEvent.click(screen.getByRole('radio', { name: 'Pro Max' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_talking', mode: 'talking' }));
     fireEvent.click(screen.getByRole('radio', { name: 'Pro' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_narrated', mode: 'narrated' }));
@@ -345,11 +345,11 @@ describe('brief steps', () => {
       const std = card('standard');
       expect(std).toHaveTextContent('Standard');
       expect(std).toHaveTextContent('Recommended');
-      expect(std.textContent.indexOf('Narrator voiceover')).toBeLessThan(std.textContent.indexOf('720p'));
+      expect(std.textContent.indexOf('Voice and sound made with the video')).toBeLessThan(std.textContent.indexOf('1080p'));
       expect(std).toHaveTextContent('Music and captions included');
-      expect(std).toHaveTextContent('Kling 3.0');
+      expect(std).toHaveTextContent('Gemini Omni 1.2 Flash');
       expect(std).toHaveTextContent('MP4, 9:16, about 30 seconds');
-      expect(card('pro_talking')).toHaveTextContent('Characters speak their own lines');
+      expect(card('pro_talking')).toHaveTextContent('Voice and sound made with the video');
       expect(card('pro_talking')).toHaveTextContent('1080p');
       expect(card('economy')).toHaveTextContent('Seedance 2 Mini');
       expect(document.querySelectorAll('[data-recommended]')).toHaveLength(1);

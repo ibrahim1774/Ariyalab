@@ -14,11 +14,11 @@ describe('QUALITY_INFO', () => {
     for (const [q, map] of Object.entries(QUALITY_MAP)) expect(QUALITY_INFO[q].picture, q).toBe(map.resolution);
   });
 
-  it('says narrator exactly where the model has no speech, and characters speak exactly where it has', () => {
+  it('says on every card that voice and sound are made with the video, and every model has sound on', () => {
     for (const [q, map] of Object.entries(QUALITY_MAP)) {
-      expect(QUALITY_INFO[q].voice, q).toBe(map.sound ? 'Characters speak their own lines' : 'Narrator voiceover');
+      expect(map.sound, q).toBe(true);
+      expect(QUALITY_INFO[q].voice, q).toBe('Voice and sound made with the video');
     }
-    expect(QUALITY_ORDER.filter((q) => QUALITY_INFO[q].voice === 'Narrator voiceover')).toHaveLength(3);
   });
 
   it('gives every level a voice line, a name, a model, a best for line and the music line', () => {
@@ -29,9 +29,13 @@ describe('QUALITY_INFO', () => {
     }
   });
 
+  it('says the picture sizes of the lineup', () => {
+    expect(QUALITY_ORDER.map((q) => QUALITY_INFO[q].picture)).toEqual(['720p', '1080p', '720p', '1080p']);
+  });
+
   it('uses the card names and model names the owner chose, recommends Standard only', () => {
-    expect(QUALITY_ORDER.map((q) => QUALITY_INFO[q].name)).toEqual(['Budget', 'Standard', 'Pro', 'Pro talking']);
-    expect(QUALITY_ORDER.map((q) => QUALITY_INFO[q].model)).toEqual(['Seedance 2 Mini', 'Kling 3.0', 'Kling 3.0 Pro', 'Kling 3.0 Pro with speech']);
+    expect(QUALITY_ORDER.map((q) => QUALITY_INFO[q].name)).toEqual(['Budget', 'Standard', 'Pro', 'Pro Max']);
+    expect(QUALITY_ORDER.map((q) => QUALITY_INFO[q].model)).toEqual(['Seedance 2 Mini', 'Gemini Omni 1.2 Flash', 'Kling 3.0', 'Kling 3.0 Pro']);
     expect(QUALITY_ORDER.filter((q) => QUALITY_INFO[q].recommended)).toEqual(['standard']);
   });
 

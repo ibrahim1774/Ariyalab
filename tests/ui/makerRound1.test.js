@@ -89,7 +89,7 @@ describe('prices come from the server', () => {
 
   it('falls back to the built in numbers while /pricing has not answered', () => {
     render(<QuoteBar project={project()} shots={[]} />);
-    expect(screen.getByTestId('quote-total')).toHaveTextContent('720 credits');
+    expect(screen.getByTestId('quote-total')).toHaveTextContent('810 credits');
   });
 });
 
@@ -385,7 +385,7 @@ describe('quote strip', () => {
     await screen.findByTestId('quote-short');
     const row = container.querySelector('[class*="row"]');
     expect(within(row).getByRole('link', { name: 'Top up' })).toHaveAttribute('href', '/app/billing');
-    expect(container.querySelector('details')).toHaveTextContent('Short by 220 credits');
+    expect(container.querySelector('details')).toHaveTextContent('Short by 310 credits');
   });
 });
 

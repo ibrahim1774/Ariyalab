@@ -108,29 +108,29 @@ describe('what each plan makes', () => {
   const rowCells = (container, seconds) =>
     [...container.querySelector(`[data-matrix] tr[data-seconds="${seconds}"]`).querySelectorAll('td')].map((td) => td.textContent);
 
-  it('defaults to Pro narrated and agrees with the plan cards', () => {
+  it('defaults to Pro and agrees with the plan cards', () => {
     const { container } = renderPage();
     expect(screen.getByRole('heading', { name: 'What each plan makes' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Pro narrated' })).toHaveAttribute('aria-pressed', 'true');
-    expect(rowCells(container, 30)).toEqual(['1 video', '2 videos', '6 videos']);
+    expect(screen.getByRole('button', { name: 'Pro' })).toHaveAttribute('aria-pressed', 'true');
+    expect(rowCells(container, 30)).toEqual(['1 video', '2 videos', '5 videos']);
     const cards = [...container.querySelectorAll('[data-plan]')].map((c) => c.textContent);
     expect(cards[0]).toMatch(/About 1 video of 45 seconds/);
-    expect(cards[1]).toMatch(/About 2 videos of 45 seconds/);
-    expect(cards[2]).toMatch(/About 4 videos of 45 seconds/);
+    expect(cards[1]).toMatch(/About 1 video of 45 seconds/);
+    expect(cards[2]).toMatch(/About 3 videos of 45 seconds/);
   });
 
   it('switches quality levels', () => {
     const { container } = renderPage();
     fireEvent.click(screen.getByRole('button', { name: 'Standard' }));
-    expect(rowCells(container, 30)).toEqual(['2 videos', '3 videos', '7 videos']);
-    fireEvent.click(screen.getByRole('button', { name: 'Pro talking' }));
+    expect(rowCells(container, 30)).toEqual(['2 videos', '4 videos', '9 videos']);
+    fireEvent.click(screen.getByRole('button', { name: 'Pro Max' }));
     expect(rowCells(container, 60)).toEqual(['Under 1 video', '1 video', '2 videos']);
   });
 
   it('explains the levels and the cost line', () => {
     renderPage();
-    expect(screen.getByText(/Standard is 720p with a narrator\./)).toBeInTheDocument();
-    expect(screen.getByText(/Pro talking is 1080p and the characters speak\./)).toBeInTheDocument();
+    expect(screen.getByText(/Standard is 1080p with voice and sound\./)).toBeInTheDocument();
+    expect(screen.getByText(/Pro Max is 1080p with voice and sound\./)).toBeInTheDocument();
     expect(screen.getByText(/You always see the exact cost before you generate\./)).toBeInTheDocument();
   });
 });
@@ -141,8 +141,8 @@ describe('pricing data', () => {
     expect(PLANS.creator).toEqual({ usd: 49, credits: 1500 });
     expect(PLANS.studio).toEqual({ usd: 99, credits: 3100 });
     expect(YEARLY_DISCOUNT).toBe(0.15);
-    expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(2);
-    expect(videosPerPlan({ credits: 5400, quality: 'pro_narrated', seconds: 45 })).toBe(7);
+    expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(1);
+    expect(videosPerPlan({ credits: 5400, quality: 'pro_narrated', seconds: 45 })).toBe(6);
   });
 });
 

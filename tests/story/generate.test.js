@@ -157,7 +157,7 @@ describe('quote', () => {
         const ctx = await newProject({ n: 2, feeCharged: false, projectSeconds });
         const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
         expect(q.lines[0], `${projectSeconds}s`).toEqual({ label: 'Project fee', credits: fee });
-        expect(q.total).toBe(fee + 84);
+        expect(q.total).toBe(fee + 96);
         // The same number is spent when the first start is confirmed.
         const out = await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
         expect(out.charged ?? q.total).toBe(q.total);
@@ -169,12 +169,12 @@ describe('quote', () => {
     }
   });
 
-  it('quote for 15 pro_narrated 3 second shots is 630', async () => {
+  it('quote for 15 pro_narrated 3 second shots is 720', async () => {
     const ctx = await newProject();
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
-    expect(q.total).toBe(630);
-    expect(q.holdNeeded).toBe(630);
-    expect(q.lines).toEqual([{ label: '15 Pro shots', credits: 630 }]);
+    expect(q.total).toBe(720);
+    expect(q.holdNeeded).toBe(720);
+    expect(q.lines).toEqual([{ label: '15 Pro shots', credits: 720 }]);
     expect(q.shotIds).toHaveLength(15);
   });
 
@@ -182,7 +182,7 @@ describe('quote', () => {
     const ctx = await newProject();
     const res = await call('quote', 'POST', { ...ctx, body: { shotIds: [ctx.shots[0].id] } });
     expect(res.statusCode).toBe(200);
-    expect(res.body).toMatchObject({ total: 42, holdNeeded: 42, shotIds: [ctx.shots[0].id] });
+    expect(res.body).toMatchObject({ total: 48, holdNeeded: 48, shotIds: [ctx.shots[0].id] });
   });
 
   it('prices only generated shots without a current clip (ready but stale counts again)', async () => {
@@ -192,14 +192,14 @@ describe('quote', () => {
     await storyDb().update('story_shots', { id: ctx.shots[2].id }, { status: 'ready', clip_url: '/c.mp4', clip_key: 'c', stale: true, clip_mismatch: true });
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
     expect(q.shotIds.sort()).toEqual([ctx.shots[2].id, ctx.shots[3].id].sort());
-    expect(q.total).toBe(84);
+    expect(q.total).toBe(96);
   });
 
   it('adds the project fee when it has not been charged yet', async () => {
     const ctx = await newProject({ n: 2, feeCharged: false });
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
     expect(q.lines[0]).toEqual({ label: 'Project fee', credits: 90 });
-    expect(q.total).toBe(90 + 84);
+    expect(q.total).toBe(90 + 96);
   });
 });
 
@@ -210,24 +210,24 @@ describe('generate', () => {
     expect(err).toBeInstanceOf(QuoteChangedError);
     expect(err.status).toBe(409);
     expect(err.code).toBe('quote_changed');
-    expect(err.extra.total).toBe(630);
+    expect(err.extra.total).toBe(720);
     expect((await balance(ctx.userId)).held).toBe(0);
     expect(await clipJobs(ctx.project.id)).toHaveLength(0);
     const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 1 } });
     expect(res.statusCode).toBe(409);
-    expect(res.body).toMatchObject({ error: 'quote_changed', total: 630 });
+    expect(res.body).toMatchObject({ error: 'quote_changed', total: 720 });
   });
 
   it('places one hold and queues one clip job per shot with its share', async () => {
     const ctx = await newProject();
     const { out } = await generateAll(ctx);
-    expect(out.charged).toBe(630);
+    expect(out.charged).toBe(720);
     expect(out.queued).toHaveLength(15);
     const jobs = await clipJobs(ctx.project.id);
     expect(jobs).toHaveLength(15);
     expect(new Set(jobs.map((j) => j.hold_id)).size).toBe(1);
-    expect(jobs.every((j) => j.cost_credits === 42)).toBe(true);
-    expect((await balance(ctx.userId)).held).toBe(630);
+    expect(jobs.every((j) => j.cost_credits === 48)).toBe(true);
+    expect((await balance(ctx.userId)).held).toBe(720);
     expect((await shotRows(ctx.project.id)).every((s) => s.status === 'queued')).toBe(true);
     expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
   });
@@ -236,47 +236,47 @@ describe('generate', () => {
     const ctx = await newProject({ n: 3 });
     const ids = ctx.shots.map((s) => s.id);
     await generateAll(ctx, ids);
-    const res = await call('generate', 'POST', { ...ctx, body: { shotIds: ids, confirmTotal: 126 } });
+    const res = await call('generate', 'POST', { ...ctx, body: { shotIds: ids, confirmTotal: 144 } });
     expect(res.statusCode).toBe(409);
     expect(res.body.error).toBe('shots_busy');
-    expect((await balance(ctx.userId)).held).toBe(126);
+    expect((await balance(ctx.userId)).held).toBe(144);
     expect(await clipJobs(ctx.project.id)).toHaveLength(3);
   });
 
   it('two generate requests at the same moment make one hold and one set of jobs', async () => {
     const ctx = await newProject({ n: 3 });
-    const results = await Promise.allSettled([1, 2].map(() => startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 126 })));
+    const results = await Promise.allSettled([1, 2].map(() => startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 144 })));
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(results.find((r) => r.status === 'rejected').reason.status).toBe(409);
-    expect((await balance(ctx.userId)).held).toBe(126);
+    expect((await balance(ctx.userId)).held).toBe(144);
     expect(await clipJobs(ctx.project.id)).toHaveLength(3);
   });
 
   it('insufficient credits returns 402 and enqueues nothing', async () => {
     const ctx = await newProject({ funds: 100 });
-    const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 630 } });
+    const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 720 } });
     expect(res.statusCode).toBe(402);
-    expect(res.body).toMatchObject({ error: 'insufficient_credits', needed: 630, available: 100 });
+    expect(res.body).toMatchObject({ error: 'insufficient_credits', needed: 720, available: 100 });
     expect(await clipJobs(ctx.project.id)).toHaveLength(0);
     expect((await balance(ctx.userId)).held).toBe(0);
     expect((await shotRows(ctx.project.id)).every((s) => s.status === 'still_ready')).toBe(true);
   });
 
   it('a hold that fails after the claim (balance spent meanwhile) gives 402 and puts the shots back', async () => {
-    const ctx = await newProject({ n: 2, funds: 84 });
+    const ctx = await newProject({ n: 2, funds: 96 });
     _setShotsDeps({
       holdCredits: async () => {
-        throw new InsufficientCreditsError(84, 0);
+        throw new InsufficientCreditsError(96, 0);
       },
     });
-    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 84 })).rejects.toBeInstanceOf(InsufficientCreditsError);
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 96 })).rejects.toBeInstanceOf(InsufficientCreditsError);
     const rows = await shotRows(ctx.project.id);
     expect(rows.every((s) => s.status === 'still_ready')).toBe(true);
     expect(await clipJobs(ctx.project.id)).toHaveLength(0);
     expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
   });
 
-  it('one blocked shot releases 42 and the other 14 settle', async () => {
+  it('one blocked shot releases 48 and the other 14 settle', async () => {
     const descriptions = ['A shopkeeper waves [[mock:blocked]]'];
     const ctx = await newProject({ descriptions });
     const { out } = await generateAll(ctx);
@@ -285,8 +285,8 @@ describe('generate', () => {
     const rows = await ledger(ctx.userId);
     const mine = rows.filter((r) => r.hold_id === holdId);
     expect(mine.filter((r) => r.op === 'settle')).toHaveLength(14);
-    expect(mine.filter((r) => r.op === 'settle').reduce((n, r) => n + r.amount, 0)).toBe(14 * 42);
-    expect(mine.filter((r) => r.op === 'release').reduce((n, r) => n + r.amount, 0)).toBe(42);
+    expect(mine.filter((r) => r.op === 'settle').reduce((n, r) => n + r.amount, 0)).toBe(14 * 48);
+    expect(mine.filter((r) => r.op === 'release').reduce((n, r) => n + r.amount, 0)).toBe(48);
     expect((await holdOf(holdId)).status).toBe('closed');
     const shots = await shotRows(ctx.project.id);
     const blocked = shots.find((s) => s.id === ctx.shots[0].id);
@@ -294,16 +294,16 @@ describe('generate', () => {
     expect(blocked.error).toMatch(/content rules/i);
     expect(blocked.clip_url).toBeNull();
     expect(shots.filter((s) => s.status === 'ready')).toHaveLength(14);
-    expect(out.charged).toBe(630);
+    expect(out.charged).toBe(720);
     const b = await balance(ctx.userId);
     expect(b.held).toBe(0);
-    expect(b.available).toBe(2000 - 14 * 42);
+    expect(b.available).toBe(2000 - 14 * 48);
   });
 
   it('a full mock run ends with held === 0 and ledger sum equal to the quote', async () => {
     const ctx = await newProject({ feeCharged: false });
     const { q } = await generateAll(ctx);
-    expect(q.total).toBe(90 + 630);
+    expect(q.total).toBe(90 + 720);
     await finishJobs(ctx.project.id);
     const b = await balance(ctx.userId);
     expect(b.held).toBe(0);
@@ -320,7 +320,7 @@ describe('generate', () => {
   it('refuses shots without a still, and with nothing to generate says so', async () => {
     const ctx = await newProject({ n: 2 });
     await storyDb().update('story_shots', { id: ctx.shots[0].id }, { still_url: null, status: 'draft' });
-    const res = await call('generate', 'POST', { ...ctx, body: { shotIds: [ctx.shots[0].id], confirmTotal: 42 } });
+    const res = await call('generate', 'POST', { ...ctx, body: { shotIds: [ctx.shots[0].id], confirmTotal: 48 } });
     expect(res.statusCode).toBe(422);
     expect(res.body.error).toBe('still_missing');
     await storyDb().update('story_shots', { project_id: ctx.project.id }, { status: 'ready', clip_url: '/c.mp4', clip_key: 'c', still_url: '/s.png' });
@@ -332,7 +332,7 @@ describe('generate', () => {
   it('needs a paid plan', async () => {
     const ctx = await newProject({ n: 1 });
     accounts.set({ paid: false });
-    const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 42 } });
+    const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 48 } });
     expect(res.statusCode).toBe(402);
     expect(res.body.error).toBe('plan_required');
   });
@@ -418,16 +418,16 @@ describe('re-roll', () => {
     }
     expect((await balance(ctx.userId)).held).toBe(0);
     expect((await projectRow(ctx.project.id)).rerolls_used).toBe(3);
-    const fourth = await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id, expectedCredits: 42 });
-    expect(fourth.charged).toBe(42);
-    expect((await balance(ctx.userId)).held).toBe(42);
+    const fourth = await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id, expectedCredits: 48 });
+    expect(fourth.charged).toBe(48);
+    expect((await balance(ctx.userId)).held).toBe(48);
     const job = (await clipJobs(ctx.project.id)).at(-1);
-    expect(job).toMatchObject({ shot_id: ctx.shots[3].id, cost_credits: 42 });
+    expect(job).toMatchObject({ shot_id: ctx.shots[3].id, cost_credits: 48 });
     expect(job.payload.kind).toBe('reroll');
     await finishJobs(ctx.project.id);
     const b = await balance(ctx.userId);
     expect(b.held).toBe(0);
-    expect(b.available).toBe(before - 42);
+    expect(b.available).toBe(before - 48);
     const shot = await shotRow(ctx.shots[3].id);
     expect(shot.status).toBe('ready');
     expect(shot.clip_key).not.toBe(ctx.shots[3].clip_key);
@@ -438,9 +438,9 @@ describe('re-roll', () => {
     await storyDb().update('story_projects', { id: ctx.project.id }, { rerolls_used: 1 });
     const res = await call('reroll', 'POST', { ...ctx, body: { shotId: ctx.shots[0].id, expected_credits: 0 } });
     expect(res.statusCode).toBe(409);
-    expect(res.body).toMatchObject({ error: 'quote_changed', credits: 42 });
+    expect(res.body).toMatchObject({ error: 'quote_changed', credits: 48 });
     expect((await balance(ctx.userId)).held).toBe(0);
-    const ok = await call('reroll', 'POST', { ...ctx, body: { shotId: ctx.shots[0].id, expected_credits: 42 } });
+    const ok = await call('reroll', 'POST', { ...ctx, body: { shotId: ctx.shots[0].id, expected_credits: 48 } });
     expect(ok.statusCode).toBe(200);
     const row = await shotRow(ctx.shots[0].id);
     expect(row.status).toBe('queued');
@@ -486,10 +486,10 @@ describe('carry 3: needs_rebuild gates quote and generate', () => {
   it('refuses while a shot needs a rebuild (its scene changed), not for stale alone', async () => {
     const ctx = await newProject({ n: 2 });
     await storyDb().update('story_shots', { id: ctx.shots[0].id }, { stale: true, clip_mismatch: true });
-    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).total).toBe(84);
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).total).toBe(96);
     await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: [{ ...SCENE, visual: 'Changed.' }], source: 'brief' });
     await expect(quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toMatchObject({ status: 409, code: 'needs_rebuild' });
-    const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 84 } });
+    const res = await call('generate', 'POST', { ...ctx, body: { confirmTotal: 96 } });
     expect(res.statusCode).toBe(409);
     expect(res.body.error).toBe('needs_rebuild');
     expect(await clipJobs(ctx.project.id)).toHaveLength(0);
@@ -575,7 +575,7 @@ describe('clip handler (carries 5, 6, 7)', () => {
     const failed = await shotRow(ctx.shots[0].id);
     expect(failed.status).toBe('failed');
     expect(failed.error).toMatch(/try again/i);
-    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [failed.id] })).total).toBe(42);
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [failed.id] })).total).toBe(48);
     // A free re-roll that fails leaves the shot ready with its earlier clip; Make it again retries it free
     // and uses no second free re-roll.
     await storyDb().update('story_shots', { id: ctx.shots[1].id }, { description: 'Shot two [[mock:fail]]' });
@@ -597,11 +597,11 @@ describe('clip handler (carries 5, 6, 7)', () => {
     // A failed paid re-roll is retried at its price again, once.
     await storyDb().update('story_projects', { id: ctx.project.id }, { rerolls_used: 2 });
     await storyDb().update('story_shots', { id: ctx.shots[3].id }, { description: 'Shot four [[mock:fail]]' });
-    expect((await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id, expectedCredits: 42 })).charged).toBe(42);
+    expect((await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[3].id, expectedCredits: 48 })).charged).toBe(48);
     await finishJobs(ctx.project.id);
     expect((await balance(ctx.userId)).held).toBe(0);
     const paidRetry = (await getStatus(ctx)).body.shots.find((s) => s.id === ctx.shots[3].id);
-    expect(paidRetry).toMatchObject({ status: 'ready', reroll_credits: 42 });
+    expect(paidRetry).toMatchObject({ status: 'ready', reroll_credits: 48 });
     // A failed still (status failed, latest clip job done) is not a clip retry: the shot has its clip.
     await storyDb().update('story_shots', { id: ctx.shots[2].id }, { status: 'failed' });
     expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).shotIds).not.toContain(ctx.shots[2].id);
@@ -621,7 +621,7 @@ describe('clip handler (carries 5, 6, 7)', () => {
       await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id], confirmTotal: 0 });
       await finishJobs(ctx.project.id);
     }
-    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] })).total).toBe(42);
+    expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] })).total).toBe(48);
   });
 });
 
@@ -636,22 +636,22 @@ describe('carry 7: money standard on the start path', () => {
         return enqueue(args);
       },
     });
-    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 126 })).rejects.toThrow('database unavailable');
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 144 })).rejects.toThrow('database unavailable');
     expect((await balance(ctx.userId)).held).toBe(0);
     expect(await clipJobs(ctx.project.id)).toHaveLength(0);
     expect((await shotRows(ctx.project.id)).every((s) => s.status === 'still_ready')).toBe(true);
     expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
     // The next try works and holds once.
-    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 126 });
-    expect((await balance(ctx.userId)).held).toBe(126);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 144 });
+    expect((await balance(ctx.userId)).held).toBe(144);
   });
 
   it('a start whose request died is recovered: the hold is released and the shots put back', async () => {
     const ctx = await newProject({ n: 2 });
     // Simulate a crash: the request hangs after the hold, so nothing runs the undo.
     _setShotsDeps({ enqueue: () => new Promise(() => {}) });
-    startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 84 });
-    await vi.waitFor(async () => expect((await balance(ctx.userId)).held).toBe(84));
+    startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 96 });
+    await vi.waitFor(async () => expect((await balance(ctx.userId)).held).toBe(96));
     expect(await recoverStalledClips(ctx.project.id)).toBe(0); // too young
     await raw.query(`update story_projects set gen_claimed_at = now() - interval '${STALE_CLAIM_MS / 1000 + 5} seconds' where id = $1`, [ctx.project.id]);
     expect(await recoverStalledClips(ctx.project.id)).toBe(2);
@@ -659,8 +659,8 @@ describe('carry 7: money standard on the start path', () => {
     expect((await shotRows(ctx.project.id)).every((s) => s.status === 'still_ready')).toBe(true);
     expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
     _setShotsDeps();
-    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 84 });
-    expect((await balance(ctx.userId)).held).toBe(84);
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 96 });
+    expect((await balance(ctx.userId)).held).toBe(96);
   });
 
   it('recovery of a start that queued some jobs keeps their shares and releases only the rest', async () => {
@@ -672,16 +672,16 @@ describe('carry 7: money standard on the start path', () => {
         return n === 1 ? enqueue(args) : new Promise(() => {});
       },
     });
-    startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 126 });
+    startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 144 });
     await vi.waitFor(async () => expect(await clipJobs(ctx.project.id)).toHaveLength(1));
     await raw.query(`update story_projects set gen_claimed_at = now() - interval '60 seconds' where id = $1`, [ctx.project.id]);
     expect(await recoverStalledClips(ctx.project.id)).toBe(2);
-    expect((await balance(ctx.userId)).held).toBe(42);
+    expect((await balance(ctx.userId)).held).toBe(48);
     _setShotsDeps();
     await finishJobs(ctx.project.id);
     const b = await balance(ctx.userId);
     expect(b.held).toBe(0);
-    expect(b.available).toBe(2000 - 42);
+    expect(b.available).toBe(2000 - 48);
     const rows = await shotRows(ctx.project.id);
     expect(rows.filter((s) => s.status === 'ready')).toHaveLength(1);
     expect(rows.filter((s) => s.status === 'still_ready')).toHaveLength(2);
@@ -696,7 +696,7 @@ describe('carry 7: money standard on the start path', () => {
     await finishJobs(ctx.project.id);
     const b = await balance(ctx.userId);
     expect(b.held).toBe(0);
-    expect(b.available).toBe(2000 - 90 - 42);
+    expect(b.available).toBe(2000 - 90 - 48);
   });
 });
 
@@ -743,7 +743,7 @@ describe('carry 8: runner and delete', () => {
 describe('carry 9: per-quality minimum seconds', () => {
   it('prices an economy shot at its 4 second minimum and asks the provider for 4', async () => {
     expect(await quoteShot({ quality: 'economy', seconds: 3 })).toBe(32);
-    expect(await quoteShot({ quality: 'standard', seconds: 3 })).toBe(33);
+    expect(await quoteShot({ quality: 'standard', seconds: 3 })).toBe(24);
     const ctx = await newProject({ n: 2, quality: 'economy' });
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
     expect(q.total).toBe(64);
@@ -773,7 +773,7 @@ describe('carry 1: GET /status', () => {
     expect(body.project.id).toBe(ctx.project.id);
     expect(body.project).not.toHaveProperty('gen_claim_id');
     expect(body.project).not.toHaveProperty('pending_shots');
-    expect(body.balance).toMatchObject({ held: 42, available: 2000 - 42 });
+    expect(body.balance).toMatchObject({ held: 48, available: 2000 - 48 });
     expect(body.render).toBeNull();
     expect(body.audio).toHaveProperty('narration');
     expect(body.cast[0]).toMatchObject({ name: 'Maya', retry_credits: 0, regen_credits: 0 });
@@ -781,7 +781,7 @@ describe('carry 1: GET /status', () => {
     expect(s0).toHaveProperty('needs_rebuild', false);
     expect(s0).toHaveProperty('retry_credits');
     expect(s0).toHaveProperty('still_credits');
-    expect(s1).toMatchObject({ clip_credits: 42, clip_price: 42, reroll_credits: null });
+    expect(s1).toMatchObject({ clip_credits: 48, clip_price: 48, reroll_credits: null });
     const job = body.jobs.find((j) => j.kind === 'clip');
     expect(Object.keys(job).sort()).toEqual(['created_at', 'error', 'id', 'kind', 'payload', 'project_id', 'shot_id', 'status', 'updated_at']);
     expect(job.payload).toEqual({ shotId: ctx.shots[0].id });
@@ -913,7 +913,7 @@ describe('round 1', () => {
         return holdCredits(args);
       },
     });
-    const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 126 }).catch((e) => e);
+    const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 144 }).catch((e) => e);
     expect(err.status).toBe(409);
     expect(await clipJobs(pid)).toHaveLength(0);
     expect((await balance(ctx.userId)).held).toBe(0);
@@ -934,15 +934,15 @@ describe('round 1', () => {
         return enqueue(args);
       },
     });
-    const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 126 }).catch((e) => e);
+    const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 144 }).catch((e) => e);
     _setShotsDeps();
     expect(err.status).toBe(409);
     expect(await clipJobs(pid)).toHaveLength(1);
-    expect((await balance(ctx.userId)).held).toBe(42);
+    expect((await balance(ctx.userId)).held).toBe(48);
     await finishJobs(pid);
     const b = await balance(ctx.userId);
     expect(b.held).toBe(0);
-    expect(charged(await ledger(ctx.userId))).toBe(42);
+    expect(charged(await ledger(ctx.userId))).toBe(48);
     const rows = await shotRows(pid);
     expect(rows.filter((s) => s.status === 'ready')).toHaveLength(1);
     expect(rows.filter((s) => s.status === 'still_ready')).toHaveLength(2);
@@ -967,7 +967,7 @@ describe('round 1', () => {
         return job;
       },
     });
-    await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 84 }).catch((e) => e);
+    await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 96 }).catch((e) => e);
     _setShotsDeps();
     const jobs = await clipJobs(pid);
     const late = jobs.find((j) => j.status === 'running');
@@ -1001,7 +1001,7 @@ describe('round 1', () => {
         throw new Error('database unavailable');
       },
     });
-    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 90 + 84 })).rejects.toThrow('database unavailable');
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 90 + 96 })).rejects.toThrow('database unavailable');
     expect(await balance(ctx.userId)).toMatchObject({ held: 0, available: 2000 });
     expect((await projectRow(ctx.project.id)).fee_charged).toBe(false);
   });
@@ -1028,7 +1028,7 @@ describe('round 1', () => {
     const ctx = await newProject({ n: 2, feeCharged: false });
     await generateAll(ctx);
     await finishJobs(ctx.project.id);
-    expect(await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).toMatchObject({ total: 0, shotIds: [], spent: 90 + 84 });
+    expect(await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).toMatchObject({ total: 0, shotIds: [], spent: 90 + 96 });
   });
 
   it('G6: a blocked shot stays out of the default set until its description changes', async () => {
@@ -1057,7 +1057,7 @@ describe('round 1', () => {
     await generateAll(ctx);
     await finishJobs(ctx.project.id);
     await storyDb().update('story_projects', { id: ctx.project.id }, { rerolls_used: 1 });
-    await expect(rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id })).rejects.toMatchObject({ code: 'quote_changed', extra: { credits: 42 } });
+    await expect(rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id })).rejects.toMatchObject({ code: 'quote_changed', extra: { credits: 48 } });
     expect((await balance(ctx.userId)).held).toBe(0);
   });
 
@@ -1120,7 +1120,7 @@ describe('round 2', () => {
       },
     });
     try {
-      const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 84 }).catch((e) => e);
+      const err = await startGeneration({ userId: ctx.userId, projectId: pid, confirmTotal: 96 }).catch((e) => e);
       expect(err.status).toBe(409);
     } finally {
       open?.();
@@ -1170,7 +1170,7 @@ describe('round 2', () => {
         return enqueue(args);
       },
     });
-    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 84 });
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: 96 });
     expect((await projectRow(ctx.project.id)).step).toBe('review');
   });
 

@@ -27,10 +27,10 @@ afterEach(() => {
 
 describe('quoting', () => {
   it('applies the 3 second minimum', async () => {
-    expect(await quoteShot({ quality: 'pro_narrated', seconds: 2.2 })).toBe(42);
+    expect(await quoteShot({ quality: 'pro_narrated', seconds: 2.2 })).toBe(48);
   });
   it('rounds seconds up', async () => {
-    expect(await quoteShot({ quality: 'standard', seconds: 4.1 })).toBe(55);
+    expect(await quoteShot({ quality: 'standard', seconds: 4.1 })).toBe(40);
   });
   it('throws on unknown quality or bad seconds', async () => {
     await expect(quoteShot({ quality: 'ultra', seconds: 5 })).rejects.toThrow(/quality/);
@@ -40,8 +40,8 @@ describe('quoting', () => {
   it('quotes 15 pro_narrated 3 second shots plus the fee as 720', async () => {
     const shots = Array.from({ length: 15 }, () => ({ quality: 'pro_narrated', seconds: 3 }));
     const q = await quoteProject({ shots, feeAlreadyCharged: false });
-    expect(q.total).toBe(720);
-    expect(q.lines.reduce((n, l) => n + l.credits, 0)).toBe(720);
+    expect(q.total).toBe(810);
+    expect(q.lines.reduce((n, l) => n + l.credits, 0)).toBe(810);
     expect(q.lines.some((l) => /fee/i.test(l.label) && l.credits === 90)).toBe(true);
     expect(q.lines.map((l) => l.label)).toContain('15 Pro shots');
   });
@@ -56,7 +56,7 @@ describe('getPricing', () => {
   it('returns defaults when pricing_config is empty', async () => {
     setPricingDb(fakeDb([]));
     const p = await getPricing();
-    expect(p.perSecond).toEqual({ economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 });
+    expect(p.perSecond).toEqual({ economy: 8, standard: 8, pro_narrated: 16, pro_talking: 21 });
     expect(p.projectFee).toBe(90);
     expect(p.included).toEqual({ castRegenPerCharacter: 2, narration: 3, music: 3, chat: 150, render: 1 });
   });
@@ -68,7 +68,7 @@ describe('getPricing', () => {
     ]));
     const p = await getPricing();
     expect(p.projectFee).toBe(100);
-    expect(p.perSecond).toEqual({ economy: 9, standard: 11, pro_narrated: 14, pro_talking: 21 });
+    expect(p.perSecond).toEqual({ economy: 9, standard: 8, pro_narrated: 16, pro_talking: 21 });
     expect(p.billing_v2).toBeUndefined();
     // economy clips are at least 4 seconds (DEFAULTS.minSeconds), so a 3 second shot is priced as 4.
     expect(await quoteShot({ quality: 'economy', seconds: 3 })).toBe(36);
@@ -197,7 +197,7 @@ describe('short video fee', () => {
     expect(short.lines[0]).toEqual({ label: 'Project fee', credits: 45 });
     const long = await quoteProject({ shots, feeAlreadyCharged: false, seconds: 30 });
     expect(long.lines[0]).toEqual({ label: 'Project fee', credits: 90 });
-    expect(short.total).toBe(45 + 55);
+    expect(short.total).toBe(45 + 40);
   });
   it('getPricing reads projectFeeShort from pricing_config', async () => {
     setPricingDb(fakeDb([{ key: 'projectFeeShort', value: 50 }]));
@@ -207,7 +207,7 @@ describe('short video fee', () => {
 
 describe('labels', () => {
   it('has display names', () => {
-    expect(QUALITY_LABELS).toEqual({ economy: 'Budget', standard: 'Standard', pro_narrated: 'Pro', pro_talking: 'Pro talking' });
+    expect(QUALITY_LABELS).toEqual({ economy: 'Budget', standard: 'Standard', pro_narrated: 'Pro', pro_talking: 'Pro Max' });
   });
 });
 
@@ -246,18 +246,18 @@ describe('the 70% rule', () => {
     expect(1 - (PLANS_V2.starter.credits * costPerCredit) / net(PLANS_V2.starter.usd)).toBeLessThan(0.8);
   });
   it('computes exact credits per video', () => {
-    expect(creditsForVideo({ quality: 'pro_narrated', seconds: 45 })).toBe(720);
-    expect(creditsForVideo({ quality: 'standard', seconds: 30 })).toBe(420);
+    expect(creditsForVideo({ quality: 'pro_narrated', seconds: 45 })).toBe(810);
+    expect(creditsForVideo({ quality: 'standard', seconds: 30 })).toBe(330);
     expect(creditsForVideo({ quality: 'pro_talking', seconds: 60 })).toBe(1350);
   });
   it('rounds generated seconds up to whole shots', () => {
-    expect(creditsForVideo({ quality: 'standard', seconds: 10 })).toBe(90 + 11 * 12);
-    expect(creditsForVideo({ quality: 'standard', seconds: 10, shotSeconds: 5 })).toBe(90 + 11 * 10);
-    expect(costOfVideoUsd({ quality: 'standard', seconds: 30 })).toBeCloseTo((0.0755 * 30 + 0.02 * 10) * 1.2 + 0.84, 10);
+    expect(creditsForVideo({ quality: 'standard', seconds: 10 })).toBe(90 + 8 * 12);
+    expect(creditsForVideo({ quality: 'standard', seconds: 10, shotSeconds: 5 })).toBe(90 + 8 * 10);
+    expect(costOfVideoUsd({ quality: 'standard', seconds: 30 })).toBeCloseTo((0.05 * 30 + 0.02 * 10) * 1.2 + 0.84, 10);
   });
   it('counts whole videos per plan', () => {
-    expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(2);
-    expect(videosPerPlan({ credits: 2600, quality: 'standard', seconds: 30 })).toBe(6);
+    expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(1);
+    expect(videosPerPlan({ credits: 2600, quality: 'standard', seconds: 30 })).toBe(7);
     expect(videosPerPlan({ credits: 5400, quality: 'pro_talking', seconds: 60 })).toBe(4);
   });
 });

@@ -8,8 +8,8 @@ export { YEARLY_DISCOUNT, videosPerPlan };
 export const CARD_VIDEO_SECONDS = 45;
 export const MATRIX_LENGTHS = [10, 30, 60, 120];
 export const MATRIX_QUALITIES = [
-  { key: 'standard', label: 'Standard', note: '720p with a narrator.' },
-  { key: 'pro_narrated', label: 'Pro narrated', note: '1080p with a narrator.' },
-  { key: 'pro_talking', label: 'Pro talking', note: '1080p and the characters speak.' },
+  { key: 'standard', label: 'Standard', note: '1080p with voice and sound.' },
+  { key: 'pro_narrated', label: 'Pro', note: '720p with voice and sound.' },
+  { key: 'pro_talking', label: 'Pro Max', note: '1080p with voice and sound.' },
 ];
 export const DEFAULT_MATRIX_QUALITY = 'pro_narrated';

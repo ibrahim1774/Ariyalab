@@ -34,9 +34,16 @@ describe('QUALITIES', () => {
 
 describe('clampSeconds', () => {
   it('clamps Kling qualities to 3..15 and rounds up', () => {
-    expect(clampSeconds('standard', 1)).toBe(3);
+    expect(clampSeconds('pro_narrated', 1)).toBe(3);
     expect(clampSeconds('pro_narrated', 4.2)).toBe(5);
     expect(clampSeconds('pro_talking', 40)).toBe(15);
+    expect(clampSeconds('pro_talking', 'nope')).toBe(3);
+  });
+
+  it('clamps Gemini Omni (standard) to 3..15 and rounds up', () => {
+    expect(clampSeconds('standard', 1)).toBe(3);
+    expect(clampSeconds('standard', 4.2)).toBe(5);
+    expect(clampSeconds('standard', 40)).toBe(15);
     expect(clampSeconds('standard', 'nope')).toBe(3);
   });
 
@@ -66,7 +73,7 @@ describe('submitClip request bodies', () => {
     callbackUrl: 'https://app.example.com/api/story/callback/kie',
   };
 
-  it('economy: Seedance 2.0 Mini 720p, audio off, still as first frame', async () => {
+  it('economy: Seedance 2.0 Mini 720p, audio on, still as first frame', async () => {
     const out = await submitClip({ ...base, quality: 'economy' });
     expect(out).toEqual({ provider: 'kie', taskId: 'task-123' });
     expect(calls).toHaveLength(1);
@@ -81,37 +88,52 @@ describe('submitClip request bodies', () => {
         resolution: '720p',
         duration: '5',
         aspect_ratio: '9:16',
-        generate_audio: false,
+        generate_audio: true,
       },
     });
   });
 
-  it('standard: Kling 3.0 std, sound off', async () => {
+  it('standard: Gemini Omni 1.2 Flash 1080p, audio on (no flag), still as first frame', async () => {
     await submitClip({ ...base, quality: 'standard' });
     expect(JSON.parse(calls[0].init.body)).toEqual({
-      model: 'kling-3.0/video',
+      model: 'google/gemini-omni-flash-1-2',
       callBackUrl: base.callbackUrl,
       input: {
         prompt: base.prompt,
-        image_urls: [base.imageUrl],
-        duration: '5',
+        first_frame_url: base.imageUrl,
+        duration: 5,
+        resolution: '1080p',
         aspect_ratio: '9:16',
-        mode: 'std',
-        sound: false,
-        multi_shots: false,
       },
     });
   });
 
-  it('pro_narrated: Kling 3.0 pro, sound off', async () => {
+  it('standard: reference images go in image_urls (up to 6) only when there is no first frame', () => {
+    const els = [
+      { name: 'a', description: 'x', imageUrls: ['https://a/1.png', 'https://a/2.png', 'https://a/3.png', 'https://a/4.png'] },
+      { name: 'b', description: 'y', imageUrls: ['https://b/1.png', 'https://b/2.png', 'https://b/3.png'] },
+    ];
+    const withStill = buildClipRequest({ ...base, quality: 'standard', elements: els });
+    expect(withStill.input.first_frame_url).toBe(base.imageUrl);
+    expect(withStill.input).not.toHaveProperty('image_urls');
+    const noStill = buildClipRequest({ ...base, imageUrl: undefined, quality: 'standard', elements: els });
+    expect(noStill.input).not.toHaveProperty('first_frame_url');
+    expect(noStill.input.image_urls).toHaveLength(6);
+  });
+
+  it('standard: a short shot is made at the 3 second minimum', () => {
+    expect(buildClipRequest({ ...base, quality: 'standard', seconds: 1 }).input.duration).toBe(3);
+  });
+
+  it('pro_narrated: Kling 3.0 std 720p, sound on', async () => {
     await submitClip({ ...base, quality: 'pro_narrated' });
     const body = JSON.parse(calls[0].init.body);
     expect(body.model).toBe('kling-3.0/video');
-    expect(body.input.mode).toBe('pro');
-    expect(body.input.sound).toBe(false);
+    expect(body.input.mode).toBe('std');
+    expect(body.input.sound).toBe(true);
   });
 
-  it('pro_talking: Kling 3.0 pro, sound on, with character elements', async () => {
+  it('pro_talking: Kling 3.0 pro 1080p, sound on, with character elements', async () => {
     await submitClip({
       ...base,
       quality: 'pro_talking',
@@ -143,11 +165,11 @@ describe('submitClip request bodies', () => {
 
   it('rejects elements with fewer than 2 or more than 4 images, or more than 3 elements', () => {
     const one = [{ name: 'a', description: 'a', imageUrls: ['https://a/1.png'] }];
-    expect(() => buildClipRequest({ ...base, quality: 'standard', elements: one })).toThrow(ProviderError);
+    expect(() => buildClipRequest({ ...base, quality: 'pro_narrated', elements: one })).toThrow(ProviderError);
     const four = Array.from({ length: 4 }, (_, i) => ({
       name: `c${i}`, description: 'x', imageUrls: ['https://a/1.png', 'https://a/2.png'],
     }));
-    expect(() => buildClipRequest({ ...base, quality: 'standard', elements: four })).toThrow(ProviderError);
+    expect(() => buildClipRequest({ ...base, quality: 'pro_narrated', elements: four })).toThrow(ProviderError);
   });
 
   it('rejects an unknown quality', async () => {

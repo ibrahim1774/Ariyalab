@@ -254,6 +254,7 @@ Each of these spends real money; run one only after approving it and its cost.
 - Apify: one live reference link longer than 180 s, to confirm it is refused (today after the download, R9) and what
   the download cost.
 - The spec 13a quality comparison.
+- Gemini Omni request shape and Seedance/Omni sound checked against the live API (field names read from kie.ai 2026-11-17: `first_frame_url`, `image_urls`, `duration` as a number, `resolution`, `aspect_ratio`; no audio field is sent, sound is assumed on; Seedance `generate_audio: true`).
 - Kling element-name format (accents are dropped from names) and the real kie/Kling refusal strings.
 - Meta Ad Library live check.
 - The real Claude connector: add `APP_URL/api/mcp` in claude.ai and in Claude Code and run one tool.

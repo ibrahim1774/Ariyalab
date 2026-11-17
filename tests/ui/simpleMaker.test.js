@@ -115,13 +115,13 @@ describe('screen 1, Describe it', () => {
     const card = screen.getByTestId('quality-chosen');
     expect(card).toHaveTextContent('Standard');
     expect(card).toHaveTextContent('Recommended');
-    expect(card).toHaveTextContent('Narrator voiceover');
-    expect(card).toHaveTextContent('720p');
+    expect(card).toHaveTextContent('Voice and sound made with the video');
+    expect(card).toHaveTextContent('1080p');
     expect(card).toHaveTextContent('Music and captions included');
-    expect(card).toHaveTextContent('Kling 3.0');
+    expect(card).toHaveTextContent('Gemini Omni 1.2 Flash');
     expect(card).toHaveTextContent('MP4, 9:16, about 30 seconds');
     fireEvent.click(screen.getByRole('button', { name: /Change quality/ }));
-    expect(screen.getAllByRole('radio', { name: /^(Budget|Standard|Pro|Pro talking)$/ })).toHaveLength(4);
+    expect(screen.getAllByRole('radio', { name: /^(Budget|Standard|Pro|Pro Max)$/ })).toHaveLength(4);
   });
 
   it('shows the style with a thumbnail and opens the style tiles on change', async () => {

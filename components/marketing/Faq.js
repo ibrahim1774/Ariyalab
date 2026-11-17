@@ -17,7 +17,7 @@ const ITEMS = [
   {
     id: 'quality',
     title: 'What are the quality levels?',
-    body: 'Standard is 720p without sound and is the lighter option. Pro narrated is 1080p with a voice over. Pro talking is 1080p and the characters speak on screen. You choose a level per project and can change it for a single shot.',
+    body: 'Budget is 720p and the lowest cost. Standard is 1080p and the one most people pick. Pro is 720p and Pro Max is 1080p, both from Kling 3.0. Every level makes voice and sound together with the video. You choose a level per project and can change it for a single shot.',
   },
   {
     id: 'credits',
