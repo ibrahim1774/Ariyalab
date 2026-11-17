@@ -115,7 +115,7 @@ function Section({ icon, title, children, ...rest }) {
   );
 }
 
-export default function StepAudio({ project, refresh, onNext, returnTo }) {
+export default function StepAudio({ project, refresh, onNext, returnTo, doneLabel = 'Continue to generate' }) {
   const pricing = usePricing();
   const { goTo } = useMakerNav();
   const [audio, setAudio] = useState(null);
@@ -396,7 +396,7 @@ export default function StepAudio({ project, refresh, onNext, returnTo }) {
 
       <FilesNote project={project} />
       <StepFooter>
-        <Button onClick={onNext}>Continue to generate</Button>
+        <Button onClick={onNext}>{doneLabel}</Button>
         {narrationMissing && (
           <span className={steps.hint}>{narration.status === 'pending' ? 'The narration is still being made.' : 'There is no narration yet, so the video would have no voice.'}</span>
         )}

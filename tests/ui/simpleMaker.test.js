@@ -157,9 +157,11 @@ describe('screen 1, Describe it', () => {
     fireEvent.click(screen.getByRole('button', { name: /Write my script/ }));
     await waitFor(() => expect(client.writeScript).toHaveBeenCalledWith('p1'));
     expect(client.updateProject).toHaveBeenCalledWith('p1', expect.objectContaining({
-      offer: 'A barber turns a bad haircut into a comeback', purpose: 'story', style: '3d_family', seconds: 10, quality: 'standard', mode: 'narrated',
+      offer: 'A barber turns a bad haircut into a comeback', style: '3d_family', seconds: 10, quality: 'standard', mode: 'narrated',
     }));
     expect(client.updateProject.mock.invocationCallOrder[0]).toBeLessThan(client.writeScript.mock.invocationCallOrder[0]);
+    // The purpose is the server's to decide (the script model picks it): the screen never sends one.
+    expect(client.updateProject.mock.calls[0][1]).not.toHaveProperty('purpose');
   });
 
   it('on /app/new it creates the project only on submit, then writes the script, then opens the project', async () => {
@@ -175,7 +177,7 @@ describe('screen 1, Describe it', () => {
     await waitFor(() => expect(routerMock.replace).toHaveBeenCalledWith('/app/p/new1'));
     expect(client.createProject).toHaveBeenCalledTimes(1);
     expect(client.createProject).toHaveBeenCalledWith(expect.objectContaining({
-      title: 'A baker whose bread can talk.', offer: 'A baker whose bread can talk.\nIt is shy.', purpose: 'story', seconds: 30, quality: 'standard', mode: 'narrated', style: '3d_family', aspect: '9:16',
+      title: 'A baker whose bread can talk.', offer: 'A baker whose bread can talk.\nIt is shy.', seconds: 30, quality: 'standard', mode: 'narrated', style: '3d_family', aspect: '9:16',
     }));
     expect(client.writeScript).toHaveBeenCalledWith('new1');
   });
@@ -209,14 +211,14 @@ describe('screen 1, Describe it', () => {
     client.getReference.mockResolvedValue({ id: 'r1', status: 'pending', beats: [] });
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     expect((await screen.findAllByText(/Watching your video shot by shot/)).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /Write my script/ })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Reading your video/ })).toBeDisabled();
     client.getReference.mockResolvedValue({ id: 'r1', status: 'ready', beats: [{ ord: 1 }, { ord: 2 }, { ord: 3 }], hook: 'x', duration: 28 });
     client.updateProject.mockResolvedValue(project());
     client.writeScript.mockResolvedValue({ id: 'sc', version: 1, scenes: [], violations: [] });
     await waitFor(() => expect(screen.getByRole('button', { name: /Write my script/ })).toBeEnabled(), { timeout: 5000 });
     fireEvent.click(screen.getByRole('button', { name: /Write my script/ }));
     await waitFor(() => expect(client.writeScript).toHaveBeenCalledWith('p1'));
-    expect(client.updateProject).toHaveBeenCalledWith('p1', expect.objectContaining({ purpose: 'story' }));
+    expect(client.updateProject.mock.calls[0][1]).not.toHaveProperty('purpose');
   });
 });
 
@@ -245,6 +247,8 @@ function fakeServer(initial = {}) {
   const snap = () => JSON.parse(JSON.stringify(s));
   client.getStatus.mockImplementation(async () => snap());
   client.getScript.mockResolvedValue(SCRIPT);
+  client.setPlanRequested.mockImplementation(async (id, requested) => { calls.push(['marker', requested]); s.project.plan_requested = requested; return { plan_requested: requested }; });
+  client.pickCast.mockImplementation(async (id, castId, i) => { calls.push(['pick', castId, i]); (s.cast.find((c) => c.id === castId) || {}).chosen_index = i; return { cast: s.cast }; });
   client.getPlanQuote.mockResolvedValue({ total: 90, castFee: 90, stills: 0, lines: [{ key: 'fee', credits: 90 }, { key: 'pictures', credits: 0 }, { key: 'voice', credits: 0 }, { key: 'music', credits: 0 }] });
   client.startCast.mockImplementation(async (id, expected) => { calls.push(['cast', expected]); s.cast = [castRow()]; s.project.step = 'cast'; s.project.fee_charged = true; return { cast: s.cast }; });
   client.buildShots.mockImplementation(async () => { calls.push(['build']); s.shots = [shotRow(1), shotRow(2)]; s.project.step = 'storyboard'; return {}; });
@@ -290,15 +294,16 @@ describe('screen 2, Check the script', () => {
     const { calls } = fakeServer();
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' }));
-    await waitFor(() => expect(calls.map((c) => c[0])).toEqual(['cast', 'build', 'stills', 'narration', 'music']), { timeout: 8000 });
-    expect(calls[0]).toEqual(['cast', 90]);
-    expect(calls[2]).toEqual(['stills', ['sh1', 'sh2'], 0]);
-    expect(calls[3]).toEqual(['narration', 0]);
-    expect(calls[4]).toEqual(['music', 0]);
+    await waitFor(() => expect(calls.map((c) => c[0]).filter((t) => t !== 'marker')).toEqual(['cast', 'build', 'stills', 'narration', 'music']), { timeout: 8000 });
+    expect(calls[0]).toEqual(['marker', true]);
+    expect(calls[1]).toEqual(['cast', 90]);
+    expect(calls.find((c) => c[0] === 'stills')).toEqual(['stills', ['sh1', 'sh2'], 0]);
+    expect(calls.find((c) => c[0] === 'narration')).toEqual(['narration', 0]);
+    expect(calls.find((c) => c[0] === 'music')).toEqual(['music', 0]);
     expect(await screen.findByRole('heading', { name: /Check the plan/ })).toBeInTheDocument();
     // Nothing is started twice, however long the screen stays open.
     await new Promise((r) => setTimeout(r, 300));
-    expect(calls).toHaveLength(5);
+    expect(calls.filter((c) => c[0] !== 'marker')).toHaveLength(5);
   });
 
   it('different people in every scene: the cast stage is skipped', async () => {
@@ -306,7 +311,7 @@ describe('screen 2, Check the script', () => {
     client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [{ key: 'fee', credits: 0 }, { key: 'pictures', credits: 0 }] });
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     fireEvent.click(await screen.findByRole('button', { name: /Looks good, design my video/ }));
-    await waitFor(() => expect(calls.map((c) => c[0])).toEqual(['build', 'stills', 'narration', 'music']), { timeout: 8000 });
+    await waitFor(() => expect(calls.map((c) => c[0]).filter((t) => t !== 'marker')).toEqual(['build', 'stills', 'narration', 'music']), { timeout: 8000 });
     expect(client.startCast).not.toHaveBeenCalled();
   });
 
@@ -320,9 +325,9 @@ describe('screen 2, Check the script', () => {
     expect(screen.getByTestId('plan-note')).toHaveTextContent(/price changed/i);
     await new Promise((r) => setTimeout(r, 400));
     expect(client.startCast).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c[0] !== 'marker')).toEqual([]);
     fireEvent.click(screen.getByRole('button', { name: 'Looks good, design my video (120 credits)' }));
-    await waitFor(() => expect(calls[0]).toEqual(['cast', 120]), { timeout: 8000 });
+    await waitFor(() => expect(calls.find((c) => c[0] === 'cast')).toEqual(['cast', 120]), { timeout: 8000 });
   });
 
   it('a 402 stops the pipeline, shows the top up path and starts nothing else', async () => {
@@ -335,7 +340,7 @@ describe('screen 2, Check the script', () => {
     expect(within(alert).getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
     await new Promise((r) => setTimeout(r, 300));
     expect(client.startCast).toHaveBeenCalledTimes(1);
-    expect(calls).toEqual([]);
+    expect(calls.filter((c) => c[0] !== 'marker')).toEqual([]);
   });
 
   it('a start already running in another tab (409 busy) only refreshes, and carries on from what it finds', async () => {
@@ -347,16 +352,16 @@ describe('screen 2, Check the script', () => {
     });
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' }));
-    await waitFor(() => expect(calls.map((c) => c[0])).toEqual(['build', 'stills', 'narration', 'music']), { timeout: 8000 });
+    await waitFor(() => expect(calls.map((c) => c[0]).filter((t) => t !== 'marker')).toEqual(['build', 'stills', 'narration', 'music']), { timeout: 8000 });
     expect(client.startCast).toHaveBeenCalledTimes(1);
   });
 
   it('after a reload it resumes only what is missing and only what costs nothing', async () => {
     // Cast picked, shots built, no pictures yet: only the pictures (0 credits), then the audio.
-    const { calls } = fakeServer({ project: project({ step: 'storyboard', fee_charged: true }), cast: [castRow()], shots: [shotRow(1), shotRow(2)] });
+    const { calls } = fakeServer({ project: project({ step: 'storyboard', fee_charged: true, plan_requested: true }), cast: [castRow()], shots: [shotRow(1), shotRow(2)] });
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     expect(await screen.findByRole('heading', { name: /Check the plan/ })).toBeInTheDocument();
-    await waitFor(() => expect(calls.map((c) => c[0])).toEqual(['stills', 'narration', 'music']), { timeout: 8000 });
+    await waitFor(() => expect(calls.map((c) => c[0]).filter((t) => t !== 'marker')).toEqual(['stills', 'narration', 'music']), { timeout: 8000 });
     expect(client.startCast).not.toHaveBeenCalled();
     expect(client.buildShots).not.toHaveBeenCalled();
   });
@@ -643,5 +648,148 @@ describe('screen 4, Watch and fix', () => {
     fireEvent.click(await screen.findByRole('button', { name: /Play scene 1/ }));
     const video = await screen.findByLabelText('Scene 1 clip');
     expect(video.getAttribute('src')).toBe('/c1.mp4');
+  });
+});
+
+// ---------------------------------------------------------------- fix round 1
+
+describe('I5: the video wait cannot be skipped by typing', () => {
+  const pendingVideo = () => {
+    client.getStatus.mockResolvedValue(status({ project: project({ step: 'breakdown', reference_id: 'r1', offer: null }) }));
+    client.getReference.mockResolvedValue({ id: 'r1', status: 'pending', beats: [] });
+  };
+  it('typing in the optional box does not enable "Write my script" while the video is being read', async () => {
+    pendingVideo();
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findAllByText(/Watching your video shot by shot/);
+    fireEvent.change(screen.getByLabelText('Describe your idea'), { target: { value: 'Make it funny' } });
+    expect(screen.getByRole('button', { name: 'Reading your video…' })).toBeDisabled();
+  });
+  it('"Write it without the video" is the only way past, and says the video will not be used', async () => {
+    pendingVideo();
+    client.updateProject.mockResolvedValue(project());
+    client.writeScript.mockResolvedValue({ id: 'sc', version: 1, scenes: [], violations: [] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findAllByText(/Watching your video shot by shot/);
+    fireEvent.change(screen.getByLabelText('Describe your idea'), { target: { value: 'A baker whose bread can talk' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Write it without the video' }));
+    expect(screen.getByTestId('skip-note')).toHaveTextContent('The video will not be used');
+    fireEvent.click(screen.getByRole('button', { name: /Write my script/ }));
+    await waitFor(() => expect(client.writeScript).toHaveBeenCalledWith('p1'));
+  });
+});
+
+describe('I4: the purpose is the server\'s, shown on screen 2 with change', () => {
+  it('shows the purpose the script model picked and changes it with the existing options', async () => {
+    fakeServer({ project: project({ step: 'script', purpose: 'story' }) });
+    client.updateProject.mockResolvedValue(project({ purpose: 'product' }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const line = await screen.findByTestId('purpose-line');
+    expect(line).toHaveTextContent('Just a story');
+    fireEvent.click(within(line).getByRole('button', { name: 'Change what this video is for' }));
+    fireEvent.click(within(line).getByRole('radio', { name: 'A product' }));
+    await waitFor(() => expect(client.updateProject).toHaveBeenCalledWith('p1', { purpose: 'product' }));
+  });
+});
+
+describe('I7: different people in every scene', () => {
+  it('says the fee is charged when the video is made, with its amount, and the make total includes it', async () => {
+    fakeServer({ project: project({ step: 'script', consistent_cast: false }) });
+    client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, feeLater: 90, stills: 0, lines: [{ key: 'fee', label: 'Project fee', credits: 0, included: false, later: 90 }, { key: 'pictures', label: 'Storyboard pictures', credits: 0, included: true }] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('button', { name: /Looks good, design my video/ });
+    expect(screen.getByTestId('plan-lines')).toHaveTextContent('Project fee90 credits, charged when you make the video');
+    expect(screen.getByTestId('plan-lines')).not.toHaveTextContent('Project feeincluded');
+    cleanup();
+    // On screen 3 the "Make my video" total is the server quote, which carries that fee, and its lines are listed.
+    client.getStatus.mockResolvedValue(planStatus({ project: project({ step: 'audio', consistent_cast: false, fee_charged: false }), cast: [] }));
+    client.getQuote.mockImplementation(async (id, ids) => ({ total: 90 + ids.length * 33, lines: [{ label: 'Project fee', credits: 90 }, { label: `${ids.length} Standard shots`, credits: ids.length * 33 }], shotIds: ids }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByRole('button', { name: 'Make my video (189 credits)' })).toBeEnabled();
+    expect(screen.getByLabelText('What making the video costs')).toHaveTextContent('Project fee90 credits');
+  });
+});
+
+describe('I6: free parts start only after the press, in one tab', () => {
+  it('a project with no press (the detailed editor) starts nothing by itself and offers one button', async () => {
+    const { calls } = fakeServer({ project: project({ step: 'storyboard', fee_charged: true }), cast: [castRow()], shots: [shotRow(1), shotRow(2)] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const carry = await screen.findByRole('button', { name: 'Carry on designing (included)' });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls).toEqual([]);
+    fireEvent.click(carry);
+    await waitFor(() => expect(calls.map((c) => c[0]).filter((t) => t !== 'marker')).toEqual(['stills', 'narration', 'music']), { timeout: 8000 });
+  });
+
+  it('two tabs on one project: only the tab holding the lock builds, once', async () => {
+    const held = new Set();
+    vi.stubGlobal('navigator', { ...navigator, locks: { request: (name, opts, cb) => {
+      if (opts?.ifAvailable && held.has(name)) return Promise.resolve(cb(null));
+      held.add(name);
+      return Promise.resolve(cb({ name }));
+    } } });
+    const { calls } = fakeServer({ project: project({ step: 'cast', fee_charged: true, plan_requested: true }), cast: [castRow()] });
+    render(<><div data-tab="a"><SimpleMaker id="p1" returnTo="/app/p/p1" /></div><div data-tab="b"><SimpleMaker id="p1" returnTo="/app/p/p1" /></div></>);
+    await waitFor(() => expect(calls.map((c) => c[0]).filter((t) => t !== 'marker')).toEqual(['build', 'stills', 'narration', 'music']), { timeout: 8000 });
+    await new Promise((r) => setTimeout(r, 300));
+    expect(client.buildShots).toHaveBeenCalledTimes(1);
+    expect(client.makeStills.mock.calls.every(([, ids]) => ids.every((id) => ['sh1', 'sh2'].includes(id)))).toBe(true);
+  });
+
+  it('clears the marker once the plan is complete', async () => {
+    const { calls } = fakeServer({ project: project({ step: 'audio', fee_charged: true, plan_requested: true }), cast: [castRow()], shots: [shotRow(1, { still_url: '/a.png', status: 'still_ready' })], audio: done });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await waitFor(() => expect(calls).toContainEqual(['marker', false]));
+  });
+});
+
+describe('I8: no endless spinner on the characters', () => {
+  it('a character ready with no look gets its first option picked when the plan was pressed', async () => {
+    const open = castRow({ id: 'c7', name: 'Mia', chosen_index: null, image_url: null, candidates: [{ url: '/a.png' }, { url: '/b.png' }] });
+    const { calls } = fakeServer({ project: project({ step: 'cast', fee_charged: true, plan_requested: true }), cast: [open] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await waitFor(() => expect(calls).toContainEqual(['pick', 'c7', 0]));
+  });
+
+  it('without the press it says "Pick a look for Mia" with the options inline, and picks nothing itself', async () => {
+    const open = castRow({ id: 'c7', name: 'Mia', chosen_index: null, image_url: null, candidates: [{ url: '/a.png' }, { url: '/b.png' }] });
+    const { calls } = fakeServer({ project: project({ step: 'cast', fee_charged: true }), cast: [open] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const card = await screen.findByTestId('pick-look');
+    expect(card).toHaveTextContent('Pick a look for Mia');
+    await new Promise((r) => setTimeout(r, 300));
+    expect(calls).toEqual([]);
+    fireEvent.click(within(card).getByRole('button', { name: 'Pick Mia, option 2' }));
+    await waitFor(() => expect(client.pickCast).toHaveBeenCalledWith('p1', 'c7', 1));
+  });
+
+  it('a character stuck as a draft is started again (no fee once cast rows exist)', async () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { calls } = fakeServer({ project: project({ step: 'cast', fee_charged: true, plan_requested: true }), cast: [castRow({ status: 'draft', chosen_index: null, image_url: null, candidates: [], updated_at: old })] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await waitFor(() => expect(client.startCast).toHaveBeenCalledWith('p1', 0));
+    expect(calls.filter((c) => c[0] === 'cast')).toHaveLength(1);
+  });
+
+  it('a wait that lasts too long gets a message and a next step', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    fakeServer({ project: project({ step: 'cast', fee_charged: true, plan_requested: true }), cast: [castRow({ status: 'pending', chosen_index: null, image_url: null, candidates: [], updated_at: new Date().toISOString() })], jobs: [{ id: 'j', kind: 'cast_image', status: 'running', payload: { castId: 'c1' } }] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('heading', { name: /Check the plan/ });
+    await act(async () => { vi.advanceTimersByTime(5 * 60_000 + 100); });
+    expect(await screen.findByTestId('plan-stalled')).toHaveTextContent(/longer than usual/);
+    expect(screen.getByRole('button', { name: 'Look again' })).toBeInTheDocument();
+  });
+});
+
+describe('the voice and music dialog', () => {
+  it('says Done, not "Continue to generate"', async () => {
+    client.getAudio.mockResolvedValue({ plan: { voiceId: 'v', music: { type: 'generated', prompt: '' }, captions: { on: true, style: 'clean' } }, voices: [{ id: 'v', name: 'Sienna', gender: 'f', sampleUrl: '/s.mp3' }], applicable: { narration: true, narrationLines: 2 }, narration: { status: 'ready', credits: 0, free_left: 3, included: 3, used: 0 }, music: { type: 'generated', status: 'ready', credits: 0, free_left: 3, included: 3, used: 0 }, uploads: {} });
+    client.getStatus.mockResolvedValue(planStatus());
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Narrator/ }));
+    const dialog = await screen.findByRole('dialog');
+    expect(await within(dialog).findByRole('button', { name: 'Done' })).toBeInTheDocument();
+    expect(dialog).not.toHaveTextContent('Continue to generate');
   });
 });

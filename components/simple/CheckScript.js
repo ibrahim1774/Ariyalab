@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import Button from '../ui/Button';
 import { getScript, updateScene } from '../../lib/story/client';
+import { PURPOSES } from '../maker/StepPurpose';
 import ErrorNotice from '../maker/ErrorNotice';
 import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
@@ -90,7 +91,48 @@ function Scene({ scene, n, notes, onSave, returnTo }) {
  * Screen 2, Check the script: the scenes (editable in place), and "Looks good, design my video (N credits)", N from the
  * server's quote (/quote-plan). Pressing it starts the plan pipeline (usePlanPipeline), which the page keeps running.
  */
-export default function CheckScript({ project, plan, refresh, returnTo, revisit = null }) {
+/** The purpose the script model picked, as a small line with "change" (the existing purpose options). */
+function PurposeLine({ project, save, refresh, returnTo }) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const current = PURPOSES.find((p) => p.id === project.purpose);
+  if (!current) return null;
+  async function pick(id) {
+    if (id === project.purpose) return setOpen(false);
+    setBusy(true);
+    setError(null);
+    try {
+      await save({ purpose: id });
+      await refresh?.();
+      setOpen(false);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div className={styles.purposeLine} data-testid="purpose-line">
+      <span>This video is: <strong>{current.label}</strong>.</span>{' '}
+      <button type="button" className={styles.linkButton} aria-expanded={open} aria-label="Change what this video is for" onClick={() => setOpen((v) => !v)}>change</button>
+      {open && (
+        <div className={styles.purposeOptions} role="radiogroup" aria-label="What this video is for">
+          {PURPOSES.map((p) => (
+            <label key={p.id} className={`${styles.chip} ${project.purpose === p.id ? styles.optionOn : ''}`}>
+              <input type="radio" name="simple-purpose" aria-label={p.label} checked={project.purpose === p.id} disabled={busy} onChange={() => pick(p.id)} />
+              <strong>{p.label}</strong>
+            </label>
+          ))}
+          <p className={styles.hint}>To make the script follow it, ask the chat helper to rewrite it.</p>
+        </div>
+      )}
+      <ErrorNotice error={error} returnTo={returnTo} />
+    </div>
+  );
+}
+
+export default function CheckScript({ project, plan, refresh, save: saveProject, returnTo, revisit = null }) {
   const [script, setScript] = useState(undefined);
   const [loadError, setLoadError] = useState(null);
   const [attempt, setAttempt] = useState(0);
@@ -127,6 +169,7 @@ export default function CheckScript({ project, plan, refresh, returnTo, revisit 
         done={Boolean(script)}
       />
 
+      {script && <PurposeLine project={project} save={saveProject} refresh={refresh} returnTo={returnTo} />}
       {loadError && <ErrorNotice error={loadError} returnTo={returnTo} onRefresh={() => setAttempt((n) => n + 1)} onRetry={() => setAttempt((n) => n + 1)} />}
       {script === undefined && !loadError && <p className={styles.muted} role="status">Loading your script…</p>}
       {script === null && <p className={styles.muted}>There is no script yet. Go back to Describe it and write one.</p>}
@@ -147,7 +190,10 @@ export default function CheckScript({ project, plan, refresh, returnTo, revisit 
       {q && !revisit && (
         <ul className={styles.planLines} data-testid="plan-lines" aria-label="What designing your video costs">
           {q.lines.filter((l) => l.label).map((l) => (
-            <li key={l.key}><span>{l.label}</span><span>{priceText(l.credits)}</span></li>
+            <li key={l.key}>
+              <span>{l.label}</span>
+              <span>{l.later ? `${priceText(l.later)}, charged when you make the video` : priceText(l.credits)}</span>
+            </li>
           ))}
         </ul>
       )}
@@ -164,7 +210,7 @@ export default function CheckScript({ project, plan, refresh, returnTo, revisit 
       <Dock
         label="Designing your video"
         total={q ? q.total : undefined}
-        meta={q ? 'Characters, storyboard, voice and music' : undefined}
+        meta={q ? (q.feeLater > 0 ? `Project fee: ${priceText(q.feeLater)}, charged when you make the video` : 'Characters, storyboard, voice and music') : undefined}
         hint={working ? stage || 'Getting started…' : !q && !plan.quoteError ? 'Working out the price…' : null}
       >
         <Button disabled={!q || working || script === undefined || scenes.length === 0} onClick={plan.design}>

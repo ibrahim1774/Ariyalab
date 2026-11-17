@@ -1,7 +1,7 @@
 // The simple maker's decisions are pure functions of the status payload: which screen, what the pipeline does next, scenes, auto render.
 import { describe, it, expect } from 'vitest';
 import {
-  deriveScreen, nextPlanAction, actionKey, confirmedFrom, scenesOf, nextScenes, shouldAutoRender, guessPurpose, lengthCredits, SCREENS,
+  deriveScreen, nextPlanAction, actionKey, confirmedFrom, scenesOf, nextScenes, shouldAutoRender, lengthCredits, SCREENS, audioIssues, FREE_STARTS,
 } from '../../components/simple/derive';
 import { DEFAULTS } from '../../lib/pricingConstants';
 
@@ -57,9 +57,26 @@ describe('what the pipeline does next', () => {
   it('different people in every scene: no cast stage, straight to the shots', () => {
     expect(nextPlanAction(st({ project: project({ consistent_cast: false }) }))).toEqual({ type: 'build' });
   });
-  it('waits while characters are drawn and while the first looks are picked', () => {
-    expect(nextPlanAction(st({ cast: [castRow({ status: 'pending', chosen_index: null, image_url: null })] }))).toMatchObject({ type: 'wait', what: ['characters'] });
-    expect(nextPlanAction(st({ cast: [castRow({ chosen_index: null, image_url: null })] }))).toMatchObject({ type: 'wait', what: ['looks'] });
+  it('waits while characters are drawn', () => {
+    const fresh = new Date().toISOString();
+    expect(nextPlanAction(st({ cast: [castRow({ status: 'pending', chosen_index: null, image_url: null, updated_at: fresh })] }))).toMatchObject({ type: 'wait', what: ['characters'] });
+  });
+  it('a character that is ready with no look picked gets its first option picked (the pick call), never a spinner', () => {
+    const open = castRow({ id: 'c9', name: 'Mia', chosen_index: null, image_url: null, candidates: [{ url: '/a.png' }, { url: '/b.png' }] });
+    expect(nextPlanAction(st({ cast: [open] }))).toEqual({ type: 'pick', castId: 'c9', name: 'Mia' });
+    // No options at all: nothing to pick, the customer is told.
+    expect(nextPlanAction(st({ cast: [{ ...open, candidates: [] }] }))).toMatchObject({ type: 'blocked', what: ['characters'] });
+  });
+  it('a character left as a draft with nothing running is started again (no fee once cast rows exist); a fresh one is waited for', () => {
+    const old = new Date(Date.now() - 10 * 60_000).toISOString();
+    const draft = castRow({ status: 'draft', chosen_index: null, image_url: null, updated_at: old });
+    expect(nextPlanAction(st({ cast: [draft] }))).toEqual({ type: 'resume_cast', expected: 0 });
+    const running = [{ kind: 'cast_image', status: 'running', payload: { castId: draft.id } }];
+    expect(nextPlanAction(st({ cast: [draft], jobs: running })).type).toBe('wait');
+    expect(nextPlanAction(st({ cast: [{ ...draft, updated_at: new Date().toISOString() }] })).type).toBe('wait');
+  });
+  it('lists the free starts that need the customer\'s press first', () => {
+    expect(FREE_STARTS.sort()).toEqual(['build', 'music', 'narration', 'pick', 'resume_cast', 'stills']);
   });
   it('a failed or blocked character stops the pipeline, it does not wait forever', () => {
     expect(nextPlanAction(st({ cast: [castRow({ status: 'failed', chosen_index: null, image_url: null })] }))).toMatchObject({ type: 'blocked', what: ['characters'] });
@@ -165,19 +182,49 @@ describe('the final render starts by itself only when it should', () => {
     expect(shouldAutoRender({ ...base(), render: { status: 'done', created_at: '2026-11-16T11:00:00Z' } })).toBe(false);
     expect(shouldAutoRender({ ...base(), render: { status: 'failed', created_at: '2026-11-16T11:00:00Z' } })).toBe(false);
   });
+  it('not while the voice or music is missing or failed, nor while a clip is out of date', () => {
+    expect(shouldAutoRender({ ...base(), audio: audio({ status: 'failed' }) })).toBe(false);
+    expect(shouldAutoRender({ ...base(), audio: audio({}, { status: 'none' }) })).toBe(false);
+    expect(shouldAutoRender({ ...base(), shots: [{ ...ready('1', 0), stale: true }, ready('2', 1)] })).toBe(false);
+    expect(shouldAutoRender({ ...base(), shots: [{ ...ready('1', 0), needs_rebuild: true }, ready('2', 1)] })).toBe(false);
+  });
+  it('never when a finished render exists, whatever the price', () => {
+    expect(shouldAutoRender({ ...base(), renders: [{ status: 'done', created_at: '2026-11-16T05:00:00Z' }] })).toBe(false);
+  });
   it('a later render has a price and needs a click', () => {
     expect(shouldAutoRender({ ...base(), render: { status: 'done', created_at: '2026-11-16T09:00:00Z' }, renderPrice: { credits: 5 } })).toBe(false);
     expect(shouldAutoRender({ ...base(), renderPrice: null })).toBe(false);
   });
 });
 
-describe('small helpers', () => {
-  it('guesses a purpose from the idea and falls back to story', () => {
-    expect(guessPurpose('A barber turns a bad haircut into a comeback story')).toBe('story');
-    expect(guessPurpose('Launch my new skincare product')).toBe('product');
-    expect(guessPurpose('An app that tracks sleep')).toBe('app');
-    expect(guessPurpose('')).toBe('story');
+describe('voice and music that block the video', () => {
+  it('lists what is missing, failed or blocked, with the price of the button that fixes it', () => {
+    expect(audioIssues(audio())).toEqual([]);
+    expect(audioIssues(audio({ status: 'none', credits: 5 }))).toEqual([{ kind: 'voice', status: 'none', credits: 5, retry: false }]);
+    expect(audioIssues(audio({ status: 'failed', credits: 5, retry_credits: 0 }, { status: 'blocked', credits: 5 }))).toEqual([
+      { kind: 'voice', status: 'failed', credits: 0, retry: true }, { kind: 'music', status: 'blocked', credits: 5, retry: false },
+    ]);
+    expect(audioIssues(audio({ status: 'pending' }))).toEqual([]);
   });
+  it('a talking video has no voice to wait for, and music that is off is not missing', () => {
+    expect(audioIssues({ applicable: { narration: false, narrationLines: 0 }, narration: { status: 'none' }, music: { type: 'none', status: 'none' } })).toEqual([]);
+  });
+});
+
+describe('scenes that are out of date', () => {
+  it('a ready clip whose picture or script changed is out of date, and offers its own start ids', () => {
+    const r = shot({ id: '1', ord: 0, scene_id: 'a', status: 'ready', still_url: '/x', clip_url: '/c.mp4', stale: true, clip_credits: 33 });
+    const [scene] = scenesOf([r]);
+    expect(scene.state).toBe('outdated');
+    expect(scene.startIds).toEqual(['1']);
+  });
+  it('a blocked clip is a failed scene that carries the server words, even with nothing to start', () => {
+    const [scene] = scenesOf([shot({ id: '1', status: 'blocked', still_url: '/x', error: 'The picture was blocked.', clip_credits: null })]);
+    expect(scene).toMatchObject({ state: 'failed', blocked: true, error: 'The picture was blocked.', startIds: [] });
+  });
+});
+
+describe('small helpers', () => {
   it('prices a length at a quality with the setup fee until it is paid', () => {
     const p = { fee_charged: false };
     const full = lengthCredits(DEFAULTS, p, 30, 'standard');

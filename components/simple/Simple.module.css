@@ -213,3 +213,8 @@ button.stripImg:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .changePanel { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .changePanel p { margin: 0; }
 .changeRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+
+.purposeLine { font-size: 14px; color: var(--text-dim); }
+.purposeLine strong { color: var(--text); }
+.purposeOptions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.purposeOptions .hint { flex: 1 1 100%; }

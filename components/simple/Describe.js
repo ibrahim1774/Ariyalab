@@ -11,7 +11,7 @@ import { usePricing } from '../maker/PricingContext';
 import StepReference from '../maker/StepReference';
 import { StyleImage, Skeleton } from '../maker/Tiles';
 import { titleFromIdea } from '../maker/StepStart';
-import { DEFAULT_QUALITY, DEFAULT_SECONDS, DEFAULT_STYLE, guessPurpose, hasScript, lengthCredits, lengthLabel } from './derive';
+import { DEFAULT_QUALITY, DEFAULT_SECONDS, DEFAULT_STYLE, hasScript, lengthCredits, lengthLabel } from './derive';
 import { Announce, BillingLink, Dock, ScreenHead, count, priceText } from './parts';
 import styles from './Simple.module.css';
 
@@ -111,6 +111,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
   const [qualityOpen, setQualityOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
   const [videoOpen, setVideoOpen] = useState(false);
+  const [skipVideo, setSkipVideo] = useState(false);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [available, setAvailable] = useState(null);
@@ -132,7 +133,9 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
   const referenceReady = fromVideo && reference?.status === 'ready';
   const referenceFailed = fromVideo && reference?.status === 'failed';
   const hasIdea = Boolean(idea.trim());
-  const canWrite = !busy && (scripted || hasIdea || referenceReady);
+  // While the video is still being broken down the script waits for it; the only way past is to say the video will not be used.
+  const mustWait = waiting && !skipVideo;
+  const canWrite = !busy && !mustWait && (scripted || hasIdea || referenceReady);
 
   const costs = SIMPLE_LENGTHS.map((n) => ({ n, credits: lengthCredits(pricing, project, n, quality) }));
   const anyShort = available !== null && costs.some((c) => c.credits > available);
@@ -140,7 +143,6 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
 
   const briefFields = () => ({
     ...(hasIdea ? { offer: idea.trim().slice(0, 1000) } : {}),
-    purpose: project?.purpose || guessPurpose(idea),
     style,
     ...(style === 'custom' ? { style_custom: custom } : {}),
     seconds,
@@ -187,7 +189,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
     }
   }
 
-  const label = busy || (scripted ? backLabel : 'Write my script');
+  const label = busy || (mustWait ? 'Reading your video…' : scripted ? backLabel : 'Write my script');
 
   return (
     <form className={styles.screen} onSubmit={submit} data-screen="describe">
@@ -199,6 +201,11 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
             <>
               <Skeleton status="Watching your video shot by shot" line="This takes about a minute. The page updates by itself." ratio="16 / 5" />
               <Announce>Watching your video shot by shot</Announce>
+              {skipVideo ? (
+                <p className={styles.hint} data-testid="skip-note">Your script will be written from your idea only. The video will not be used.</p>
+              ) : (
+                <button type="button" className={styles.linkButton} onClick={() => setSkipVideo(true)}>Write it without the video</button>
+              )}
             </>
           )}
           {referenceReady && (
@@ -241,7 +248,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
               ensureProject={async () => {
                 if (project?.id) return project.id;
                 if (created.current) return created.current;
-                const made = await onCreate({ title: 'Video from a reference', purpose: 'story', style, seconds, ...qualityPatch(quality), aspect: '9:16' });
+                const made = await onCreate({ title: 'Video from a reference', style, seconds, ...qualityPatch(quality), aspect: '9:16' });
                 created.current = made.id;
                 return made.id;
               }}
@@ -325,7 +332,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
         label="Estimated cost"
         total={lengthCredits(pricing, project, seconds, quality)}
         meta={`${info?.name || 'Standard'}, ${seconds === 120 ? '2 minutes' : `${seconds} seconds`}`}
-        hint={!canWrite && !busy ? (waiting ? 'Your video is being broken down first.' : 'Describe your video to start.') : null}
+        hint={!canWrite && !busy ? (mustWait ? 'Your video is being broken down first.' : waiting ? 'Describe your video to write it without the video.' : 'Describe your video to start.') : null}
       >
         <Button type="submit" disabled={!canWrite}>{label}</Button>
       </Dock>

@@ -1,22 +1,51 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, startCast } from '../../lib/story/client';
-import { actionKey, confirmedFrom, nextPlanAction } from './derive';
+import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, pickCast, setPlanRequested, startCast } from '../../lib/story/client';
+import { FREE_STARTS, actionKey, confirmedFrom, nextPlanAction } from './derive';
 
 const COOL_MS = 4000;
+// A wait older than this gets a message and a next step instead of a spinner.
+export const STALLED_MS = 5 * 60_000;
+const LOCK_RETRY_MS = 5000;
+
+/**
+ * One tab at a time runs the free parts of a plan: a Web Lock named for the project, taken without waiting. Where the API is
+ * missing the tab runs without it. -> true while this tab may run them.
+ */
+export function usePlanLock(projectId, wanted) {
+  const supported = typeof navigator !== 'undefined' && navigator.locks && typeof navigator.locks.request === 'function';
+  const [held, setHeld] = useState(!supported);
+  const release = useRef(null);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    if (!supported || !projectId || !wanted || held) return undefined;
+    let gone = false;
+    navigator.locks.request(`ariya-plan-${projectId}`, { ifAvailable: true }, (lock) => {
+      if (!lock) return undefined;
+      if (gone) return undefined;
+      setHeld(true);
+      return new Promise((resolve) => { release.current = resolve; });
+    }).catch(() => {});
+    const timer = setTimeout(() => setTick((n) => n + 1), LOCK_RETRY_MS);
+    return () => { gone = true; clearTimeout(timer); };
+  }, [supported, projectId, wanted, held, tick]);
+  useEffect(() => () => { release.current?.(); }, []);
+  return held;
+}
 
 /** What the pipeline says it is doing, in plain words, for the progress line and the screen reader. */
 export function stageText(action) {
   if (!action) return '';
   if (action.type === 'cast') return 'Starting your characters';
   if (action.type === 'build') return 'Planning your shots';
+  if (action.type === 'pick') return `Picking a look for ${action.name || 'your character'}`;
+  if (action.type === 'resume_cast') return 'Getting your characters going again';
   if (action.type === 'stills') return 'Drawing the storyboard pictures';
   if (action.type === 'narration') return 'Recording the narration';
   if (action.type === 'music') return 'Composing the music';
   if (action.type === 'wait') {
     const w = action.what || [];
     if (w.includes('characters')) return 'Drawing your characters';
-    if (w.includes('looks')) return 'Picking a look for each character';
     if (w.includes('pictures')) return 'Drawing the storyboard pictures';
     if (w.includes('voice')) return 'Recording the narration';
     if (w.includes('music')) return 'Composing the music';
@@ -52,6 +81,8 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   const sent = useRef(new Set());
   const cool = useRef(new Map());
   const quoteRun = useRef(0);
+  const [stalled, setStalled] = useState(false);
+  const cleared = useRef(false);
   const alive = useRef(true);
   useEffect(() => {
     alive.current = true;
@@ -83,8 +114,15 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   }, [screen, projectId, quoteKey, reloadQuote]);
 
   const action = useMemo(() => nextPlanAction(status, { confirmed }), [status, confirmed]);
-  const enabled = armed || screen === 'plan';
+  const marker = Boolean(project?.plan_requested);
+  const lockHeld = usePlanLock(projectId, (armed || marker) && (screen === 'plan' || screen === 'script'));
+  // Free parts start by themselves only when the customer pressed "Looks good" (this tab now, or the project's marker) AND this
+  // tab holds the project's lock. A project that never had that press (the detailed editor) shows a button instead.
+  const free = FREE_STARTS.includes(action.type);
+  const enabled = screen === 'plan' || armed ? (free ? (armed || marker) && lockHeld : true) : false;
   const actionSig = JSON.stringify(action);
+  const manual = screen === 'plan' && free && !armed && !marker;
+  const otherTab = screen === 'plan' && free && marker && !lockHeld;
 
   useEffect(() => {
     if (action.type === 'done' && armed) {
@@ -92,6 +130,22 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
       setConfirmed({});
     }
   }, [action.type, armed]);
+
+  // The plan is complete: clear the marker (once) so a later visit never starts anything by itself.
+  useEffect(() => {
+    if (action.type !== 'done' || !marker || cleared.current || !projectId || screen !== 'plan') return;
+    cleared.current = true;
+    Promise.resolve(setPlanRequested(projectId, false)).then(() => refresh?.()).catch(() => { cleared.current = false; });
+  }, [action.type, marker, projectId, screen, refresh]);
+
+  // Nothing waits forever: a wait that lasts too long says so (and the screen offers a next step).
+  const waitKey = action.type === 'wait' ? action.what.join(',') : '';
+  useEffect(() => {
+    setStalled(false);
+    if (!waitKey) return undefined;
+    const timer = setTimeout(() => setStalled(true), STALLED_MS);
+    return () => clearTimeout(timer);
+  }, [waitKey]);
 
   useEffect(() => {
     if (!enabled || error || inflight.current || !projectId) return undefined;
@@ -106,7 +160,8 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
     setBusy(true);
     (async () => {
       try {
-        if (action.type === 'cast') await startCast(projectId, action.expected);
+        if (action.type === 'cast' || action.type === 'resume_cast') await startCast(projectId, action.expected);
+        else if (action.type === 'pick') await pickCast(projectId, action.castId, 0);
         else if (action.type === 'build') await buildShots(projectId);
         else if (action.type === 'stills') await makeStills(projectId, action.ids, action.expected);
         else if (action.type === 'narration') await makeNarration(projectId, { expectedCredits: action.expected });
@@ -146,13 +201,35 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   }, [enabled, actionSig, error, projectId, tick]);
 
   /** "Looks good, design my video": the customer confirms the quote they are looking at. */
-  const design = useCallback(() => {
+  const design = useCallback(async () => {
     if (!quote) return;
     setError(null);
     setNote('');
+    try {
+      // The marker first: from now on the free parts of this plan may start by themselves, in this tab.
+      await setPlanRequested(projectId, true);
+    } catch (err) {
+      if (alive.current) setError(err);
+      return;
+    }
+    cleared.current = false;
     setConfirmed(confirmedFrom(quote));
     setArmed(true);
-  }, [quote]);
+  }, [quote, projectId]);
+
+  /** "Carry on designing": the free parts of a plan the customer did not start here (the detailed editor, or an older visit). */
+  const carryOn = useCallback(async () => {
+    setError(null);
+    try {
+      await setPlanRequested(projectId, true);
+    } catch (err) {
+      if (alive.current) setError(err);
+      return;
+    }
+    cleared.current = false;
+    setArmed(true);
+    await Promise.resolve(refresh?.()).catch(() => {});
+  }, [projectId, refresh]);
 
   /** Confirms the price of a part that now costs credits ("Make the pictures (2 credits)"). */
   const confirm = useCallback(() => {
@@ -172,5 +249,5 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
     setTick((n) => n + 1);
   }, []);
 
-  return { quote, quoteError, action, busy, armed, error, note, design, confirm, retry, reloadQuote };
+  return { quote, quoteError, action, busy, armed, error, note, stalled, manual, otherTab, design, carryOn, confirm, retry, reloadQuote };
 }

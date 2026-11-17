@@ -46,19 +46,6 @@ export function deriveScreen(status) {
 
 // ---- the idea box
 
-const PURPOSE_WORDS = [
-  ['app', /\b(app|software|saas|download)\b/i],
-  ['coaching', /\b(coach|coaching|course|mentor)\b/i],
-  ['service', /\b(service|clinic|salon|agency|barbershop|plumber|cleaning|consult)/i],
-  ['product', /\b(product|sell|selling|launch|store|shop|brand|bottle|cream|shoes?)\b/i],
-];
-/** The purpose an idea most likely has. Not asked in the simple flow; a story is the safe default (it needs no offer). */
-export function guessPurpose(text) {
-  const t = String(text || '');
-  for (const [purpose, pattern] of PURPOSE_WORDS) if (pattern.test(t)) return purpose;
-  return 'story';
-}
-
 export const DEFAULT_STYLE = '3d_family';
 export const DEFAULT_QUALITY = 'standard';
 export const DEFAULT_SECONDS = 30;
@@ -71,6 +58,10 @@ export const lengthCredits = (pricing, project, seconds, quality) => estimateCre
 
 // ---- the plan pipeline
 
+// A character left as a draft, or pending with no picture job running, this long is restarted (cast.js generateCast does it, charging nothing).
+const STUCK_DRAFT_MS = 2 * 60_000;
+const STUCK_PENDING_MS = 5 * 60_000;
+
 const picked = (c) => c.chosen_index != null || Boolean(c.image_url);
 const lacksPicture = (s) => isGenerated(s) && !s.still_url;
 
@@ -82,6 +73,8 @@ const lacksPicture = (s) => isGenerated(s) && !s.still_url;
  *   { type: 'narration' | 'music', expected }
  *   { type: 'ask', what, credits, ids? }  a part now costs credits nobody confirmed: show its price, ask again
  *   { type: 'stale' }                 the script changed since the shots were made: rebuild first
+ *   { type: 'pick', castId }          a character is ready with no look picked: its first option
+ *   { type: 'resume_cast' }           a character whose start died: start again (nothing to pay)
  *   { type: 'wait', what: [..] }      something is being made
  *   { type: 'blocked', what: [..] }   something failed or was refused; the customer fixes it on the plan screen
  *   { type: 'done' }                  every part exists
@@ -90,8 +83,8 @@ const lacksPicture = (s) => isGenerated(s) && !s.still_url;
  * confirming; a part that costs more only starts when its price equals what was confirmed (never a number nobody saw).
  * Audio does not depend on the cast, so it can start while pictures are being drawn.
  */
-export function nextPlanAction(status, { confirmed = {} } = {}) {
-  const { project, shots = [], cast = [], audio = null } = status || {};
+export function nextPlanAction(status, { confirmed = {}, now = Date.now() } = {}) {
+  const { project, shots = [], cast = [], audio = null, jobs = [] } = status || {};
   if (!project || !hasScript(project)) return { type: 'none' };
   const actions = [];
   const asks = [];
@@ -105,15 +98,30 @@ export function nextPlanAction(status, { confirmed = {} } = {}) {
     if (cast.length === 0) {
       castClear = false;
       if (confirmed.fee !== undefined) actions.push({ type: 'cast', expected: confirmed.fee });
-    } else if (cast.some((c) => c.status === 'failed' || c.status === 'blocked')) {
-      castClear = false;
-      blocked.push('characters');
-    } else if (cast.some((c) => c.status === 'pending' || c.status === 'draft')) {
-      castClear = false;
-      waits.push('characters');
-    } else if (cast.some((c) => !picked(c))) {
-      castClear = false;
-      waits.push('looks');
+    } else {
+      const running = (c) => jobs.some((j) => j.kind === 'cast_image' && (j.status === 'queued' || j.status === 'running') && j.payload?.castId === c.id);
+      const old = (c, ms) => now - (Date.parse(c.updated_at) || now) > ms;
+      if (cast.some((c) => c.status === 'failed' || c.status === 'blocked')) {
+        castClear = false;
+        blocked.push('characters');
+      }
+      // A character whose start died (still a draft with nothing running) is started again: with cast rows there is no fee, so it is 0.
+      const stuck = cast.filter((c) => (c.status === 'draft' && !running(c) && old(c, STUCK_DRAFT_MS)) || (c.status === 'pending' && !running(c) && old(c, STUCK_PENDING_MS)));
+      if (castClear && stuck.length) {
+        castClear = false;
+        actions.push({ type: 'resume_cast', expected: 0 });
+      } else if (castClear && cast.some((c) => c.status === 'pending' || c.status === 'draft')) {
+        castClear = false;
+        waits.push('characters');
+      } else if (castClear) {
+        const open = cast.filter((c) => !picked(c));
+        if (open.length) {
+          castClear = false;
+          const withOptions = open.find((c) => (c.candidates || []).length > 0);
+          if (withOptions) actions.push({ type: 'pick', castId: withOptions.id, name: withOptions.name });
+          else blocked.push('characters');
+        }
+      }
     }
   }
 
@@ -168,7 +176,10 @@ export function nextPlanAction(status, { confirmed = {} } = {}) {
 }
 
 /** A stable name for an action, so the same start is never sent twice from one screen. */
-export const actionKey = (a) => (!a ? '' : a.type === 'stills' ? `stills:${a.ids.join(',')}` : ['cast', 'build', 'narration', 'music'].includes(a.type) ? a.type : '');
+export const actionKey = (a) => (!a ? '' : a.type === 'stills' ? `stills:${a.ids.join(',')}` : a.type === 'pick' ? `pick:${a.castId}` : ['cast', 'build', 'narration', 'music', 'resume_cast'].includes(a.type) ? a.type : '');
+
+/** Parts the pipeline starts without a price: they need the customer's press (the marker) before they run by themselves. */
+export const FREE_STARTS = ['build', 'stills', 'narration', 'music', 'pick', 'resume_cast'];
 
 /** The amounts a quote lists, by part, as the customer confirms them when pressing the button. */
 export function confirmedFrom(quote) {
@@ -193,16 +204,21 @@ export function scenesOf(shots = []) {
   return order.map((id, i) => {
     const list = byScene.get(id);
     const gen = list.filter(isGenerated);
+    const startIds = startable(list).map((s) => s.id);
     let state = 'waiting';
-    if (gen.length && gen.every((s) => s.status === 'ready')) state = 'ready';
+    if (gen.length && gen.every((s) => s.status === 'ready')) state = startIds.length > 0 || gen.some((s) => s.needs_rebuild) ? 'outdated' : 'ready';
     else if (gen.some((s) => IN_FLIGHT.includes(s.status))) state = 'making';
     else if (gen.some((s) => (s.status === 'failed' || s.status === 'blocked') && s.still_url)) state = 'failed';
+    const broken = gen.find((s) => (s.status === 'failed' || s.status === 'blocked') && s.still_url);
     return {
       id,
       n: i + 1,
       shots: list,
       state,
-      startIds: startable(list).map((s) => s.id),
+      blocked: broken?.status === 'blocked',
+      error: broken?.error || null,
+      startIds,
+      // Out of date: the clip exists but the script or the picture changed after it was made.
       readyShots: list.filter((s) => s.status === 'ready' && s.clip_url),
     };
   });
@@ -224,18 +240,43 @@ const finished = (jobs, kind) => jobs
   .reduce((latest, j) => Math.max(latest, Date.parse(j.updated_at) || 0), 0);
 
 /**
- * True when the final render should start by itself, once: every clip is ready, the voice and music are not still being made,
- * no render is running, none already covers the current clips, and the render is the included one (price 0).
- * A later render has a price and needs a click.
+ * What is missing or failed in the voice and music, for the video to be put together: [{ kind: 'voice' | 'music', status, credits }].
+ * credits is the server's price of the button that fixes it (the retry price after a failure, else a normal make); 0 = included.
+ */
+export function audioIssues(audio) {
+  if (!audio) return [];
+  const out = [];
+  const bad = (st) => st === 'none' || st === 'failed' || st === 'blocked';
+  const n = audio.narration;
+  if (audio.applicable?.narration && audio.applicable.narrationLines > 0 && n && bad(n.status)) {
+    out.push({ kind: 'voice', status: n.status, credits: Number.isInteger(n.retry_credits) && n.status === 'failed' ? n.retry_credits : Number(n.credits) || 0, retry: n.status === 'failed' });
+  }
+  const m = audio.music;
+  if (m && m.type === 'generated' && bad(m.status)) {
+    out.push({ kind: 'music', status: m.status, credits: Number.isInteger(m.retry_credits) && m.status === 'failed' ? m.retry_credits : Number(m.credits) || 0, retry: m.status === 'failed' });
+  }
+  return out;
+}
+
+/** True when a shot's clip is out of date or its storyboard needs a rebuild. */
+export const clipsOutOfDate = (shots = []) => shots.some((s) => s.needs_rebuild || (s.status === 'ready' && s.stale));
+
+/**
+ * True when the final render should start by itself, once: every clip is ready and up to date, the voice and music exist (or are
+ * being made, which waits), no render is running, NO finished render exists yet, and the render is the included one (price 0).
+ * Anything later has a price (or follows a change) and needs a click.
  */
 export function shouldAutoRender(status) {
-  const { project, shots = [], jobs = [], render = null, renderPrice = null, audio = null } = status || {};
+  const { project, shots = [], jobs = [], render = null, renders = [], renderPrice = null, audio = null } = status || {};
   if (!project || project.status === 'expired') return false;
   const gen = shots.filter(isGenerated);
   if (!gen.length || gen.some((s) => s.status !== 'ready')) return false;
+  if (clipsOutOfDate(shots)) return false;
   if (audio?.narration?.status === 'pending' || audio?.music?.status === 'pending') return false;
+  if (audioIssues(audio).length) return false;
   if (renderActive(render)) return false;
   if (renderPrice?.credits !== 0) return false;
+  if (render?.status === 'done' || (renders || []).some((r) => r.status === 'done')) return false;
   if (render) {
     const made = Date.parse(render.created_at) || 0;
     if (made >= finished(jobs, 'clip')) return false;

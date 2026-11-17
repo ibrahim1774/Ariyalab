@@ -119,6 +119,7 @@ function SimpleMakerInner({ id, returnTo }) {
         project={project}
         plan={plan}
         refresh={refresh}
+        save={save}
         returnTo={returnTo}
         revisit={derived !== 'script' ? { label: BACK_LABELS[derived], onBack: () => setManual(null) } : null}
       />

@@ -9,7 +9,7 @@ import StepAudio from '../maker/StepAudio';
 import { Icon, Skeleton, Tile } from '../maker/Tiles';
 import { allStillsReady, isGenerated } from '../maker/steps';
 import { scenesOf, startableIds } from './derive';
-import { Announce, Dock, ScreenHead, withPrice } from './parts';
+import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
 import useStartQuote from './useStartQuote';
 import styles from './Simple.module.css';
@@ -139,6 +139,22 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
   const all = useStartQuote(project.id, picturesOk && !staleShots ? ids : [], { key: sig });
   const first = useStartQuote(project.id, picturesOk && !staleShots && scenes.length > 1 ? sceneIds : [], { key: sig });
 
+  const [pickBusy, setPickBusy] = useState('');
+  const unpicked = cast.filter((c) => c.status === 'ready' && c.chosen_index == null && !c.image_url && (c.candidates || []).length > 0);
+  async function pickLook(castId, index) {
+    setPickBusy(castId);
+    setError(null);
+    try {
+      await pickCast(project.id, castId, index);
+      await refresh?.();
+    } catch (err) {
+      setError(err);
+      if (err?.status === 409) await refresh?.();
+    } finally {
+      setPickBusy('');
+    }
+  }
+
   const action = plan.action;
   const progressText = stageText(action);
   const pipelineBusy = action.type === 'wait' || plan.busy || (plan.armed && action.type !== 'done');
@@ -185,7 +201,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
   const ready = action.type === 'done';
   const canMake = Boolean(all.quote) && !busy && all.quote.shotIds?.length > 0;
   let hint = null;
-  if (!ready && !canMake) hint = progressText || 'Getting your plan ready…';
+  if (!ready && !canMake) hint = action.type === 'blocked' ? 'Something needs a look first. Open it above.' : action.type === 'ask' || action.type === 'stale' ? 'Answer the question above first.' : progressText || 'Getting your plan ready…';
   else if (staleShots) hint = 'Update the storyboard first.';
   else if (!all.quote && all.error && all.error.code !== 'needs_rebuild') hint = 'We could not work out the price. Try again in a moment.';
   else if (!all.quote && ids.length === 0 && picturesOk) hint = 'Every shot is already made.';
@@ -213,7 +229,20 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         </div>
       )}
       {action.type === 'blocked' && (
-        <p className={styles.planNote} role="status">Something needs a look: {action.what.join(', ')}. Open it below to fix or try again.</p>
+        <p className={styles.planNote} role="status" data-testid="plan-blocked">Something needs a look: {action.what.join(', ')}. Open it below to fix it or try again.</p>
+      )}
+      {plan.manual && (
+        <div className={styles.askCard} data-testid="plan-manual">
+          <p>Some parts of your plan are not made yet. Nothing starts until you press the button.</p>
+          <Button onClick={plan.carryOn}>{withPrice('Carry on designing', 0)}</Button>
+        </div>
+      )}
+      {plan.otherTab && <p className={styles.planNote} role="status">Another tab is finishing this plan. This page updates by itself.</p>}
+      {plan.stalled && (
+        <div className={styles.askCard} role="status" data-testid="plan-stalled">
+          <p>This is taking longer than usual. Look again, or open the Detailed editor to see what is happening.</p>
+          <Button variant="ghost" arrow={false} onClick={refresh}>Look again</Button>
+        </div>
       )}
       {plan.note && <p className={styles.planNote} role="status">{plan.note}</p>}
       <ErrorNotice error={plan.error} returnTo={returnTo} onRefresh={refresh} />
@@ -242,6 +271,20 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         )}
       </section>
 
+      {unpicked.map((c) => (
+        <div key={c.id} className={styles.askCard} data-testid="pick-look">
+          <p><strong>Pick a look for {c.name}</strong></p>
+          <div className={styles.optionRow}>
+            {c.candidates.map((o, i) => (
+              <button key={o.key || o.url || i} type="button" className={styles.optionPic} aria-label={`Pick ${c.name}, option ${i + 1}`} disabled={Boolean(pickBusy)} onClick={() => pickLook(c.id, i)}>
+                <img src={o.url} alt="" loading="lazy" />
+                <span>Pick this one</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+
       <section className={styles.block} aria-labelledby="plan-sound">
         <h3 id="plan-sound" className={styles.blockTitle}>Voice and music</h3>
         <div className={styles.soundRow}>
@@ -267,6 +310,11 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         )}
       </section>
 
+      {all.quote && (all.quote.lines || []).length > 1 && (
+        <ul className={styles.planLines} aria-label="What making the video costs">
+          {all.quote.lines.map((l, i) => <li key={`${l.label}-${i}`}><span>{l.label}</span><span>{priceText(l.credits)}</span></li>)}
+        </ul>
+      )}
       {note && <p className={styles.planNote} data-testid="plan-note" role="status">{note}</p>}
       <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
 
@@ -293,7 +341,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         )}
       </Modal>
       <Modal open={audioOpen} onClose={() => setAudioOpen(false)} title="Voice and music" footer={<Button variant="ghost" arrow={false} onClick={() => setAudioOpen(false)}>Close</Button>}>
-        {audioOpen && <StepAudio project={project} refresh={refresh} onNext={() => setAudioOpen(false)} returnTo={returnTo} />}
+        {audioOpen && <StepAudio project={project} refresh={refresh} onNext={() => setAudioOpen(false)} doneLabel="Done" returnTo={returnTo} />}
       </Modal>
     </div>
   );
