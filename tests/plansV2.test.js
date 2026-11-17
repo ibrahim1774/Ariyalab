@@ -190,12 +190,12 @@ describe('v2 lookup keys (CRITICAL carry: recognised before any v2 price is sold
 });
 
 describe('v2 offers from pricing config', () => {
-  it('defaults: PLANS_V2 prices, yearly = 12 x monthly (no discount until the owner sets one)', async () => {
+  it('defaults: PLANS_V2 prices, yearly = 12 x monthly less 15%', async () => {
     await setConfig('plans', undefined);
     await setConfig('yearlyDiscount', undefined);
     const o = v2Offers(await getPricing());
-    expect(o.yearlyDiscount).toBe(0);
-    expect(o.plans.creator).toMatchObject({ usd: 49, credits: 2600, monthlyCents: 4900, yearlyCents: 58800 });
+    expect(o.yearlyDiscount).toBe(0.15);
+    expect(o.plans.creator).toMatchObject({ usd: 49, credits: 2600, monthlyCents: 4900, yearlyCents: 49980 });
     expect(o.topups.s).toEqual({ usd: 15, credits: 700, cents: 1500 });
   });
   it('config overrides, a discount, and bad values fall back to defaults', async () => {
