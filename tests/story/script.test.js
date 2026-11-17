@@ -479,8 +479,9 @@ describe('writeScript', () => {
 
   it('refuses a project with no purpose, or no offer when one is needed, before calling the model', async () => {
     const spy = spyOnScriptMock();
-    const a = await newProject({ purpose: null });
-    await expect(writeScript({ userId: a.userId, projectId: a.project.id })).rejects.toMatchObject({ field: 'purpose' });
+    // No purpose is fine now (the model picks it) but there must be an idea to pick it from.
+    const a = await newProject({ purpose: null, offer: null });
+    await expect(writeScript({ userId: a.userId, projectId: a.project.id })).rejects.toMatchObject({ field: 'offer' });
     const b = await newProject({ offer: null });
     await expect(writeScript({ userId: b.userId, projectId: b.project.id })).rejects.toBeInstanceOf(ValidationError);
     expect(spy).not.toHaveBeenCalled();
@@ -1044,5 +1045,62 @@ describe('fix round 2: rules and prompt', () => {
 
   it('tells the model on a retry to keep the ids it was shown', () => {
     expect(buildRetryMessage([{ sceneId: 's1', rule: 'dash', message: 'x.' }], [{ id: 's1', title: 'A' }])).toMatch(/keep the ids shown in your previous answer/i);
+  });
+});
+
+describe('the script model picks the purpose when the project has none', () => {
+  const projectOf = async (id) => (await storyDb().select('story_projects', { id }))[0];
+  const noPurpose = { purpose: null };
+
+  it('the schema carries a purpose enum of the existing purposes, and the prompt tells the model to decide', async () => {
+    const { SCRIPT_SCHEMA } = await import('../../lib/story/prompts/script.js');
+    expect(SCRIPT_SCHEMA.properties.purpose.enum).toEqual([...PURPOSES]);
+    const system = buildScriptSystem({ purpose: null, offer: 'A bedtime story about a dragon', mode: 'narrated', seconds: 30 });
+    expect(system).toMatch(/did not say what the video is for/i);
+    expect(system).toMatch(/"purpose"/);
+    expect(system).not.toMatch(/[–—]/);
+    // A project with a purpose is told nothing about deciding.
+    expect(buildScriptSystem({ purpose: 'story', offer: 'x' })).not.toMatch(/did not say what the video is for/i);
+  });
+
+  it('writes a script without a purpose, and saves the purpose the model picked (a story when in doubt)', async () => {
+    const { userId, project } = await newProject({ ...noPurpose, offer: 'A bedtime story about a dragon who loves ice cream' });
+    expect(project.purpose).toBeNull();
+    const script = await writeScript({ userId, projectId: project.id });
+    expect(script.scenes.length).toBeGreaterThan(0);
+    expect((await projectOf(project.id)).purpose).toBe('story');
+    expect(script.scenes.some((s) => s.mention)).toBe(false);
+  });
+
+  it('keeps a real purpose the model picks for a real offer', async () => {
+    const { userId, project } = await newProject({ ...noPurpose, offer: 'My new skincare cream [[mock:purpose=product]]' });
+    await writeScript({ userId, projectId: project.id });
+    expect((await projectOf(project.id)).purpose).toBe('product');
+  });
+
+  it('an unknown answer becomes story, and a purpose that needs an offer never lands without one', async () => {
+    const { userId, project } = await newProject({ ...noPurpose, offer: 'A tale' });
+    registerMock('story_script', (input) => ({ ...storyScriptMock(input), purpose: 'banana' }));
+    await writeScript({ userId, projectId: project.id });
+    expect((await projectOf(project.id)).purpose).toBe('story');
+    registerMock('story_script', storyScriptMock);
+  });
+
+  it('never changes a purpose the customer already has', async () => {
+    const { userId, project } = await newProject({ purpose: 'app', offer: 'A sleep app [[mock:purpose=story]]' });
+    await writeScript({ userId, projectId: project.id });
+    expect((await projectOf(project.id)).purpose).toBe('app');
+  });
+
+  it('needs an idea (or a ready breakdown) when there is no purpose', async () => {
+    const { userId, project } = await newProject({ ...noPurpose, offer: null });
+    await expect(writeScript({ userId, projectId: project.id })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('updateProject lets the purpose go back to nothing', async () => {
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const { userId, project } = await newProject({ purpose: 'app', offer: 'x' });
+    const out = await updateProject({ userId, id: project.id, patch: { purpose: null } });
+    expect(out.purpose).toBeNull();
   });
 });
