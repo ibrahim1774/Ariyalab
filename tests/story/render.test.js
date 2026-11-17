@@ -204,6 +204,7 @@ async function newProject({ style = 'serif_accent', captions = true, music = tru
   const userId = randomUUID();
   const track = { fill: media.narration, short: media.short, long: media.long, gappy: media.gappy }[narration];
   const [project] = await storyDb().insert('story_projects', {
+    fee_charged: true,
     user_id: userId, title: 'Render test', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
     narration_url: track.url, narration_key: track.key, narration_seconds: 12, narration_segments: NARRATIONS[narration],
     music_url: music ? media[musicFile].url : null, music_key: music ? media[musicFile].key : null,
@@ -265,6 +266,7 @@ describe('render', () => {
   it('talking mode on 16:9: the clips\' own sound, captions from the shot lines, a footage shot and a framed inset', async () => {
     const userId = randomUUID();
     const [project] = await storyDb().insert('story_projects', {
+    fee_charged: true,
       user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '16:9',
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });
@@ -651,6 +653,7 @@ describe('round 1', () => {
   it('N8: a clip whose sound runs the whole clip (music or ambience) gives no speech window and no line_cut', async () => {
     const userId = randomUUID();
     const [project] = await storyDb().insert('story_projects', {
+    fee_charged: true,
       user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '9:16',
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });
@@ -703,6 +706,7 @@ describe('round 1', () => {
   it('Om5: a talking line cut off by its shot (the clip speaks past the shot) is a warning', async () => {
     const userId = randomUUID();
     const [project] = await storyDb().insert('story_projects', {
+    fee_charged: true,
       user_id: userId, title: 'Talking', style: '3d_family', step: 'review', seconds: 15, quality: 'pro_talking', mode: 'talking', aspect: '9:16',
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
     });

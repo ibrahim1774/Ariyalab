@@ -76,6 +76,7 @@ describe('a 2 minute video', () => {
     const sceneOfShot = (i) => Math.min(15, Math.floor((i * 16) / SHOTS));
     const segments = scenes.map((s, i) => ({ sceneId: s.id, lineIndex: 0, text: s.lines[0].text, start: i * 7.5 + 0.2, end: i * 7.5 + 6.7 }));
     const [project] = await storyDb().insert('story_projects', {
+    fee_charged: true,
       user_id: userId, title: 'Two minutes', style: '3d_family', step: 'review', seconds: 120, quality: 'standard', mode: 'narrated', aspect: '9:16',
       narration_url: voice.url, narration_key: voice.key, narration_seconds: 120, narration_segments: segments,
       audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },

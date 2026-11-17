@@ -48,10 +48,10 @@ beforeEach(async () => {
 
 const SCENES = [{ id: 's1', title: 'Morning', visual: 'A bakery.', lines: [{ speaker: 'narrator', text: 'Once upon a time.' }] }];
 
-async function newProject({ credits = 0 } = {}) {
+async function newProject({ credits = 0, feeCharged = true } = {}) {
   const userId = randomUUID();
   const [project] = await storyDb().insert('story_projects', {
-    user_id: userId, title: 'Charge test', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
+    user_id: userId, title: 'Charge test', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16', fee_charged: feeCharged,
     narration_url: '/api/mock/storage/n.wav', narration_key: 'test/n.wav', narration_seconds: 3,
     narration_segments: [{ sceneId: 's1', lineIndex: 0, text: 'Once upon a time.', start: 0, end: 2 }],
     audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
@@ -420,5 +420,54 @@ describe('render cap fixes', () => {
       await raw.query(`delete from pricing_config where key = 'free_limits'`);
       _resetPricingCache();
     }
+  });
+});
+
+
+describe('the project fee at render (no cast, no clips made)', () => {
+  const feeRows = async (userId) => (await ledger(userId)).filter((r) => r.reason === 'story_project_fee');
+
+  it('a project that never paid the fee pays it once with its first render, shown as its own line', async () => {
+    const ctx = await newProject({ credits: 300, feeCharged: false });
+    const price = await renderPrice(ctx.project);
+    expect(price).toMatchObject({ credits: 90, fee: 90, lines: [{ label: 'Project fee', credits: 90 }, { label: 'Render', credits: 0 }] });
+    expect((await getProjectStatus({ userId: ctx.userId, projectId: ctx.project.id })).renderPrice.fee).toBe(90);
+    const { render, charged } = await startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 90 });
+    expect(charged).toBe(90);
+    expect(await feeRows(ctx.userId)).toEqual([{ reason: 'story_project_fee', amount: 90, ref: `project-fee:${ctx.project.id}` }]);
+    expect((await storyDb().select('story_projects', { id: ctx.project.id }))[0].fee_charged).toBe(true);
+    await finish(render);
+    // A later render pays no second fee.
+    expect(await renderPrice((await storyDb().select('story_projects', { id: ctx.project.id }))[0])).toEqual({ credits: 5 });
+    await startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 5 });
+    expect(await feeRows(ctx.userId)).toHaveLength(1);
+    expect((await balance(ctx.userId)).available).toBe(300 - 90 - 5);
+  });
+
+  it('a different expected price is 409 quote_changed and nothing is spent', async () => {
+    const ctx = await newProject({ credits: 300, feeCharged: false });
+    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id, expectedCredits: 0 })).rejects.toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(await feeRows(ctx.userId)).toHaveLength(0);
+    expect((await balance(ctx.userId)).available).toBe(300);
+  });
+
+  it('not enough credits is 402 with nothing spent and no render left behind', async () => {
+    const ctx = await newProject({ credits: 50, feeCharged: false });
+    await expect(startRender({ userId: ctx.userId, projectId: ctx.project.id })).rejects.toBeInstanceOf(InsufficientCreditsError);
+    expect(await feeRows(ctx.userId)).toHaveLength(0);
+    expect((await balance(ctx.userId)).available).toBe(50);
+    expect(await storyDb().select('story_renders', { project_id: ctx.project.id })).toHaveLength(0);
+  });
+
+  it('a project that paid at cast or clip start pays nothing extra: the flag, or the ledger entry alone', async () => {
+    const paid = await newProject({ credits: 100, feeCharged: true });
+    expect(await renderPrice(paid.project)).toEqual({ credits: 0 });
+    const ledgerOnly = await newProject({ credits: 200, feeCharged: false });
+    const { spendCredits } = await import('../../lib/credits.js');
+    await spendCredits({ userId: ledgerOnly.userId, currency: 'video', amount: 90, reason: 'story_project_fee', ref: `project-fee:${ledgerOnly.project.id}`, projectId: ledgerOnly.project.id });
+    expect(await renderPrice(ledgerOnly.project)).toEqual({ credits: 0 });
+    await startRender({ userId: ledgerOnly.userId, projectId: ledgerOnly.project.id });
+    expect(await feeRows(ledgerOnly.userId)).toHaveLength(1);
+    expect((await storyDb().select('story_projects', { id: ledgerOnly.project.id }))[0].fee_charged).toBe(false);
   });
 });
