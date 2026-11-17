@@ -6,6 +6,7 @@ import Button from '../ui/Button';
 import Card from '../ui/Card';
 import { getAudio, makeMusic, makeNarration, saveAudioPlan, uploadAudio } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { NeedCredits } from './NeedCredits';
 import FilesNote from './FilesNote';
 import { useMakerNav } from './MakerNav';
 import { usePricing } from './PricingContext';
@@ -57,9 +58,15 @@ function TrackBody({ track, kind, regen, ready, none, failedTitle, busy, onMake,
         <div className={styles.actions}>
           {blocked && <Button variant="ghost" arrow={false} onClick={onChange}>{kind === 'narration' ? 'Back to the script' : 'Change the description'}</Button>}
           {canRetry ? (
-            <Button arrow={false} onClick={onRetry} disabled={busy}>{priced('Try again', track.retry_credits)}</Button>
+            <>
+              <Button arrow={false} onClick={onRetry} disabled={busy}>{priced('Try again', track.retry_credits)}</Button>
+              <NeedCredits items={[{ price: track.retry_credits }]} />
+            </>
           ) : (
-            <Button variant={blocked ? 'ghost' : 'primary'} arrow={false} onClick={onMake} disabled={busy}>{again}</Button>
+            <>
+              <Button variant={blocked ? 'ghost' : 'primary'} arrow={false} onClick={onMake} disabled={busy}>{again}</Button>
+              <NeedCredits items={[{ price: track.credits }]} />
+            </>
           )}
         </div>
       </>
@@ -74,6 +81,7 @@ function TrackBody({ track, kind, regen, ready, none, failedTitle, busy, onMake,
         {track.source !== 'upload' && (
           <div className={styles.actions}>
             <Button variant="ghost" arrow={false} onClick={onMake} disabled={busy}>{again}</Button>
+            <NeedCredits items={[{ price: track.credits }]} />
             <span className={steps.hint}>{allowance(track, regen)}</span>
           </div>
         )}
@@ -85,6 +93,7 @@ function TrackBody({ track, kind, regen, ready, none, failedTitle, busy, onMake,
       <Tile icon={none.icon} title={none.title} text={none.text} className={styles.state} />
       <div className={styles.actions}>
         <Button arrow={false} onClick={onMake} disabled={busy}>{priced(none.button, track.credits)}</Button>
+        <NeedCredits items={[{ price: track.credits }]} />
         <span className={steps.hint}>{allowance(track, regen)}</span>
       </div>
     </>

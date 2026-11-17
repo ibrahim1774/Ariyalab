@@ -7,6 +7,7 @@ import buttonStyles from '../ui/Button.module.css';
 import VideoPlayer from '../app/VideoPlayer';
 import FilesNote from './FilesNote';
 import StepFooter from './StepFooter';
+import { NeedCredits } from './NeedCredits';
 import { EmptyState, Icon } from './Tiles';
 import { describeError } from './errors';
 import { clock, downloadFilename, downloadHref, filesExpired, renderActive } from './finish';
@@ -129,6 +130,7 @@ export default function StepFinish({ project, status, refresh }) {
 
   const price = renderPriceLabel(status?.renderPrice);
   const priceKnown = Number.isInteger(status?.renderPrice?.credits);
+  const renderCost = priceKnown ? status.renderPrice.credits : 0;
   const priceLines = Array.isArray(status?.renderPrice?.lines) && status.renderPrice.fee > 0 ? status.renderPrice.lines : null;
   // The price did not come with the status (a read failed): ask again until it does.
   const needsPrice = !priceKnown && !expired && !active;
@@ -203,6 +205,7 @@ export default function StepFinish({ project, status, refresh }) {
                 <span>Download video</span>
               </a>
               {inSide && <Button variant="ghost" arrow={false} onClick={start} disabled={!priceKnown}>{`Make it again${price}`}</Button>}
+              {inSide && renderCost > 0 && <NeedCredits items={[{ price: renderCost }]} />}
             </div>
             {doneRenders.length > 1 && (
               <div className={styles.versions} role="group" aria-label="Versions">
@@ -231,7 +234,7 @@ export default function StepFinish({ project, status, refresh }) {
 
       {!shown && <FilesNote project={project} />}
       {errorLine}
-      {!inSide && <StepFooter>{primary}</StepFooter>}
+      {!inSide && <StepFooter>{primary}{!active && !busy && renderCost > 0 && <NeedCredits items={[{ price: renderCost }]} />}</StepFooter>}
     </div>
   );
 }

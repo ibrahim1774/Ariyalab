@@ -1322,3 +1322,21 @@ describe('e2e round 1: the change card appears where the choice is made', () => 
     expect(screen.queryByTestId('style-redo')).toBeNull();
   });
 });
+
+describe('e2e round 1: shortfall lines inside the dialogs and the detailed pieces', () => {
+  it('the voice and music dialog says what is missing under a priced "Make it again"', async () => {
+    client.getBilling.mockResolvedValue({ v2: true, balance: { plan: 0, topup: 2, held: 0, available: 2 }, history: [] });
+    client.getAudio.mockResolvedValue({ plan: { voiceId: 'v', music: { type: 'generated', prompt: '' }, captions: { on: true, style: 'clean' } }, voices: [{ id: 'v', name: 'Sienna', gender: 'f', sampleUrl: '/s.mp3' }], applicable: { narration: true, narrationLines: 2 }, narration: { status: 'ready', credits: 5, free_left: 0, included: 3, used: 3 }, music: { type: 'generated', status: 'ready', credits: 5, free_left: 0, included: 3, used: 3 }, uploads: {} });
+    client.getStatus.mockResolvedValue(planStatus({ balance: { plan: 0, topup: 2, held: 0, available: 2 } }));
+    client.getScript.mockResolvedValue(SCRIPT);
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, 0));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Narrator/ }));
+    const dialog = await screen.findByRole('dialog');
+    const again = await within(dialog).findAllByRole('button', { name: 'Make it again (5 credits)' });
+    expect(again[0]).toBeEnabled();
+    const need = await within(dialog).findAllByTestId('need-credits');
+    expect(need[0]).toHaveTextContent('You need 3 more credits.');
+    expect(within(need[0]).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
+  });
+});

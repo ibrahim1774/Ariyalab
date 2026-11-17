@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import { buildShots, makeStills } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { NeedCredits } from './NeedCredits';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import ShotCard from './ShotCard';
@@ -82,9 +83,12 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
         <>
           <div className={styles.toolbar}>
             {needPictures.length > 0 && (
+              <>
               <Button onClick={() => run('stills', () => makeStills(project.id, needPictures.map((s) => s.id), ...(pricedAll ? [picturesCost] : [])))} disabled={busy === 'stills'}>
                 {busy === 'stills' ? 'Starting…' : `Make pictures for ${needPictures.length} shot${needPictures.length === 1 ? '' : 's'}${picturesCost > 0 ? `, ${picturesCost} credits` : ''}`}
               </Button>
+              {picturesCost > 0 && <NeedCredits items={[{ price: picturesCost }]} />}
+              </>
             )}
             {anyStale && (
               <Button variant="ghost" onClick={() => rebuild()} disabled={busy === 'shots'}>{busy === 'shots' ? 'Rebuilding…' : 'Rebuild storyboard'}</Button>
