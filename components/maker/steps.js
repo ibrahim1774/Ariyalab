@@ -1,7 +1,7 @@
 // The maker's step model. The UI has twelve steps; Project.step has nine values
 // ('brief' covers Start, Purpose, Style and Length). Pure helpers, no React.
 
-import { DEFAULTS, projectFeeFor } from '../../lib/pricingConstants';
+import { DEFAULTS, generatedSeconds, plannedShotSeconds, projectFeeFor } from '../../lib/pricingConstants';
 
 export const UI_STEPS = [
   { id: 'start', label: 'Start', server: 'brief' },
@@ -74,21 +74,23 @@ export function missingStills(shots = []) {
 
 // ---- credits (every function takes the pricing from usePricing(); DEFAULTS only stand in while it loads)
 
-const GEN_SHOT_SECONDS = 3;
-
 export const shotCredits = (shot, pricing = DEFAULTS) =>
   pricing.perSecond[shot.quality] != null
-    ? pricing.perSecond[shot.quality] * Math.max(pricing.minSeconds?.[shot.quality] ?? 3, Math.ceil(shot.seconds || 3))
+    ? pricing.perSecond[shot.quality] * generatedSeconds(pricing, shot.quality, shot.seconds || 3)
     : 0;
 
-/** Estimate before a real quote exists: the project fee plus the per second rate over whole 3 second shots. */
+/**
+ * The price before a real quote exists: the project fee (once) plus every shot of the default split of the length
+ * (plannedShotSeconds), each priced like the server prices a shot (generatedSeconds x rate). For a default plan this is
+ * exactly the plan step's price; a script that splits the length differently moves only the clip part.
+ */
 export function estimateCredits(project, pricing = DEFAULTS) {
   if (!project) return 0;
   const seconds = project.seconds || 30;
-  const generated = Math.ceil(seconds / GEN_SHOT_SECONDS) * GEN_SHOT_SECONDS;
-  const rate = pricing.perSecond[project.quality || 'standard'] ?? 0;
+  const quality = project.quality || 'standard';
+  const clips = plannedShotSeconds(seconds).reduce((n, s) => n + shotCredits({ quality, seconds: s }, pricing), 0);
   const fee = project.fee_charged ? 0 : projectFeeFor(pricing, project.seconds);
-  return fee + rate * generated;
+  return fee + clips;
 }
 
 /** "2 tries included, then 42 credits" for a shot. Prefers numbers from the status payload. */
