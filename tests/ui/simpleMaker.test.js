@@ -793,3 +793,121 @@ describe('the voice and music dialog', () => {
     expect(dialog).not.toHaveTextContent('Continue to generate');
   });
 });
+
+// ---------------------------------------------------------------- fix round 1, screen 4
+
+describe('screen 4: no dead ends', () => {
+  beforeEach(() => {
+    client.getScript.mockResolvedValue(SCRIPT);
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 40));
+    client.startRender.mockResolvedValue({ id: 'r1', status: 'queued' });
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')] }));
+  });
+  const allReadyWith = (audio, extra = {}) => client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')], audio, ...extra }));
+  const voice = (over) => ({ ...done, narration: { status: 'none', credits: 0, ...over } });
+
+  it('I1: a failed voice blocks the render, says so, and offers the voice again with its price', async () => {
+    allReadyWith(voice({ status: 'failed', credits: 5, retry_credits: 0 }));
+    client.makeNarration.mockResolvedValue({ audio: {}, charged: 0 });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const again = await screen.findByRole('button', { name: 'Make the voice again (included)' });
+    await flush();
+    expect(client.startRender).not.toHaveBeenCalled();
+    expect(screen.queryByText(/Putting your video together/)).toBeNull();
+    fireEvent.click(again);
+    await waitFor(() => expect(client.makeNarration).toHaveBeenCalledWith('p1', { retry: true, expectedCredits: 0 }));
+  });
+
+  it('I1: a missing voice with a price asks with that price, music works the same', async () => {
+    allReadyWith({ ...done, narration: { status: 'none', credits: 5 }, music: { type: 'generated', status: 'none', credits: 0 } });
+    client.makeNarration.mockResolvedValue({}); client.makeMusic.mockResolvedValue({});
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Make the voice again (5 credits)' }));
+    await waitFor(() => expect(client.makeNarration).toHaveBeenCalledWith('p1', { expectedCredits: 5 }));
+    fireEvent.click(screen.getByRole('button', { name: 'Make the music again (included)' }));
+    await waitFor(() => expect(client.makeMusic).toHaveBeenCalledWith('p1', { expectedCredits: 0 }));
+  });
+
+  it('I1: a refused automatic render shows the reason in plain words and a button to try again', async () => {
+    client.startRender.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'audio_not_ready', message: 'The narration is not ready yet.' }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByText(/The narration is not ready yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/It is included\./)).toBeNull();
+    const retry = await screen.findByRole('button', { name: 'Put the video together (included)' });
+    fireEvent.click(retry);
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledTimes(2));
+    expect(client.startRender).toHaveBeenLastCalledWith('p1', 0);
+  });
+
+  it('I1: if no render appears after a while there is a button, never an endless wait', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    client.startRender.mockResolvedValue({ id: 'r1', status: 'queued' });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledTimes(1));
+    await act(async () => { vi.advanceTimersByTime(20_000); });
+    expect(await screen.findByRole('button', { name: 'Put the video together (included)' })).toBeEnabled();
+  });
+
+  it('a render price with a project fee in it is never started by itself: its lines and one priced button', async () => {
+    allReadyWith(done, { renderPrice: { credits: 95, lines: [{ label: 'Project fee', credits: 90 }, { label: 'Put together', credits: 5 }] } });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const button = await screen.findByRole('button', { name: 'Put the video together (95 credits)' });
+    expect(screen.getByLabelText('What putting the video together costs')).toHaveTextContent('Project fee90 credits');
+    await flush();
+    expect(client.startRender).not.toHaveBeenCalled();
+    fireEvent.click(button);
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1', 95));
+  });
+
+  it('I2: a script changed after clips exist says so and rebuilds with the existing call', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a', { needs_rebuild: true }), ready(2, 'b', { needs_rebuild: true })] }));
+    client.buildShots.mockResolvedValue({});
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByTestId('watch-stale')).toHaveTextContent(/script changed/i);
+    expect(client.startRender).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Update the storyboard' }));
+    await waitFor(() => expect(client.buildShots).toHaveBeenCalledWith('p1'));
+  });
+
+  it('I2: a rebuild that would replace finished clips asks first, then sends the token', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a', { needs_rebuild: true }), clipShot(2, 'b')] }));
+    client.buildShots.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'rebuild_loses_clips', body: { count: 1, own: 0, token: 'tok1' } })).mockResolvedValue({});
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Update the storyboard' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('1 finished clip');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Rebuild anyway' }));
+    await waitFor(() => expect(client.buildShots).toHaveBeenLastCalledWith('p1', { confirm: 'tok1' }));
+  });
+
+  it('I2: scenes whose clips are out of date are marked, and remade together with one price', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a', { stale: true, clip_credits: 33 }), ready(2, 'b')] }));
+    client.startGeneration.mockResolvedValue({ shots: [], charged: 40, queued: ['sh1'] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const items = within(await screen.findByRole('list', { name: 'Scenes' })).getAllByRole('listitem');
+    expect(items[0]).toHaveTextContent('Out of date');
+    fireEvent.click(await screen.findByRole('button', { name: 'Make the out-of-date scenes again (40 credits)' }));
+    await waitFor(() => expect(client.startGeneration).toHaveBeenCalledWith('p1', ['sh1'], 40));
+    expect(client.startRender).not.toHaveBeenCalled();
+  });
+
+  it('I3: a blocked clip says what happened on its scene, offers the chat, and the header never says Making', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), clipShot(2, 'b', { status: 'blocked', error: 'The picture was blocked.', clip_credits: null })] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const items = within(await screen.findByRole('list', { name: 'Scenes' })).getAllByRole('listitem');
+    expect(items[1]).toHaveTextContent('The picture was blocked.');
+    expect(screen.getByRole('heading', { name: /Watch and fix/ }).closest('[data-screen]')).not.toHaveTextContent(/Making scene/);
+    expect(screen.getByTestId('dock')).toHaveTextContent(/scene 2 did not come out/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Change scene 2' }));
+    expect(screen.getByLabelText('Message to the chat helper')).toHaveValue('Change scene 2: ');
+  });
+
+  it('I3: a failed clip with a price or none offers Try again with it', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), clipShot(2, 'b', { status: 'failed', clip_credits: 0 })] }));
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, 0));
+    client.startGeneration.mockResolvedValue({});
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try scene 2 again (included)' }));
+    await waitFor(() => expect(client.startGeneration).toHaveBeenCalledWith('p1', ['sh2'], 0));
+  });
+});

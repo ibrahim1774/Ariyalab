@@ -218,3 +218,4 @@ button.stripImg:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .purposeLine strong { color: var(--text); }
 .purposeOptions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .purposeOptions .hint { flex: 1 1 100%; }
+.stripError { font-size: 12px; color: var(--error); overflow-wrap: anywhere; }
