@@ -19,6 +19,7 @@ import {
   _setStoryboardDeps, FREE_FIRST_TRIES, STALE_CLAIM_MS, PENDING_PLAN_MS, sceneSig, _clearSettledStale,
 } from '../../lib/story/storyboard.js';
 import { holdCredits } from '../../lib/credits.js';
+import { updateProject } from '../../lib/story/projects.js';
 import { readFileSync } from 'node:fs';
 import { enqueue } from '../../lib/story/runner.js';
 import { stillHandler } from '../../lib/story/stillJobs.js';
@@ -66,6 +67,7 @@ const SCENES = [
   { id: 's3', title: 'Morning', visual: 'A line of people waits outside at sunrise.', lines: [{ speaker: 'narrator', text: 'By morning there was a line.' }, { speaker: 'narrator', text: 'And it never went away.' }] },
 ];
 const FIVE = ['Maya', 'Leo', 'Ana', 'Sam', 'Rosa'];
+const SEVEN = [...FIVE, 'Zed', 'Ivy'];
 
 async function newProject({ scenes = SCENES, funds = 1000, cast = ['Maya', 'Leo'], product = false, seconds = 18 } = {}) {
   const userId = randomUUID();
@@ -607,7 +609,7 @@ describe('buildShotList', () => {
 
   it('keeps the quality and seconds the customer set on a preserved shot', async () => {
     const { userId, project, shots } = await builtProject();
-    await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { quality: 'pro_narrated' } });
+    await updateProject({ userId, id: project.id, patch: { quality: 'pro_narrated' } });
     await buildShotList({ userId, projectId: project.id });
     const now = await shotRow(shots[0].id);
     expect(now.quality).toBe('pro_narrated');
@@ -663,18 +665,18 @@ describe('generateStills', () => {
     expect((await balance(userId)).available).toBe(1000);
   });
 
-  it('still refs never exceed 3 cast sheets', async () => {
-    const scenes = [{ id: 's1', title: 'Crowd', visual: `${FIVE.join(', ')} all dance in the shop.`, lines: [{ speaker: 'narrator', text: 'Everyone came.' }] },
+  it('still refs never exceed 6 cast sheets', async () => {
+    const scenes = [{ id: 's1', title: 'Crowd', visual: `${SEVEN.join(', ')} all dance in the shop.`, lines: [{ speaker: 'narrator', text: 'Everyone came.' }] },
       { id: 's2', title: 'Two', visual: 'The shop is quiet.', lines: [{ speaker: 'narrator', text: 'Then it was quiet.' }] },
       { id: 's3', title: 'Three', visual: 'The door closes.', lines: [{ speaker: 'narrator', text: 'Goodnight.' }] }];
-    const { userId, project } = await builtProject({ scenes, cast: FIVE, product: true, seconds: 15 });
+    const { userId, project } = await builtProject({ scenes, cast: SEVEN, product: true, seconds: 15 });
     const [crowd] = await shotRows(project.id);
-    expect(crowd.cast_ids).toHaveLength(5);
+    expect(crowd.cast_ids).toHaveLength(7);
     await generateStills({ userId, projectId: project.id, shotIds: [crowd.id] });
     const [job] = await stillJobs(project.id);
     const sheets = job.payload.refs.filter((r) => r.startsWith('/sheet/'));
     expect(sheets).toHaveLength(MAX_CAST_REFS);
-    expect(MAX_CAST_REFS).toBe(3);
+    expect(MAX_CAST_REFS).toBe(6);
     expect(job.payload.refs).toContain('/product/bottle.png');
   });
 
@@ -889,12 +891,23 @@ describe('updateShot', () => {
     expect(shot.still_url).toBeNull();
   });
 
-  it('patching quality only changes the price', async () => {
+  it('a shot cannot have a quality of its own: one video, one model', async () => {
     const { userId, project, shots } = await stilledProject();
-    const before = await shotRow(shots[0].id);
-    const { shot } = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { quality: 'pro_talking' } });
-    expect(shot.quality).toBe('pro_talking');
-    expect({ ...shot, quality: before.quality, updated_at: before.updated_at }).toEqual(before);
+    await expect(updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { quality: 'pro_talking' } })).rejects.toMatchObject({ status: 422, code: 'one_quality' });
+    expect((await shotRow(shots[0].id)).quality).toBe('standard');
+    // The video's own quality is no change.
+    const { shot } = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { quality: 'standard' } });
+    expect(shot.quality).toBe('standard');
+  });
+
+  it('changing the video quality gives every shot the new quality and marks made clips out of date', async () => {
+    const { userId, project, shots } = await stilledProject();
+    await storyDb().update('story_shots', { id: shots[0].id }, { clip_url: '/c.mp4', clip_key: 'c', status: 'ready' });
+    await updateProject({ userId, id: project.id, patch: { quality: 'pro_talking' } });
+    const rows = await shotRows(project.id);
+    expect(rows.every((r) => r.quality === 'pro_talking')).toBe(true);
+    expect(rows[0]).toMatchObject({ stale: true, clip_mismatch: true });
+    expect(rows[1]).toMatchObject({ stale: false, clip_mismatch: false });
   });
 
   it('rejects other keys, bad quality and empty descriptions with 422', async () => {
@@ -1082,7 +1095,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
 
   for (const [name, run] of [
     ['generateStills', (c) => generateStills({ userId: c.userId, projectId: c.project.id, shotIds: [c.shots[1].id] })],
-    ['updateShot', (c) => updateShot({ userId: c.userId, projectId: c.project.id, shotId: c.shots[1].id, patch: { quality: 'economy' } })],
+    ['updateShot', (c) => updateShot({ userId: c.userId, projectId: c.project.id, shotId: c.shots[1].id, patch: { quality: 'standard' } })],
     ['buildShotList', (c) => buildShotList({ userId: c.userId, projectId: c.project.id })],
   ]) {
     it(`a claim left by a crash (hold made, no job) is released and reset by ${name}`, async () => {
@@ -1103,7 +1116,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
     const b = await stilledProject();
     await generateStills({ userId: b.userId, projectId: b.project.id, shotIds: [b.shots[0].id] });
     await age('story_shots', b.shots[0].id, 'still_claimed_at', STALE_CLAIM_MS + 1000);
-    await updateShot({ userId: b.userId, projectId: b.project.id, shotId: b.shots[1].id, patch: { quality: 'economy' } });
+    await updateShot({ userId: b.userId, projectId: b.project.id, shotId: b.shots[1].id, patch: { quality: 'standard' } });
     expect((await shotRow(b.shots[0].id)).status).toBe('still_pending');
     expect((await balance(b.userId)).held).toBe(2);
   });
@@ -1681,5 +1694,74 @@ describe('story flow: scene settings and neighbouring shots', () => {
     const dir = 'supabase/migrations/';
     const sql = readFileSync(`${dir}20261117000400_story_shots_replace_setting.sql`, 'utf8');
     for (const part of ['line_index = case when kept_li[k] is null then line_index else kept_li[k] end', "raise exception 'shots_busy'", "raise exception 'rebuild_loses_clips:%'", 'fresh_free[k]', "(fresh[k] ->> 'lineIndex')::integer"]) expect(sql).toContain(part);
+  });
+});
+
+
+describe('consistency fixes (sound task 4)', () => {
+  const castOf = (projectId) => storyDb().select('story_cast', { project_id: projectId }, { order: 'ord' });
+
+  it('a. editing a description re-matches the cast: an added character is referenced, a removed one is not', async () => {
+    const { userId, project, shots } = await stilledProject();
+    const maya = (await castOf(project.id)).find((c) => c.name === 'Maya');
+    const leo = (await castOf(project.id)).find((c) => c.name === 'Leo');
+    const { shot } = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description: 'Close on Leo, laughing in the doorway.' } });
+    expect(shot.cast_ids).toEqual([leo.id]);
+    const again = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description: 'maya and LEO talk, Leonard watches.' } });
+    expect(new Set(again.shot.cast_ids)).toEqual(new Set([maya.id, leo.id]));
+    await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
+    const job = (await stillJobs(project.id)).at(-1);
+    expect(job.payload.refs).toEqual(expect.arrayContaining(['/sheet/Maya.png', '/sheet/Leo.png']));
+  });
+
+  it('a. same-people off: a description edit adds no characters', async () => {
+    const { userId, project, shots } = await stilledProject();
+    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+    const { shot } = await updateShot({ userId, projectId: project.id, shotId: shots[0].id, patch: { description: 'Maya waves.' } });
+    expect(shot.cast_ids).toEqual(shots[0].cast_ids);
+  });
+
+  it('e. a character with no picture at all blocks starting pictures, in plain words, and charges nothing', async () => {
+    const { userId, project, shots } = await builtProject();
+    const withCast = shots.find((s) => (s.cast_ids || []).length);
+    const [c] = await storyDb().select('story_cast', { id: withCast.cast_ids[0] });
+    await storyDb().update('story_cast', { id: c.id }, { image_url: null, image_key: null, sheet: {} });
+    const before = await balance(userId);
+    await expect(generateStills({ userId, projectId: project.id, shotIds: [withCast.id] })).rejects.toMatchObject({ status: 409, code: 'cast_needed', message: expect.stringContaining(c.name) });
+    expect(await balance(userId)).toEqual(before);
+    expect(await stillJobs(project.id)).toHaveLength(0);
+  });
+
+  it('e. the shot view says which characters are left out: no picture, over the picture limit, over the Kling limit, no sheet', async () => {
+    const scenes = [{ id: 's1', title: 'Crowd', visual: `${SEVEN.join(', ')} all dance.`, lines: [{ speaker: 'narrator', text: 'Everyone came.' }] },
+      { id: 's2', title: 'Two', visual: 'Quiet.', lines: [{ speaker: 'narrator', text: 'Then it was quiet.' }] },
+      { id: 's3', title: 'Three', visual: 'The door closes.', lines: [{ speaker: 'narrator', text: 'Goodnight.' }] }];
+    const { project } = await builtProject({ scenes, cast: SEVEN, seconds: 15 });
+    const { shotsView } = await import('../../lib/story/storyboard.js');
+    const codes = async () => (await shotsView(project.id))[0].warnings.map((w) => w.code);
+    expect(await codes()).toEqual(['character_left_out_of_picture']);
+    await storyDb().update('story_projects', { id: project.id }, { quality: 'pro_narrated' });
+    await storyDb().update('story_shots', { project_id: project.id }, { quality: 'pro_narrated' });
+    expect(await codes()).toEqual(['character_left_out_of_picture', 'character_left_out_of_clip', 'character_left_out_of_clip', 'character_left_out_of_clip', 'character_left_out_of_clip']);
+    await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { sheet: {} });
+    expect(await codes()).toContain('character_not_in_clip');
+    await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { image_url: null, image_key: null });
+    const warnings = (await shotsView(project.id))[0].warnings;
+    expect(warnings.find((w) => w.code === 'character_no_picture').message).toContain('Maya');
+  });
+
+  it('f. a retry takes the pictures as they are now, not the failed job\'s copy', async () => {
+    const { userId, project, shots } = await builtProject();
+    await makeNextStillFail(shots[0].id);
+    await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
+    await finishJobs(project.id);
+    const failed = (await stillJobs(project.id)).at(-1);
+    expect(failed.payload.refs).toContain('/sheet/Maya.png');
+    await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { sheet: { url: '/sheet/Maya-new.png', key: 'sheet-new', from_key: 'pick-Maya' } });
+    await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id], retry: true });
+    const job = (await stillJobs(project.id)).at(-1);
+    expect(job.payload.kind).toBe('retry');
+    expect(job.payload.refs).toContain('/sheet/Maya-new.png');
+    expect(job.payload.refs).not.toContain('/sheet/Maya.png');
   });
 });

@@ -26,7 +26,7 @@ import { sendChat, listChat, buildChatSystem, screenReply, MAX_TOOL_CALLS, CHAT_
 import handler, { config } from '../../pages/api/story/chat.js';
 import confirmHandler, { config as confirmConfig } from '../../pages/api/story/chat/confirm.js';
 import { _setConfirmRunner } from '../../lib/story/chat.js';
-import { runConfirm } from '../../lib/story/chatTools.js';
+import { runConfirm, currentConfirmPrice } from '../../lib/story/chatTools.js';
 import { generateStills, sceneSig } from '../../lib/story/storyboard.js';
 import { quoteGeneration } from '../../lib/story/shots.js';
 
@@ -858,14 +858,33 @@ describe('simple maker tools', () => {
       expect(out.quote.total).toBe(server.total);
     });
 
-    it('shots that already have a clip keep the quality they were made at', async () => {
+    it('with clips already made it asks first, with the price to make them again; confirming marks them out of date and charges nothing', async () => {
       const ctx = await genProject({ n: 2, clips: true });
-      await run(ctx, 'set_quality', { quality: 'pro_narrated' });
-      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.quality === 'standard')).toBe(true);
+      const out = await run(ctx, 'set_quality', { quality: 'pro_narrated' });
+      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'quality', body: { quality: 'pro_narrated', clips: 2 } } });
+      expect(out.confirm.body.remake_credits).toBeGreaterThan(0);
+      // Nothing moved yet.
+      expect((await projectRow(ctx.project.id)).quality).toBe('standard');
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.quality === 'standard' && !sh.stale)).toBe(true);
+      expect(await currentConfirmPrice({ userId: ctx.userId, projectId: ctx.project.id, confirm: out.confirm })).toBe(0);
+      const before = await ledgerCount(ctx.userId);
+      await runConfirm({ userId: ctx.userId, projectId: ctx.project.id, confirm: out.confirm });
+      expect((await projectRow(ctx.project.id)).quality).toBe('pro_narrated');
+      const shots = await storyDb().select('story_shots', { project_id: ctx.project.id });
+      expect(shots.every((sh) => sh.quality === 'pro_narrated' && sh.stale && sh.clip_mismatch)).toBe(true);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+    });
+
+    it('the quality card goes stale when the price to make the clips again changes', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      const out = await run(ctx, 'set_quality', { quality: 'pro_narrated' });
+      await storyDb().update('story_shots', { project_id: ctx.project.id }, { seconds: 6 });
+      expect(await currentConfirmPrice({ userId: ctx.userId, projectId: ctx.project.id, confirm: out.confirm })).toBeNull();
     });
 
     it('with no shots yet, it quotes the estimate for the length (fee plus 3 second shots)', async () => {
       const ctx = await newProject();
+      await storyDb().update('story_projects', { id: ctx.project.id }, { quality: 'economy' });
       const out = await run(ctx, 'set_quality', { quality: 'standard' });
       const pricing = await getPricing();
       expect(out.quote).toMatchObject({ estimate: true, total: pricing.projectFee + pricing.perSecond.standard * 30 });
@@ -874,6 +893,44 @@ describe('simple maker tools', () => {
     it('refuses an unknown quality', async () => {
       const ctx = await newProject();
       expect(await run(ctx, 'set_quality', { quality: 'ultra' })).toMatchObject({ ok: false, error: 'validation_failed' });
+    });
+  });
+
+  describe('set_style (what is already made is in the old look)', () => {
+    it('with nothing made yet it changes the style at once', async () => {
+      const ctx = await newProject();
+      const out = await run(ctx, 'set_style', { style: 'anime' });
+      expect(out).toMatchObject({ ok: true, changed: 'project', project: { style: 'anime' } });
+    });
+
+    it('with pictures made it asks first; confirming marks pictures, clips and characters out of date and charges nothing', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'Friendly.', status: 'ready', image_url: '/pick/m.png', image_key: 'm' });
+      const out = await run(ctx, 'set_style', { style: 'anime' });
+      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'style', body: { style: 'anime', pictures: 2, clips: 2, characters: 1 } } });
+      expect((await projectRow(ctx.project.id)).style).not.toBe('anime');
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
+      expect(await currentConfirmPrice({ userId: ctx.userId, projectId: ctx.project.id, confirm: out.confirm })).toBe(0);
+      const before = await ledgerCount(ctx.userId);
+      await runConfirm({ userId: ctx.userId, projectId: ctx.project.id, confirm: out.confirm });
+      expect((await projectRow(ctx.project.id)).style).toBe('anime');
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale && sh.clip_mismatch)).toBe(true);
+      expect((await storyDb().select('story_cast', { project_id: ctx.project.id }))[0].style_stale).toBe(true);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+    });
+
+    it('the card goes stale when what it counted changes', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      const out = await run(ctx, 'set_style', { style: 'anime' });
+      await storyDb().update('story_shots', { id: ctx.shots[0].id }, { clip_url: null, clip_key: null });
+      expect(await currentConfirmPrice({ userId: ctx.userId, projectId: ctx.project.id, confirm: out.confirm })).toBeNull();
+    });
+
+    it('a style change through the project route marks the same things (no card needed to be safe)', async () => {
+      const ctx = await genProject({ n: 1 });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: '2d_cartoon' } });
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id }))[0]).toMatchObject({ stale: true, clip_mismatch: true });
     });
   });
 

@@ -64,6 +64,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       <div className={styles.castHead}>
         <h3>{cast.name}</h3>
         {cast.description && <p>{cast.description}</p>}
+        {cast.style_stale && <p role="note"><small>Drawn in the old art style. Make new pictures to match the new one.</small></p>}
       </div>
 
       {pending && (

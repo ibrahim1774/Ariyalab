@@ -14,6 +14,7 @@ import { Skeleton } from '../maker/Tiles';
 import { audioIssues, clipsOutOfDate, lastClipAt, nextScenes, renderOutdated, scenesOf, shouldAutoRender } from './derive';
 import { Announce, Check, Dock, ScreenHead, priceText, withPrice } from './parts';
 import useStartQuote from './useStartQuote';
+import ShotWarnings from '../maker/ShotWarnings';
 import styles from './Simple.module.css';
 
 const STATE_TEXT = { ready: 'Ready', outdated: 'Out of date', making: 'Making', waiting: 'Waiting', failed: 'Did not work' };
@@ -359,6 +360,8 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
       )}
 
       {failedRender && <p className={styles.planNote} role="alert">The video could not be put together. {render?.error || 'Try again.'}</p>}
+
+      <ShotWarnings shots={generated} />
 
       <ol className={styles.strip} aria-label="Scenes">
         {scenes.map((s) => {

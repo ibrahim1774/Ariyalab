@@ -947,6 +947,13 @@ describe('carry 1: GET /status', () => {
 
 // ---------------------------------------------------------------- round 1
 
+/** The video's quality changes for every shot (the only way a shot's quality changes); -> the row of shot `sid` after. */
+async function setQuality(ctx, quality, sid) {
+  const { updateProject } = await import('../../lib/story/projects.js');
+  await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality } });
+  return (await storyDb().select('story_shots', { id: sid }))[0];
+}
+
 describe('round 1', () => {
   const storyboardMod = () => import('../../lib/story/storyboard.js');
 
@@ -958,7 +965,7 @@ describe('round 1', () => {
     await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
     await finishJobs(ctx.project.id);
     await raw.query("update story_shots set description = 'A calm shot' where id = $1", [sid]);
-    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_talking' } });
+    await setQuality(ctx, 'pro_talking', sid);
     q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
     expect(q.total).toBe(6 * 21);
     await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
@@ -977,7 +984,7 @@ describe('round 1', () => {
     await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
     await finishJobs(ctx.project.id);
     await raw.query("update story_shots set description = 'A calm shot' where id = $1", [sid]);
-    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'economy' } });
+    await setQuality(ctx, 'economy', sid);
     const v = (await getStatus(ctx)).body.shots[0];
     expect(v.clip_credits).toBe(6 * 7);
     q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
@@ -997,7 +1004,8 @@ describe('round 1', () => {
     await raw.query("update story_shots set description = description || ' [[mock:fail]]' where id = $1", [sid]);
     await rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, expectedCredits: 0 });
     await finishJobs(ctx.project.id);
-    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { description: 'A completely different shot of a beach.', quality: 'pro_talking' } });
+    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { description: 'A completely different shot of a beach.' } });
+    await setQuality(ctx, 'pro_talking', sid);
     await raw.query("update story_shots set still_url = '/still/new.png', still_key = 'still-new', status = 'still_ready' where id = $1", [sid]);
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [sid] });
     expect(q.total).toBe(6 * 21);
@@ -1014,7 +1022,7 @@ describe('round 1', () => {
     await generateAll(ctx, [sid]);
     await finishJobs(ctx.project.id);
     expect((await getStatus(ctx)).body.rerolls).toEqual({ included: 1, used: 0, left: 1 });
-    const { shot } = await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_talking' } });
+    const shot = await setQuality(ctx, 'pro_talking', sid);
     expect(shot).toMatchObject({ stale: true, clip_mismatch: true });
     await expect(rerollShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, expectedCredits: 0 })).rejects.toMatchObject({ code: 'reroll_not_available' });
     expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [sid] })).total).toBe(63);
@@ -1269,14 +1277,14 @@ describe('round 2', () => {
     await generateAll(ctx);
     await finishJobs(ctx.project.id);
     const sid = ctx.shots[0].id;
-    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'standard' } });
+    await setQuality(ctx, 'standard', sid);
     expect(await shotRow(sid)).toMatchObject({ stale: true, clip_mismatch: true });
-    const { shot } = await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_narrated' } });
+    const shot = await setQuality(ctx, 'pro_narrated', sid);
     expect(shot).toMatchObject({ stale: false, clip_mismatch: false });
     // Not after a description change since the clip.
-    await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'standard' } });
+    await setQuality(ctx, 'standard', sid);
     await raw.query("update story_shots set description = 'Something else' where id = $1", [sid]);
-    const again = await patch({ userId: ctx.userId, projectId: ctx.project.id, shotId: sid, patch: { quality: 'pro_narrated' } });
+    const again = { shot: await setQuality(ctx, 'pro_narrated', sid) };
     expect(again.shot.stale).toBe(true);
   });
 

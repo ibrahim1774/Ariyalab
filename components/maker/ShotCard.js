@@ -11,6 +11,7 @@ import useMediaQuery from './useMediaQuery';
 import AssetPicker, { AssetThumb } from './AssetPicker';
 import { Skeleton, Tile } from './Tiles';
 import { INSET_RANGE } from '../../lib/story/assetRules';
+import ShotWarnings from './ShotWarnings';
 import styles from './ShotCard.module.css';
 
 export const STATUS_LABELS = {
@@ -32,14 +33,14 @@ function toPercent(inset) {
   return { x: pick(inset?.x, 50), y: pick(inset?.y, 30), w: pick(inset?.w, 45) };
 }
 
-/** Qualities a shot can switch between: every level makes sound, so the mode (who speaks) does not limit it. */
+/** Qualities a video can use (all make sound). A shot does not pick its own: one video uses one model. */
 export function qualityChoices() {
   return ['economy', 'standard', 'pro_narrated', 'pro_talking'];
 }
 
 /**
  * One shot in the storyboard grid: still, line, seconds, quality, status. With `editable` it also has re-roll still,
- * edit description, change quality and the "my footage" slot. `children` is extra content (the review step puts the clip there).
+ * edit description and the "my footage" slot. `children` is extra content (the review step puts the clip there).
  */
 export default function ShotCard({ shot, project, onChanged, returnTo, editable = true, retry, children }) {
   const [editing, setEditing] = useState(false);
@@ -63,7 +64,6 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
   useEffect(() => { setTrim(String(shot.footage?.trimStart ?? 0)); }, [shot.footage?.trimStart]);
   useEffect(() => { setPlace(toPercent(shot.inset)); }, [shot.inset?.x, shot.inset?.y, shot.inset?.w]);
   const locked = BUSY.has(shot.status) || shot.status === 'still_pending' || Boolean(busy);
-  const choices = qualityChoices();
   const failed = shot.status === 'failed' || shot.status === 'blocked';
   const waiting = shot.status === 'still_pending' || BUSY.has(shot.status);
   const retryNode =
@@ -176,6 +176,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
           <span className={styles.seconds}>{shot.seconds} seconds</span>
           {shot.stale && <Pill tone="accent">Needs update</Pill>}
         </div>
+        <ShotWarnings shot={shot} />
         {shot.line && !waiting && <p className={styles.line} title={shot.line}>{shot.line}</p>}
 
         {editing ? (
@@ -208,20 +209,6 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
               </Button>
             )}
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>
-            {!isFootage && (
-              <label className={styles.quality}>
-                <span>Quality</span>
-                <select
-                  value={shot.quality}
-                  disabled={locked || choices.length < 2}
-                  onChange={(e) => run('quality', () => updateShot(project.id, shot.id, { quality: e.target.value }))}
-                >
-                  {[...new Set([shot.quality, ...choices])].map((q) => (
-                    <option key={q} value={q}>{QUALITY_LABELS[q] || q}</option>
-                  ))}
-                </select>
-              </label>
-            )}
             <AssetPicker
               kinds={['clip', 'recording']}
               uploadKind="clip"

@@ -690,7 +690,7 @@ describe('storyboard step', () => {
     expect(screen.getByRole('button', { name: /Continue to voice and sound/ })).toBeDisabled();
   });
 
-  it('makes a still again, edits a description, changes quality', async () => {
+  it('makes a still again and edits a description', async () => {
     client.makeStills.mockResolvedValue({});
     client.updateShot.mockResolvedValue({});
     render(<StepStoryboard project={project()} shots={[shot(1)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
@@ -700,15 +700,18 @@ describe('storyboard step', () => {
     fireEvent.change(screen.getByLabelText('Description of shot 1'), { target: { value: 'A new idea' } });
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
     await waitFor(() => expect(client.updateShot).toHaveBeenCalledWith('p1', 's1', { description: 'A new idea' }));
-    fireEvent.change(screen.getByLabelText('Quality'), { target: { value: 'standard' } });
-    await waitFor(() => expect(client.updateShot).toHaveBeenCalledWith('p1', 's1', { quality: 'standard' }));
     expect(screen.getByRole('button', { name: 'Use my footage' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Add a picture-in-picture' })).toBeEnabled();
   });
 
-  it('a talking project can still change a shot\'s quality (who speaks does not limit it)', () => {
+  it('a shot has no quality control of its own (one video, one model), only its quality shown', () => {
     render(<StepStoryboard project={project({ mode: 'talking', quality: 'pro_talking' })} shots={[shot(1, { quality: 'pro_talking' })]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    expect(screen.getByLabelText('Quality')).toBeEnabled();
+    expect(screen.queryByLabelText('Quality')).toBeNull();
+  });
+
+  it('a shot says in one line which characters it leaves out', () => {
+    render(<StepStoryboard project={project()} shots={[shot(1, { warnings: [{ code: 'character_no_picture', message: 'Maya has no picture yet, so Maya may look different in this shot.' }] })]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByTestId('shot-warnings')).toHaveTextContent('Maya has no picture yet');
   });
 });
 

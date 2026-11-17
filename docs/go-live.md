@@ -254,6 +254,8 @@ Each of these spends real money; run one only after approving it and its cost.
 - Apify: one live reference link longer than 180 s, to confirm it is refused (today after the download, R9) and what
   the download cost.
 - The spec 13a quality comparison.
+- Reference pictures with a first frame (read from kie.ai 2026-11-17, not tested live): Seedance 2 Mini says `reference_image_urls` (up to 9) "cannot be combined with first_frame_url" and the modes are mutually exclusive; Gemini Omni says `first_frame_url` cannot be combined with `image_urls` (up to 6). So Seedance and Omni clips send the still as the first frame only, with no reference pictures (the still already carries the characters). Revisit if kie lifts this; only Kling takes character elements. No warning is shown for it.
+- Migration `20261117000500_story_cast_style_stale.sql` (additive, `story_cast.style_stale`) goes in with the others.
 - Gemini Omni request shape and Seedance/Omni sound checked against the live API (field names read from kie.ai 2026-11-17: `first_frame_url`, `image_urls`, `duration` as a number, `resolution`, `aspect_ratio`; no audio field is sent, sound is assumed on; Seedance `generate_audio: true`).
 - Check hosted pricing_config rows for saved perSecond rates from before 2026-11-17; an old row overrides the new defaults and breaks the 70% rule.
 - Kling element-name format (accents are dropped from names) and the real kie/Kling refusal strings.

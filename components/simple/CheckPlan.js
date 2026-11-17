@@ -13,6 +13,7 @@ import { planReason, scenesOf, startableIds } from './derive';
 import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
 import useStartQuote from './useStartQuote';
+import ShotWarnings from '../maker/ShotWarnings';
 import styles from './Simple.module.css';
 
 const castPicture = (c) => (c.image_url || c.candidates?.[c.chosen_index ?? 0]?.url || c.candidates?.[0]?.url || null);
@@ -311,6 +312,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
             {shots.filter(isGenerated).map((s) => <ShotTile key={s.id} shot={s} onOpen={(x) => setShotOpen(x.id)} />)}
           </ol>
         )}
+        <ShotWarnings shots={shots.filter(isGenerated)} />
       </section>
 
       {all.quote && (all.quote.lines || []).length > 1 && (
