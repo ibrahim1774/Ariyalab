@@ -466,6 +466,91 @@ describe('cast_image handler', () => {
   });
 });
 
+// ---------------------------------------------------------------- automatic pick
+
+describe('automatic cast pick', () => {
+  const result = (n) => ({ url: `/api/mock/storage/story/x/${n}.png`, key: `story/x/${n}.png` });
+  async function pendingRound() {
+    const { userId, project } = await newProject();
+    await generateCast({ userId, projectId: project.id });
+    const [row] = await castRows(project.id);
+    const jobs = (await jobsOf(project.id)).filter((j) => j.payload.castId === row.id && j.payload.stage === 'candidate');
+    await storyDb().update('story_jobs', { id: jobs.map((j) => j.id) }, { status: 'done' });
+    const done = await Promise.all(jobs.map(async (j) => (await storyDb().select('story_jobs', { id: j.id }))[0]));
+    return { userId, project, row, jobs: done.sort((a, b) => a.payload.slot - b.payload.slot) };
+  }
+  const sheetJobs = async (projectId, castId) => (await jobsOf(projectId)).filter((j) => j.payload.stage === 'sheet' && j.payload.castId === castId);
+
+  it('picks the first candidate the moment the round is ready, and starts its sheet', async () => {
+    const { project, row, jobs } = await pendingRound();
+    await castImageHandler.onDone(jobs[1], result(1));
+    expect((await castRow(row.id)).chosen_index).toBeNull();
+    await castImageHandler.onDone(jobs[0], result(0));
+    await castImageHandler.onDone(jobs[2], result(2));
+    const after = await castRow(row.id);
+    expect(after.status).toBe('ready');
+    expect(after.chosen_index).toBe(0);
+    expect(after.image_url).toBe(after.candidates[0].url);
+    expect(after.image_key).toBe(after.candidates[0].key);
+    const sheets = await sheetJobs(project.id, row.id);
+    expect(sheets).toHaveLength(1);
+    expect(sheets[0].payload).toMatchObject({ fromKey: after.candidates[0].key, refs: [after.candidates[0].url] });
+  });
+
+  it('is idempotent: the same job finishing again, or three at the same moment, picks and queues once', async () => {
+    const { project, row, jobs } = await pendingRound();
+    await Promise.all(jobs.map((j) => castImageHandler.onDone(j, result(j.payload.slot))));
+    await castImageHandler.onDone(jobs[2], result(2));
+    await castImageHandler.onDone(jobs[0], result(0));
+    expect((await castRow(row.id)).chosen_index).toBe(0);
+    expect(await sheetJobs(project.id, row.id)).toHaveLength(1);
+  });
+
+  it("never overrides a customer's pick", async () => {
+    const { project, row, jobs } = await pendingRound();
+    await castImageHandler.onDone(jobs[0], result(0));
+    await castImageHandler.onDone(jobs[1], result(1));
+    // The customer's choice lands before the last picture does.
+    await storyDb().update('story_cast', { id: row.id }, { chosen_index: 1, image_url: result(1).url, image_key: result(1).key });
+    await castImageHandler.onDone(jobs[2], result(2));
+    const after = await castRow(row.id);
+    expect(after).toMatchObject({ chosen_index: 1, image_key: result(1).key });
+    expect(await sheetJobs(project.id, row.id)).toHaveLength(0);
+  });
+
+  it('never overrides a character that uses the customer\'s own picture', async () => {
+    const { project, row, jobs } = await pendingRound();
+    const [asset] = await storyDb().insert('story_assets', { user_id: project.user_id, kind: 'image', url: '/own/maya.png' });
+    await storyDb().update('story_cast', { id: row.id }, { asset_id: asset.id, image_url: '/own/maya.png', image_key: null });
+    for (const j of jobs) await castImageHandler.onDone(j, result(j.payload.slot));
+    const after = await castRow(row.id);
+    expect(after).toMatchObject({ asset_id: asset.id, image_url: '/own/maya.png', chosen_index: null });
+    expect(await sheetJobs(project.id, row.id)).toHaveLength(0);
+  });
+
+  it('applies the same stale rule as a pick: shots drawn from this character are marked stale', async () => {
+    const { project, row, jobs } = await pendingRound();
+    const [shot] = await storyDb().insert('story_shots', { project_id: project.id, ord: 0, scene_id: 's1', description: 'x', seconds: 3, still_url: '/still.png', cast_ids: [row.id], quality: 'standard' });
+    for (const j of jobs) await castImageHandler.onDone(j, result(j.payload.slot));
+    expect((await storyDb().select('story_shots', { id: shot.id }))[0].stale).toBe(true);
+  });
+
+  it('a regeneration round picks its first new picture too (the old pick was cleared)', async () => {
+    const { userId, project, cast } = await readyCast();
+    await finishJobs(project.id);
+    await regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'older' });
+    expect((await castRow(cast[0].id)).chosen_index).toBeNull();
+    await finishJobs(project.id);
+    expect((await castRow(cast[0].id)).chosen_index).toBe(0);
+  });
+
+  it('a failure while picking never fails the finished picture', async () => {
+    const { row, jobs } = await pendingRound();
+    await storyDb().update('story_cast', { id: row.id }, { description: row.description });
+    await expect(Promise.all(jobs.map((j) => castImageHandler.onDone(j, result(j.payload.slot))))).resolves.toBeDefined();
+  });
+});
+
 // ---------------------------------------------------------------- pickCast
 
 describe('pickCast', () => {
@@ -530,8 +615,9 @@ describe('pickCast', () => {
 
   it('a different pick while the sheet is still being drawn is a 409', async () => {
     const { userId, project, cast } = await readyCast();
-    await pickCast({ userId, projectId: project.id, castId: cast[0].id, candidateIndex: 0 });
-    await expect(pickCast({ userId, projectId: project.id, castId: cast[0].id, candidateIndex: 1 })).rejects.toMatchObject({ status: 409 });
+    // The first picture was picked automatically and its sheet is done; a different pick starts a new sheet.
+    await pickCast({ userId, projectId: project.id, castId: cast[0].id, candidateIndex: 1 });
+    await expect(pickCast({ userId, projectId: project.id, castId: cast[0].id, candidateIndex: 2 })).rejects.toMatchObject({ status: 409 });
   });
 
   it('a different pick after the sheet is done replaces the sheet', async () => {
@@ -546,7 +632,7 @@ describe('pickCast', () => {
 
   it('a sheet that finishes after the pick changed is dropped', async () => {
     const { userId, project, cast } = await readyCast();
-    await pickCast({ userId, projectId: project.id, castId: cast[0].id, candidateIndex: 0 });
+    await pickCast({ userId, projectId: project.id, castId: cast[0].id, candidateIndex: 1 });
     const sheetJob = (await jobsOf(project.id)).at(-1);
     await storyDb().update('story_cast', { id: cast[0].id }, { image_key: 'something-else' });
     await castImageHandler.onDone(sheetJob, { url: '/api/mock/storage/s.png', key: 's.png' });

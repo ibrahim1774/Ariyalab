@@ -589,6 +589,16 @@ describe('cast step', () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
+  it('says a look was picked for each character, and Continue is on as soon as every character has a pick', () => {
+    const picked = (id) => ready({ id, name: id, chosen_index: 0, image_url: '/api/mock/storage/c0.png' });
+    const { unmount } = render(<StepCast {...props([picked('Maya'), picked('Leo')])} />);
+    expect(screen.getByText('We picked a look for each character. Change any you like.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Continue to the storyboard/ })).toBeEnabled();
+    unmount();
+    render(<StepCast {...props([picked('Maya'), ready({ id: 'Leo', name: 'Leo', status: 'pending', candidates: [] })])} />);
+    expect(screen.getByRole('button', { name: /Continue to the storyboard/ })).toBeDisabled();
+  });
+
   it('expects 0 credits when the setup fee was already paid', async () => {
     client.startCast.mockResolvedValue({});
     render(<StepCast {...props([], { project: project({ step: 'cast', fee_charged: true }) })} />);

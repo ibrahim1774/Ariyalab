@@ -194,7 +194,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
     <div className={styles.step}>
       <div className={styles.stepHead}>
         <h2>Meet your <span className="accent-word">cast</span></h2>
-        <p>Each character gets three options. Pick one, or describe a change and make new ones.</p>
+        <p>We picked a look for each character. Change any you like.</p>
       </div>
       <StyleNote project={project} />
 
@@ -219,7 +219,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       {cast.length > 0 && (
         <StepFooter>
           <Button onClick={onNext} disabled={!allPicked}>Continue to the storyboard</Button>
-          {!allPicked && <span className={styles.hint}>Pick one option for every character to continue.</span>}
+          {!allPicked && <span className={styles.hint}>Every character needs a look to continue.</span>}
         </StepFooter>
       )}
     </div>
