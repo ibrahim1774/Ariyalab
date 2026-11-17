@@ -491,3 +491,157 @@ describe('screen 3, Check the plan', () => {
     expect(client.getPlanQuote).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------- screen 4
+
+const T = (n) => `2026-11-16T1${n}:00:00.000Z`;
+const clipShot = (i, scene, over = {}) => shotRow(i, {
+  scene_id: scene, still_url: `/s${i}.png`, status: 'still_ready', clip_credits: 33, ...over,
+});
+const ready = (i, scene, over = {}) => clipShot(i, scene, { status: 'ready', clip_url: `/c${i}.mp4`, clip_credits: null, reroll_credits: 0, ...over });
+const watchStatus = (over = {}) => status({
+  project: project({ step: 'generate', fee_charged: true }),
+  cast: [castRow()],
+  shots: [ready(1, 'a'), clipShot(2, 'b'), clipShot(3, 'c')],
+  jobs: [{ id: 'j1', kind: 'clip', status: 'done', updated_at: T(1), payload: { shotId: 'sh1' } }],
+  audio: done,
+  render: null,
+  renders: [],
+  renderPrice: { credits: 0 },
+  rerolls: { included: 1, used: 0, left: 1 },
+  ...over,
+});
+
+describe('screen 4, Watch and fix', () => {
+  beforeEach(() => {
+    client.getScript.mockResolvedValue(SCRIPT);
+    client.getStatus.mockResolvedValue(watchStatus());
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 40));
+    client.startRender.mockResolvedValue({ id: 'r1', status: 'queued' });
+  });
+
+  it('shows a strip of scenes built from the shots, with their states', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), clipShot(2, 'b', { status: 'generating' }), clipShot(3, 'c'), clipShot(4, 'd', { status: 'failed' })] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByRole('heading', { name: /Watch and fix/ })).toBeInTheDocument();
+    const strip = screen.getByRole('list', { name: 'Scenes' });
+    const items = within(strip).getAllByRole('listitem');
+    expect(items).toHaveLength(4);
+    expect(items[0]).toHaveTextContent('Scene 1');
+    expect(items[0]).toHaveTextContent('Ready');
+    expect(items[1]).toHaveTextContent('Making');
+    expect(items[2]).toHaveTextContent('Waiting');
+    expect(items[3]).toHaveTextContent('Did not work');
+  });
+
+  it('after a scene is ready and others are not started: next scene and the rest, each with its price', async () => {
+    client.startGeneration.mockResolvedValue({ shots: [], charged: 40, queued: ['sh2'] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const next = await screen.findByRole('button', { name: 'Make the next scene (40 credits)' });
+    expect(await screen.findByRole('button', { name: 'Make the rest (80 credits)' })).toBeEnabled();
+    expect(client.getQuote).toHaveBeenCalledWith('p1', ['sh2']);
+    expect(client.getQuote).toHaveBeenCalledWith('p1', ['sh2', 'sh3']);
+    fireEvent.click(next);
+    await waitFor(() => expect(client.startGeneration).toHaveBeenCalledWith('p1', ['sh2'], 40));
+  });
+
+  it('"Make the rest" sends every waiting shot with the total it showed', async () => {
+    client.startGeneration.mockResolvedValue({ shots: [], charged: 80, queued: [] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Make the rest (80 credits)' }));
+    await waitFor(() => expect(client.startGeneration).toHaveBeenCalledWith('p1', ['sh2', 'sh3'], 80));
+  });
+
+  it('with one scene left there is just the one button', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), clipShot(2, 'b')] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByRole('button', { name: 'Make the next scene (40 credits)' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Make the rest/ })).toBeNull();
+  });
+
+  it('while the first scene is still being made there is nothing to press and it says why', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [clipShot(1, 'a', { status: 'generating' }), clipShot(2, 'b')] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('heading', { name: /Watch and fix/ });
+    expect(screen.queryByRole('button', { name: /Make the next scene/ })).toBeNull();
+    expect(screen.getByTestId('dock')).toHaveTextContent(/once this one is ready/i);
+  });
+
+  it('a scene that did not work can be tried again with its price', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), clipShot(2, 'b', { status: 'failed' })] }));
+    client.startGeneration.mockResolvedValue({ shots: [], charged: 40, queued: ['sh2'] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Try scene 2 again (40 credits)' }));
+    await waitFor(() => expect(client.startGeneration).toHaveBeenCalledWith('p1', ['sh2'], 40));
+  });
+
+  it('starts the final render by itself once, when every clip is ready, and never twice', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1', 0));
+    await new Promise((r) => setTimeout(r, 400));
+    expect(client.startRender).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not start a render while a clip is missing, a render exists for these clips, or the render has a price', async () => {
+    client.getStatus.mockResolvedValue(watchStatus());
+    const first = render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('heading', { name: /Watch and fix/ });
+    await flush();
+    expect(client.startRender).not.toHaveBeenCalled();
+    first.unmount();
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')], render: { id: 'r1', version: 1, status: 'done', url: '/v.mp4', created_at: T(5), warnings: [] }, renders: [{ id: 'r1', version: 1, status: 'done', url: '/v.mp4', created_at: T(5), warnings: [] }] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('link', { name: /Download/ });
+    expect(client.startRender).not.toHaveBeenCalled();
+  });
+
+  it('shows the finished video with Download and the warnings plainly', async () => {
+    const r = { id: 'r1', version: 1, status: 'done', url: 'https://files.example/v.mp4', created_at: T(5), duration_seconds: 30, warnings: [{ code: 'gap', message: 'There is a short silence after scene 2.' }] };
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')], render: r, renders: [r] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const dl = await screen.findByRole('link', { name: /Download/ });
+    expect(dl).toHaveAttribute('href', 'https://files.example/v.mp4?download=1');
+    expect(screen.getByText('There is a short silence after scene 2.')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Watch and fix/ })).toBeInTheDocument();
+    expect(screen.getByTestId('chat-note')).toHaveTextContent('Want to change anything?');
+  });
+
+  it('shows that the video is being put together', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')], render: { id: 'r1', version: 1, status: 'running', created_at: T(5), warnings: [] }, renders: [] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect((await screen.findAllByText(/Putting your video together/)).length).toBeGreaterThan(0);
+    expect(client.startRender).not.toHaveBeenCalled();
+  });
+
+  it('a later render shows its price and needs a click', async () => {
+    const r = { id: 'r1', version: 1, status: 'done', url: '/v.mp4', created_at: T(0), warnings: [] };
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), ready(2, 'b')], render: r, renders: [r], renderPrice: { credits: 5 } }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const again = await screen.findByRole('button', { name: 'Put the video together again (5 credits)' });
+    await flush();
+    expect(client.startRender).not.toHaveBeenCalled();
+    fireEvent.click(again);
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1', 5));
+  });
+
+  it('"Change this scene" opens the chat with the scene named, and offers to make its shots again with the price and the tries included', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a', { reroll_credits: 0 }), clipShot(2, 'b')] }));
+    client.rerollShot.mockResolvedValue({ shots: [], charged: 0, rerolls: {} });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Change scene 1' }));
+    expect(screen.getByLabelText('Message to the chat helper')).toHaveValue('Change scene 1: ');
+    const panel = await screen.findByTestId('scene-change');
+    expect(panel).toHaveTextContent('1 try included');
+    fireEvent.click(within(panel).getByRole('button', { name: 'Make shot 1 again (included)' }));
+    await waitFor(() => expect(client.rerollShot).toHaveBeenCalledWith('p1', 'sh1', 0));
+  });
+
+  it('plays a scene clip from the strip', async () => {
+    client.getStatus.mockResolvedValue(watchStatus({ shots: [ready(1, 'a'), clipShot(2, 'b')] }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Play scene 1/ }));
+    const video = await screen.findByLabelText('Scene 1 clip');
+    expect(video.getAttribute('src')).toBe('/c1.mp4');
+  });
+});

@@ -213,7 +213,7 @@ export const startableIds = (shots) => startable(shots).map((s) => s.id);
 
 /** The scenes still waiting to be made: the next one, and whether more follow. */
 export function nextScenes(scenes) {
-  const waiting = scenes.filter((s) => s.state !== 'ready' && s.state !== 'making' && s.startIds.length > 0);
+  const waiting = scenes.filter((s) => s.state === 'waiting' && s.startIds.length > 0);
   return { next: waiting[0] || null, waitingCount: waiting.length };
 }
 
@@ -241,4 +241,13 @@ export function shouldAutoRender(status) {
     if (made >= finished(jobs, 'clip')) return false;
   }
   return true;
+}
+
+/** The newest finished clip job's time (ms), 0 when there is none. */
+export const lastClipAt = (jobs = []) => finished(jobs, 'clip');
+
+/** True when a render exists but a clip was made after it, so it no longer matches the clips. */
+export function renderOutdated({ render = null, jobs = [] } = {}) {
+  if (!render) return false;
+  return (Date.parse(render.created_at) || 0) < lastClipAt(jobs);
 }

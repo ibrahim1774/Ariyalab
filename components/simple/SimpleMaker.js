@@ -12,6 +12,7 @@ import useProject from '../maker/useProject';
 import CheckPlan from './CheckPlan';
 import CheckScript from './CheckScript';
 import Describe from './Describe';
+import Watch from './Watch';
 import { SCREENS, deriveScreen, screenIndex } from './derive';
 import usePlanPipeline from './usePlanPipeline';
 import styles from './Simple.module.css';
@@ -22,6 +23,13 @@ const CHAT_NOTES = {
   plan: 'Here is the plan. Want to change anything?',
   watch: 'Want to change anything?',
 };
+
+/** The chat's short prompt for the screen, only once that stage has finished (nothing while it is still being made). */
+function chatNote(screen, data, plan) {
+  if (screen === 'plan') return plan.action.type === 'done' ? CHAT_NOTES.plan : null;
+  if (screen === 'watch') return data.render?.status === 'done' ? 'Your video is ready. Want to change anything?' : null;
+  return CHAT_NOTES[screen];
+}
 
 const BACK_LABELS = { describe: 'Back to the script', script: 'Back to the script', plan: 'Back to the plan', watch: 'Back to your video' };
 
@@ -118,7 +126,7 @@ function SimpleMakerInner({ id, returnTo }) {
   } else if (screen === 'plan') {
     body = <CheckPlan project={project} shots={data.shots} cast={data.cast} audio={data.audio} plan={plan} refresh={refresh} returnTo={returnTo} />;
   } else {
-    body = <p className={styles.muted}>This screen is coming.</p>;
+    body = <Watch status={data} project={project} refresh={refresh} returnTo={returnTo} onAskChat={askChat} />;
   }
 
   return (
@@ -136,7 +144,7 @@ function SimpleMakerInner({ id, returnTo }) {
           project={project}
           returnTo={returnTo}
           prefill={prefill}
-          note={CHAT_NOTES[screen]}
+          note={chatNote(screen, data, plan)}
           onChanged={(changed) => {
             refresh();
             if (Array.isArray(changed) && changed.includes('script')) setScriptRev((n) => n + 1);

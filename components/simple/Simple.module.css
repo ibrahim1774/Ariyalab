@@ -180,3 +180,35 @@
 .optionRow { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; margin: 8px 0; }
 .optionPic { display: flex; flex-direction: column; gap: 4px; padding: 4px; border: 1px solid var(--border-strong); border-radius: 12px; background: var(--surface); cursor: pointer; font: inherit; font-size: 12px; }
 .optionPic img { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 8px; }
+
+/* ---- screen 4 */
+.stage { min-width: 0; }
+.stageBox { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; min-width: 0; }
+.clipBox { width: 100%; max-width: 360px; border-radius: 14px; overflow: hidden; background: #000; }
+.clipBox[data-aspect='16:9'] { max-width: 640px; }
+.clip { display: block; width: 100%; max-height: 60dvh; }
+.working { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.workBar { position: relative; height: 8px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
+.workBar span { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: var(--accent); animation: slide 1.4s var(--ease) infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .workBar span { animation: none; width: 100%; opacity: 0.55; } }
+.warnings { padding: 10px 12px; border-radius: 12px; background: var(--accent-tint); width: 100%; }
+.warnings h3 { margin: 0 0 6px; font-size: 14px; }
+.warnings ul { margin: 0; padding-left: 18px; font-size: 13px; line-height: 1.45; }
+
+.strip { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 12px; }
+.stripItem { display: flex; flex-direction: column; gap: 4px; min-width: 0; padding: 6px; border-radius: 14px; border: 1px solid transparent; }
+.stripImg { position: relative; display: block; width: 100%; aspect-ratio: 3 / 4; padding: 0; border: 0; border-radius: 10px; overflow: hidden; background: var(--surface-2); box-shadow: 0 0 0 1px var(--border); cursor: default; }
+button.stripImg { cursor: pointer; }
+button.stripImg:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.stripImg img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.stripTick { position: absolute; top: 5px; right: 5px; display: grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--success); color: #fff; font-size: 11px; }
+.stripShimmer { position: absolute; inset: 0; background: linear-gradient(110deg, transparent 30%, rgba(255, 255, 255, 0.55) 50%, transparent 70%); background-size: 200% 100%; animation: shimmerMove 1.4s linear infinite; }
+@keyframes shimmerMove { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+@media (prefers-reduced-motion: reduce) { .stripShimmer { animation: none; opacity: 0.4; } }
+.stripLabel { font-size: 13px; font-weight: 600; }
+.stripState { font-size: 12px; color: var(--text-dim); }
+.stripFailed { color: var(--error); font-weight: 600; }
+.changePanel { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.changePanel p { margin: 0; }
+.changeRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
