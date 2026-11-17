@@ -415,6 +415,24 @@ describe('money', () => {
     expect(started.data.credits).toBe(pricing.castRegen);
   });
 
+  it('generate_cast redraw: when one start fails midway the answer says which characters were started and which were not', async () => {
+    const user = newUser();
+    const pricing = await getPricing();
+    await fund(user.id, pricing.castRegen + 1);
+    const client = await connect(await tokenFor(user));
+    const { data: created } = await use(client, 'create_project', { title: 'Style', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = created.project.id;
+    for (const [ord, name] of ['Maya', 'Leo'].entries()) {
+      await storyDb().insert('story_cast', { project_id: projectId, ord, name, description: 'F.', status: 'ready', candidates: [], image_url: null, style_stale: true, regens_used: pricing.included.castRegenPerCharacter });
+    }
+    const out = await use(client, 'generate_cast', { project_id: projectId, confirm_total: pricing.castRegen * 2 });
+    expect(out.isError).toBe(true);
+    expect(out.data.message).toContain(`Maya was started (${pricing.castRegen} credits)`);
+    expect(out.data.message).toMatch(/Leo was not started/);
+    const rows = await storyDb().select('story_cast', { project_id: projectId }, { order: 'ord' });
+    expect(rows.map((r) => r.status)).toEqual(['pending', 'ready']);
+  });
+
   it('create_project can set consistent_cast false; generate_cast then queues nothing, quotes nothing and spends nothing', async () => {
     const user = newUser();
     await fund(user.id, 500);

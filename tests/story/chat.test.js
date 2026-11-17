@@ -1093,15 +1093,32 @@ describe('simple maker tools', () => {
       expect((await projectRow(ctx.project.id)).style).not.toBe('anime');
     });
 
-    it('R3-a: a customer\'s own photo is kept, but a sheet drawn from it in the old style is cleared and counted', async () => {
+    it('R4-I1: changing back to the quality the clips were made at totals 0, asks nothing, and Generate then charges nothing', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      // The clips were "made" at standard by a done clip job each (what clipMatchesAgain reads).
+      const shots = await storyDb().select('story_shots', { project_id: ctx.project.id });
+      for (const sh of shots) {
+        await storyDb().insert('story_jobs', { project_id: ctx.project.id, user_id: ctx.userId, kind: 'clip', shot_id: sh.id, status: 'done', payload: { quality: 'standard', description: sh.description, stillKey: sh.still_key, seconds: 3 }, result: { key: sh.clip_key } });
+      }
+      const away = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'economy' } }).catch((e) => e);
+      expect(away).toMatchObject({ status: 409, code: 'quote_changed' });
+      await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'economy' }, expectedCredits: away.extra.credits });
+      const back = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'standard' } });
+      expect(back.quality).toBe('standard');
+      expect((await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id })).total).toBe(0);
+      // The chat card quotes the same: nothing to remake means no card, the change goes straight through.
+      expect(await run(ctx, 'set_quality', { quality: 'economy' })).toMatchObject({ needsConfirm: true });
+    });
+
+    it('R4-m1: style plus consistent_cast true to false in one update does not send the project back to the cast step', async () => {
       const ctx = await genProject({ n: 1 });
-      const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'image', url: '/own/l.png' });
-      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Leo', description: 'O.', status: 'ready', image_url: '/own/l.png', image_key: 'l', asset_id: asset.id, sheet: { url: '/old/sheet.png', key: 'os', from_key: 'l' } });
-      const card = await run(ctx, 'set_style', { style: 'anime' });
-      expect(card.quote.characters).toMatchObject({ count: 1, credits: 0 });
-      await runConfirm({ userId: ctx.userId, projectId: ctx.project.id, confirm: card.confirm });
-      const [leo] = await storyDb().select('story_cast', { project_id: ctx.project.id });
-      expect(leo).toMatchObject({ image_url: '/own/l.png', sheet: {} });
+      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'F.', status: 'ready', image_url: '/p.png', image_key: 'p' });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      const asked = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime', consistent_cast: false } }).catch((e) => e);
+      expect(asked.code).toBe('quote_changed');
+      await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime', consistent_cast: false }, expectedCredits: asked.extra.credits });
+      expect((await projectRow(ctx.project.id)).step).not.toBe('cast');
     });
 
     it('M4: the reset runs before the style is saved, so a failed reset leaves the old style and asking again redoes it', async () => {

@@ -361,6 +361,28 @@ describe('screen 2, Check the script', () => {
     expect(client.updateProject).toHaveBeenCalledTimes(1);
   }, 15000);
 
+  it('R4-m2: after a style and quality refusal the confirm names both, and Keep my style puts back both pickers', async () => {
+    fakeServer();
+    client.updateProject.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 50, kind: 'style' } }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByText('Dre gave a crooked fade.');
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+    const was = screen.getByTestId('quality-chosen').getAttribute('data-quality');
+    fireEvent.click(screen.getByRole('button', { name: /Change style/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Use this style/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Change quality/ }));
+    fireEvent.click(screen.getByRole('radio', { name: was === 'economy' ? 'Pro' : 'Budget' }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to the script/ }));
+    const ask = await screen.findByTestId('style-redo');
+    expect(ask).toHaveTextContent('Changing the style and quality remakes your characters, pictures and clips.');
+    fireEvent.click(within(ask).getByRole('button', { name: 'Keep my style' }));
+    expect(screen.getByTestId('style-chosen')).toHaveTextContent('3D animated family film');
+    expect(screen.getByTestId('quality-chosen')).toHaveAttribute('data-quality', was);
+  }, 15000);
+
   it('lists the included parts of the quote and says an unpriced total is included', async () => {
     fakeServer();
     client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [{ key: 'fee', label: 'Project fee', credits: 0, included: true }, { key: 'pictures', label: 'Storyboard pictures', credits: 0, included: true }] });

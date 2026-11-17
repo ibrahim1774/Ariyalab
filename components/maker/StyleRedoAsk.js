@@ -18,15 +18,15 @@ export const redoFrom = (err, previous = null) => ({
 /**
  * The plain question before a style or quality change that remakes what is already made (the server refuses it without the total).
  * credits: the redo total; renderCredits: what making the finished video again may cost extra (own line, 0 = nothing to say);
- * kind: 'style' | 'quality'; onlyCleared: only old character pictures exist, they are cleared and nothing is remade now;
+ * kind: 'style' | 'quality'; what: the words for what is being changed when both are ('style and quality'); onlyCleared: only old character pictures exist, they are cleared and nothing is remade now;
  * changed: the total moved since the customer last saw it (said first, and the ask takes focus).
  */
-export default function StyleRedoAsk({ credits, renderCredits = 0, kind = 'style', onlyCleared = false, changed = false, busy = false, onChange, onKeep }) {
+export default function StyleRedoAsk({ credits, renderCredits = 0, kind = 'style', what = null, onlyCleared = false, changed = false, busy = false, onChange, onKeep }) {
   const ref = useRef(null);
   useEffect(() => { if (changed) ref.current?.focus(); }, [changed, credits]);
   const sentence = onlyCleared
     ? 'Your old character pictures are cleared. Nothing is remade now.'
-    : `Changing the ${kind} remakes your ${kind === 'quality' ? 'clips' : 'characters, pictures and clips'}. ${credits > 0 ? `That costs ${credits} credits in all.` : 'All of it is included.'}`;
+    : `Changing the ${what || kind} remakes your ${kind === 'quality' ? 'clips' : 'characters, pictures and clips'}. ${credits > 0 ? `That costs ${credits} credits in all.` : 'All of it is included.'}`;
   return (
     <div className={styles.styleRedo} role="alert" data-testid="style-redo" tabIndex={-1} ref={ref}>
       <p>

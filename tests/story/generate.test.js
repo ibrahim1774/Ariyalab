@@ -26,7 +26,7 @@ vi.mock('../../lib/credits.js', async (importOriginal) => {
 
 const { setStoryDb, storyDb } = await import('../../lib/story/db.js');
 const { setCreditsDb, grantCredits, getBalance, holdCredits, InsufficientCreditsError } = await import('../../lib/credits.js');
-const { setPricingDb, _resetPricingCache, quoteShot } = await import('../../lib/pricing.js');
+const { setPricingDb, _resetPricingCache, quoteShot, getPricing } = await import('../../lib/pricing.js');
 const runner = await import('../../lib/story/runner.js');
 globalThis.__genRunnerScope = runner._handlerCallScope;
 const { tick, sweep, enqueue, _handlerCallScope } = runner;
@@ -947,12 +947,33 @@ describe('carry 1: GET /status', () => {
 
 // ---------------------------------------------------------------- round 1
 
-/** The video's quality changes for every shot (the only way a shot's quality changes); -> the row of shot `sid` after. */
+/**
+ * The video's quality changes for every shot (the only way a shot's quality changes); -> the row of shot `sid` after.
+ * The redo total is worked out here, not echoed from the server: every finished clip that will not be current again at the new
+ * quality (a clip made at that quality from the same description and still is current again) costs the new price to remake.
+ * A total of 0 must go through with no confirm; anything else must be refused with exactly that total first.
+ */
 async function setQuality(ctx, quality, sid) {
   const { updateProject } = await import('../../lib/story/projects.js');
-  // Clips made: the change needs the redo total (the server's own number is sent back, as the customer's confirm does).
+  const { creditsForShot } = await import('../../lib/pricing.js');
+  const pricing = await getPricing();
+  const shots = await storyDb().select('story_shots', { project_id: ctx.project.id });
+  const jobs = await storyDb().select('story_jobs', { project_id: ctx.project.id, kind: 'clip', status: 'done' });
+  let total = 0;
+  for (const sh of shots) {
+    if (!sh.clip_url || sh.source === 'footage') continue;
+    const made = jobs.find((j) => j.result?.key && j.result.key === sh.clip_key)?.payload;
+    const current = made && made.quality === quality && made.description === sh.description && (made.stillKey ?? null) === (sh.still_key ?? null);
+    if (!current) total += creditsForShot(pricing, quality, sh.seconds);
+  }
   const asked = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality } }).catch((e) => e);
-  if (asked?.code === 'quote_changed') await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality }, expectedCredits: asked.extra.credits });
+  if (total === 0) {
+    expect(asked?.id, 'a quality change with nothing to remake needs no confirm').toBe(ctx.project.id);
+  } else {
+    expect(asked).toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(asked.extra.credits).toBe(total);
+    await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality }, expectedCredits: total });
+  }
   return (await storyDb().select('story_shots', { id: sid }))[0];
 }
 
@@ -1281,7 +1302,10 @@ describe('round 2', () => {
     const sid = ctx.shots[0].id;
     await setQuality(ctx, 'standard', sid);
     expect(await shotRow(sid)).toMatchObject({ stale: true, clip_mismatch: true });
-    const shot = await setQuality(ctx, 'pro_narrated', sid);
+    // Back to the quality the clip was made at: it is current again, the total is 0 and no confirm is asked.
+    const { updateProject } = await import('../../lib/story/projects.js');
+    expect((await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'pro_narrated' } })).quality).toBe('pro_narrated');
+    const shot = (await storyDb().select('story_shots', { id: sid }))[0];
     expect(shot).toMatchObject({ stale: false, clip_mismatch: false });
     // Not after a description change since the clip.
     await setQuality(ctx, 'standard', sid);
