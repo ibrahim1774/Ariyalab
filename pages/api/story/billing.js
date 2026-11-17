@@ -50,11 +50,13 @@ export default async function handler(req, res) {
     const balance = await getBalance(userId, 'video');
     const { data, error } = await getSupabaseAdmin()
       .from('credit_ledger')
-      .select('created_at, delta, reason, balance_after')
+      .select('id, created_at, delta, reason, balance_after')
       .eq('user_id', userId)
       .eq('currency', 'video')
       .neq('delta', 0)
+      // Rows written in one transaction share created_at; the id (bigserial) breaks the tie.
       .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
       .limit(HISTORY_LIMIT);
     if (error) throw error;
     return res.status(200).json({ v2: true, balance, history: data || [] });

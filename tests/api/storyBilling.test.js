@@ -9,13 +9,23 @@ const ledgerCalls = [];
 // Minimal PostgREST-style query builder over `rows` that really applies eq/neq/order/limit.
 function ledgerQuery() {
   let out = rows.slice();
+  const orders = [];
+  const applyOrder = () => {
+    out.sort((a, b) => {
+      for (const [col, ascending] of orders) {
+        if (a[col] === b[col]) continue;
+        return (a[col] < b[col] ? -1 : 1) * (ascending ? 1 : -1);
+      }
+      return 0;
+    });
+  };
   const q = {
     select: () => q,
     eq: (col, val) => { ledgerCalls.push(['eq', col, val]); out = out.filter((r) => r[col] === val); return q; },
     neq: (col, val) => { ledgerCalls.push(['neq', col, val]); out = out.filter((r) => r[col] !== val); return q; },
-    order: (col, { ascending }) => { out.sort((a, b) => (a[col] < b[col] ? 1 : -1) * (ascending ? -1 : 1)); return q; },
-    limit: (n) => { out = out.slice(0, n); return q; },
-    then: (resolve) => resolve({ data: out, error: null }),
+    order: (col, { ascending }) => { ledgerCalls.push(['order', col, ascending]); orders.push([col, ascending]); return q; },
+    limit: (n) => { applyOrder(); out = out.slice(0, n); return q; },
+    then: (resolve) => { applyOrder(); return resolve({ data: out, error: null }); },
   };
   return q;
 }
@@ -62,6 +72,20 @@ describe('GET /api/story/billing', () => {
     expect(res.body.balance).toEqual({ plan: 100, topup: 40, held: 10, available: 130 });
     expect(res.body.history.map((r) => r.delta)).toEqual([-90, 1500]);
     expect(ledgerCalls).toContainEqual(['neq', 'delta', 0]);
+  });
+
+  it('puts rows written at the same moment in a stable order, newest id first', async () => {
+    const same = '2026-11-14T10:00:00Z';
+    rows = [
+      row({ id: 12, delta: -40, balance_after: 470, created_at: same }),
+      row({ id: 15, delta: -5, balance_after: 383, created_at: '2026-11-14T10:05:00Z' }),
+      row({ id: 13, delta: -40, balance_after: 430, created_at: same }),
+      row({ id: 11, delta: 600, balance_after: 600, created_at: '2026-11-14T09:00:00Z' }),
+    ];
+    const res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(res.body.history.map((r) => r.balance_after)).toEqual([383, 430, 470, 600]);
+    expect(ledgerCalls).toContainEqual(['order', 'id', false]);
   });
 
   it('caps history at 50 rows', async () => {
