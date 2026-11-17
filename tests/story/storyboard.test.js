@@ -1083,7 +1083,12 @@ describe('round 1: rebuilds (S2, S10)', () => {
     await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
     expect(asked).toHaveLength(1);
     const brief = JSON.parse(/<shot_brief>\n([\s\S]*?)\n<\/shot_brief>/.exec(asked[0].messages[0].content)[1]);
-    expect(brief.scenes.map((s) => s.id)).toEqual(['s2']);
+    // The whole script goes, the scene to plan is marked, and its neighbours come with their setting and shots.
+    expect(brief.scenes.map((s) => s.id)).toEqual(['s1', 's2', 's3']);
+    expect(brief.scenes.map((s) => s.changed)).toEqual([false, true, false]);
+    expect(brief.scenes[0].setting).toBeTruthy();
+    expect(brief.scenes[0].shots.length).toBeGreaterThan(0);
+    expect(brief.scenes[2].shots.length).toBeGreaterThan(0);
     const after = await shotRows(ctx.project.id);
     for (const old of ctx.shots.filter((s) => s.scene_id !== 's2')) expect(after.some((s) => s.id === old.id)).toBe(true);
   });
@@ -1493,5 +1498,91 @@ describe('round 4', () => {
     await storyDb().insert('story_cast', { project_id: b.project.id, ord: 9, name: 'Ana', description: 'Ana looks friendly.', status: 'ready' });
     expect(await buildShotList({ userId: b.userId, projectId: b.project.id, confirm: b.token }).catch((e) => e)).toMatchObject({ code: 'rebuild_loses_clips' });
     expect(b.asked).toHaveLength(2);
+  });
+});
+
+describe('story flow: scene settings and neighbouring shots', () => {
+  const settingsOf = async (projectId) => {
+    const out = {};
+    for (const r of await shotRows(projectId)) (out[r.scene_id] ||= new Set()).add(r.setting);
+    return out;
+  };
+
+  it('the planner gives every scene a setting, stored on every shot of the scene', async () => {
+    const ctx = await builtProject();
+    const by = await settingsOf(ctx.project.id);
+    for (const id of ['s1', 's2', 's3']) {
+      expect(by[id].size).toBe(1);
+      expect([...by[id]][0]).toBeTruthy();
+    }
+  });
+
+  it('a re-plan sends the whole script and neighbours, keeps unchanged scenes untouched and their settings', async () => {
+    const ctx = await builtProject();
+    const before = await settingsOf(ctx.project.id);
+    const asked = [];
+    registerMock('story_shots', (args) => { asked.push(args); return storyShotsMock(args); });
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    const brief = JSON.parse(/<shot_brief>\n([\s\S]*?)\n<\/shot_brief>/.exec(asked[0].messages[0].content)[1]);
+    expect(brief.scenes).toHaveLength(3);
+    expect(brief.scenes[1]).toMatchObject({ id: 's2', changed: true });
+    expect(brief.scenes[0].shots).toEqual(ctx.shots.filter((s) => s.scene_id === 's1').map((s) => s.description));
+    expect(brief.scenes[2].setting).toBe([...before.s3][0]);
+    const after = await settingsOf(ctx.project.id);
+    expect([...after.s1]).toEqual([...before.s1]);
+    expect([...after.s3]).toEqual([...before.s3]);
+    for (const old of ctx.shots.filter((s) => s.scene_id !== 's2')) expect(await shotRow(old.id)).toMatchObject({ description: old.description, setting: old.setting });
+    // The changed scene's old setting is shown to the planner, and kept when the model gives none.
+    expect(brief.scenes[1].setting).toBe([...before.s2][0]);
+  });
+
+  it('when the planner gives no setting for a changed scene, the scene keeps the one it had', async () => {
+    const ctx = await builtProject();
+    const before = await settingsOf(ctx.project.id);
+    registerMock('story_shots', (args) => ({ shots: storyShotsMock(args).shots }));
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect([...(await settingsOf(ctx.project.id)).s2]).toEqual([...before.s2]);
+  });
+
+  it('an old project (no setting stored) still builds stills and re-plans', async () => {
+    const ctx = await builtProject();
+    await storyDb().update('story_shots', { project_id: ctx.project.id }, { setting: null });
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id });
+    const jobs = await stillJobs(ctx.project.id);
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const j of jobs) expect(j.payload.prompt).not.toContain('Setting:');
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    registerMock('story_shots', (args) => ({ shots: storyShotsMock(args).shots }));
+    await finishJobs(ctx.project.id);
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect((await shotRows(ctx.project.id)).length).toBeGreaterThan(0);
+  });
+
+  it('every still prompt carries its scene setting, the look of its people and the shot before it; the first has no previous line', async () => {
+    const ctx = await builtProject();
+    await generateStills({ userId: ctx.userId, projectId: ctx.project.id });
+    const jobs = await stillJobs(ctx.project.id);
+    const byShot = new Map(jobs.map((j) => [j.shot_id, j.payload.prompt]));
+    const shots = await shotRows(ctx.project.id);
+    shots.forEach((s, i) => {
+      const prompt = byShot.get(s.id);
+      expect(prompt).toContain(`Setting: ${s.setting.replace(/\.$/, '')}`);
+      if (i === 0) expect(prompt).not.toContain('Just before this');
+      else expect(prompt).toContain(`Just before this: ${shots[i - 1].description.replace(/\.$/, '')}`);
+      for (const id of s.cast_ids) expect(prompt).toContain('Look, ');
+    });
+  });
+
+  it('the setting can be changed through the shot update path, for the whole scene, without touching the pictures', async () => {
+    const ctx = await stilledProject();
+    const s2 = ctx.shots.filter((s) => s.scene_id === 's2');
+    const { shot } = await updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: s2[0].id, patch: { setting: 'A rainy street at dusk. Leo wears a yellow coat.' } });
+    expect(shot.setting).toBe('A rainy street at dusk. Leo wears a yellow coat.');
+    const after = await shotRows(ctx.project.id);
+    expect(after.filter((s) => s.scene_id === 's2').every((s) => s.setting === shot.setting && s.status === 'still_ready' && s.still_url)).toBe(true);
+    expect(after.filter((s) => s.scene_id !== 's2').every((s) => s.setting !== shot.setting)).toBe(true);
+    await expect(updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: s2[0].id, patch: { setting: 'x'.repeat(401) } })).rejects.toMatchObject({ field: 'setting' });
   });
 });

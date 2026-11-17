@@ -1305,3 +1305,18 @@ describe('round 2', () => {
     expect(job.payload.prompt).toContain('@MrHallSenior');
   });
 });
+
+describe('story flow in clip prompts', () => {
+  it('each clip prompt carries the scene setting and the shot before; the first has none; an old shot without a setting works', async () => {
+    const ctx = await newProject({ n: 3 });
+    await storyDb().update('story_shots', { id: [ctx.shots[0].id, ctx.shots[1].id] }, { setting: 'A small shop at night, warm lamp light.' });
+    await generateAll(ctx);
+    const prompts = new Map((await clipJobs(ctx.project.id)).map((j) => [j.shot_id, j.payload.prompt]));
+    expect(prompts.get(ctx.shots[0].id)).toContain('Setting: A small shop at night, warm lamp light.');
+    expect(prompts.get(ctx.shots[0].id)).not.toContain('Just before this');
+    expect(prompts.get(ctx.shots[1].id)).toContain('Just before this: Shot number 1 of the shop.');
+    expect(prompts.get(ctx.shots[1].id)).toContain('Shot number 2 of the shop.');
+    expect(prompts.get(ctx.shots[2].id)).not.toContain('Setting:');
+    expect(prompts.get(ctx.shots[2].id)).toContain('Just before this: Shot number 2 of the shop.');
+  });
+});
