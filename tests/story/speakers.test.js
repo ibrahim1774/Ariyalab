@@ -53,4 +53,11 @@ describe('who says a shot\'s line', () => {
     const scenes = [{ id: 's1', lines: [{ speaker: 'Ben', text: "I'm here." }] }];
     expect(speakerOfShot(scenes, { scene_id: 's1', line: 'I’m here', line_index: 0 })).toMatchObject({ name: 'Ben' });
   });
+
+  it('a fragment matches on whole words: "No" is not a piece of "I know"', () => {
+    const scenes = [{ id: 's1', lines: [{ speaker: 'Ana', text: 'I know.' }, { speaker: 'Ben', text: 'Wait for me, please.' }] }];
+    expect(speakerOfShot(scenes, { scene_id: 's1', line: 'No.', line_index: 0 })).toEqual({ kind: 'unknown' });
+    expect(speakerOfShot(scenes, { scene_id: 's1', line: 'Wait for me', line_index: 1 })).toMatchObject({ name: 'Ben' });
+    expect(speakerOfShot(scenes, { scene_id: 's1', line: 'for me, pl', line_index: 1 })).toEqual({ kind: 'unknown' });
+  });
 });

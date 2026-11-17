@@ -444,6 +444,25 @@ describe('buildShotList: who says each line (talking video)', () => {
     registerMock('story_shots', storyShotsMock);
   });
 
+  it('every narrator line of a talking script gets a shot: a plan that leaves one out is planned again once', async () => {
+    let calls = 0;
+    registerMock('story_shots', (input) => {
+      calls += 1;
+      const out = storyShotsMock(input);
+      return calls === 1 ? { shots: out.shots.map((sh) => (sh.line === 'And that was the start.' ? { ...sh, line: '', lineIndex: undefined } : sh)) } : out;
+    });
+    const { userId, project } = await talking();
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(calls).toBe(2);
+    expect(shots.some((sh) => sh.line === 'And that was the start.')).toBe(true);
+    registerMock('story_shots', storyShotsMock);
+  });
+
+  it('a narrator line may be followed by shots with nothing said (the narrator plays over them)', async () => {
+    const { buildShotsSystem } = await import('../../lib/story/prompts/shot.js');
+    expect(buildShotsSystem({ seconds: 12 })).toMatch(/narrator line may be followed by shots with nothing said/);
+  });
+
   it('a line index that cannot be checked after the one new plan is refused, with the way out that both makers have', async () => {
     registerMock('story_shots', (input) => {
       const out = storyShotsMock(input);

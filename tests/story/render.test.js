@@ -18,7 +18,7 @@ import { transcribe } from '../../lib/providers/stt.js';
 import { runWorkerJob, sweep, enqueue } from '../../lib/story/runner.js';
 import { KINDS_REGISTERED_LATER } from '../../lib/story/handlers.js';
 import { setAudioPlan, checkedAudioExt } from '../../lib/story/audio.js';
-import { startRender, renderTargetSize, _configureRender, planNarration, CLIP_BED_DB } from '../../lib/story/render.js';
+import { startRender, renderTargetSize, _configureRender, planNarration, CLIP_BED_DB, isSilentReading } from '../../lib/story/render.js';
 import { captionFilterAvailable } from '../../lib/story/captions.js';
 import { run as runChecks, scriptWordsOf, wordCoverage } from '../../lib/story/checks.js';
 import { getProjectStatus } from '../../lib/story/status.js';
@@ -1057,6 +1057,51 @@ describe('sound in both modes', () => {
     expect(row.status).toBe('done');
     expect(row.warnings).toEqual([]);
   }, 240_000);
+
+  it('N3: a talking video whose clips came back with no speech (silent sound tracks, no narrator, no music) still gets the words check', async () => {
+    const userId = randomUUID();
+    const scenes = [{ id: 's1', title: 'T', visual: 'v', lines: [{ speaker: 'Maya', text: 'Hello there my dear friend.' }] }];
+    const [project] = await storyDb().insert('story_projects', {
+      fee_charged: true, user_id: userId, title: 'No speech', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'talking', aspect: '9:16',
+      audio_plan: { captions: { on: false, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes, source: 'brief' });
+    await storyDb().insert('story_shots', [{ project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.quiet.url, clip_key: media.quiet.key, line: 'Hello there my dear friend.', line_index: 0 }]);
+    const row = await renderOnce({ userId, project });
+    expect(row.status).toBe('done');
+    expect(transcribe).toHaveBeenCalledTimes(1);
+    const found = row.warnings.map((w) => w.code);
+    expect(found).toContain('words');
+    // No mix, no normalising of silence: no loudness warning.
+    expect(found).not.toContain('loudness');
+  }, 240_000);
+
+  it('N4: a volume reading that cannot be made is not silence (the clip sound is kept)', () => {
+    expect(isSilentReading(undefined)).toBe(false);
+    expect(isSilentReading('nan')).toBe(false);
+    expect(isSilentReading('-inf')).toBe(true);
+    expect(isSilentReading('-80.5')).toBe(true);
+    expect(isSilentReading('-31.2')).toBe(false);
+  });
+
+  it('N2: a narrator line plays over its own shot and the line-free shots after it in the scene, and is never put over a character', () => {
+    const shots = [
+      { sceneId: 's1', seconds: 3, narrator: true, lineIndex: 0, carries: true },
+      { sceneId: 's1', seconds: 3, carries: false },
+      { sceneId: 's1', seconds: 3, lineIndex: 1, carries: true },
+    ];
+    const long = [{ sceneId: 's1', lineIndex: 0, text: 'a', start: 0, end: 5.8 }];
+    const plan = planNarration({ segments: long, shots, totalSeconds: 9, perLine: true });
+    expect(plan.groups[0]).toMatchObject({ at: 0, tempo: 1 });
+    expect(plan.warnings.map((w) => w.code)).not.toContain('narration_overrun');
+    // A narrator line with no shot of its own goes to the first line-free shot, not over the character.
+    const lone = [{ sceneId: 's1', lineIndex: 5, text: 'b', start: 0, end: 2 }];
+    const placed = planNarration({
+      segments: lone, totalSeconds: 6, perLine: true,
+      shots: [{ sceneId: 's1', seconds: 3, lineIndex: 1, carries: true }, { sceneId: 's1', seconds: 3, carries: false }],
+    });
+    expect(placed.groups[0].at).toBe(3);
+  });
 
   it('checks count every voiced line: narrator lines and character lines in a talking video, narrator lines only in a narrated one', () => {
     expect(scriptWordsOf(MIXED_SCENES, 'talking')).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);
