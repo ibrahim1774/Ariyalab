@@ -1022,6 +1022,42 @@ describe('sound in both modes', () => {
     expect(CLIP_BED_DB).toBeLessThan(0);
   }, 240_000);
 
+  it('a narrator line is placed at the shot that carries it, never over a character who speaks earlier in the same scene', async () => {
+    const userId = randomUUID();
+    const scenes = [{ id: 's1', title: 'Both', visual: 'A bakery.', lines: [{ speaker: 'Maya', text: 'a baker dreamed big.' }, { speaker: 'narrator', text: 'Once upon a time,' }] }];
+    const [project] = await storyDb().insert('story_projects', {
+      fee_charged: true, user_id: userId, title: 'Same scene', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'talking', aspect: '9:16',
+      narration_url: media.narration.url, narration_key: media.narration.key, narration_seconds: 2.4,
+      narration_segments: [{ sceneId: 's1', lineIndex: 1, text: 'Once upon a time,', start: 0.2, end: 2.4 }],
+      audio_plan: { captions: { on: true, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes, source: 'brief' });
+    await storyDb().insert('story_shots', [
+      { project_id: project.id, ord: 0, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.tk1.url, clip_key: media.tk1.key, line: 'a baker dreamed big.', line_index: 0 },
+      { project_id: project.id, ord: 1, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.c1.url, clip_key: media.c1.key, line: 'Once upon a time,', line_index: 1 },
+    ]);
+    const row = await renderOnce({ userId, project });
+    expect(row.status).toBe('done');
+    // The narration starts with its own shot (3 s), after the character has spoken.
+    expect(row.settings.narrationPlan).toHaveLength(1);
+    expect(row.settings.narrationPlan[0].at).toBeCloseTo(3, 6);
+    expect(row.settings.shots.map((x) => x.line)).toEqual(['a baker dreamed big.', null]);
+    expect(row.warnings).toEqual([]);
+  }, 240_000);
+
+  it('M5: no narration, no music and clips whose sound track is silent: the clips are muxed as they are, with no loudness warning', async () => {
+    const userId = randomUUID();
+    const [project] = await storyDb().insert('story_projects', {
+      fee_charged: true, user_id: userId, title: 'Quiet', style: '3d_family', step: 'review', seconds: 15, quality: 'standard', mode: 'narrated', aspect: '9:16',
+      audio_plan: { captions: { on: false, style: 'clean' }, music: { type: 'none', prompt: '', assetId: null } },
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: [{ id: 's1', title: 'T', visual: 'v', lines: [] }], source: 'brief' });
+    await storyDb().insert('story_shots', [0, 1].map((i) => ({ project_id: project.id, ord: i, scene_id: 's1', seconds: 3, quality: 'standard', source: 'generated', status: 'ready', clip_url: media.quiet.url, clip_key: media.quiet.key })));
+    const row = await renderOnce({ userId, project });
+    expect(row.status).toBe('done');
+    expect(row.warnings).toEqual([]);
+  }, 240_000);
+
   it('checks count every voiced line: narrator lines and character lines in a talking video, narrator lines only in a narrated one', () => {
     expect(scriptWordsOf(MIXED_SCENES, 'talking')).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);
     expect(scriptWordsOf(SCENES, 'narrated')).toEqual(['once', 'upon', 'a', 'time', 'a', 'baker', 'dreamed', 'big']);

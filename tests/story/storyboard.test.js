@@ -7,6 +7,7 @@ import { makeReq, makeRes } from '../helpers/apiMock.js';
 import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { setCreditsDb, grantCredits, getBalance, InsufficientCreditsError } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache, getPricing, generatedSeconds } from '../../lib/pricing.js';
+import { speakerOfShot } from '../../lib/story/speakers.js';
 import { registerMock } from '../../lib/providers/mock.js';
 import { ModerationError } from '../../lib/moderation.js';
 import { FORBIDDEN_NAMES, updateScene } from '../../lib/story/script.js';
@@ -385,10 +386,75 @@ describe('buildShotList: who says each line (talking video)', () => {
     registerMock('story_shots', storyShotsMock);
   });
 
-  it('refuses a character line whose speaker is not in the cast', async () => {
+  it('a speaker named in the script but not in the cast is not an error: the plan is made and the shot says they have no picture', async () => {
     const { userId, project } = await talking({ cast: ['Maya'] });
-    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved' });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    const leo = shots.find((sh) => sh.line === 'I will take the first chair.');
+    expect(leo.warnings).toEqual([{ code: 'speaker_not_in_cast', message: 'Leo has no character picture, so their look and voice may change.' }]);
+    expect(shots.find((sh) => sh.line === 'Watch me prove them wrong.').warnings).toEqual([]);
+    expect(shots.find((sh) => sh.line === 'Nobody believed this would work.').warnings).toEqual([]);
+    expect((await listShots({ userId, projectId: project.id })).shots.find((sh) => sh.id === leo.id).warnings).toHaveLength(1);
+  });
+
+  it('stores the index of each shot\'s line within its scene (null for a shot with no line)', async () => {
+    const { userId, project } = await talking();
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.filter((sh) => sh.line).map((sh) => [sh.scene_id, sh.line_index])).toEqual([['s1', 0], ['s1', 1], ['s2', 0], ['s2', 1]]);
+    expect(shots.filter((sh) => !sh.line).every((sh) => sh.line_index === null)).toBe(true);
+  });
+
+  it('Ana says "No." and then Ben says "No.": Ben\'s shot names Ben', async () => {
+    const scenes = [{ id: 's1', title: 'T', visual: 'Two friends.', lines: [{ speaker: 'Ana', text: 'No.' }, { speaker: 'Ben', text: 'No.' }] }];
+    const { userId, project } = await talking({ scenes, cast: ['Ana', 'Ben'], seconds: 7 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    const withLine = shots.filter((sh) => sh.line);
+    expect(withLine.map((sh) => sh.line_index)).toEqual([0, 1]);
+    expect(withLine.map((sh) => speakerOfShot(scenes, sh, shots).name)).toEqual(['Ana', 'Ben']);
+  });
+
+  it('a curly apostrophe or a dropped full stop in the shot\'s line still resolves', async () => {
+    const scenes = [{ id: 's1', title: 'T', visual: 'A friend.', lines: [{ speaker: 'Ben', text: "I'm here." }] }];
+    let calls = 0;
+    registerMock('story_shots', (input) => {
+      calls += 1;
+      const out = storyShotsMock(input);
+      return { shots: out.shots.map((sh) => (sh.line ? { ...sh, line: 'I’m here' } : sh)) };
+    });
+    const { userId, project } = await talking({ scenes, cast: ['Ben'], seconds: 7 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(calls).toBe(1);
+    expect(shots.find((sh) => sh.line)).toMatchObject({ line: 'I’m here', line_index: 0 });
+    registerMock('story_shots', storyShotsMock);
+  });
+
+  it('two speakers merged into one shot are planned again, never given to the first speaker', async () => {
+    const scenes = [{ id: 's1', title: 'T', visual: 'Two friends.', lines: [{ speaker: 'Ana', text: 'No.' }, { speaker: 'Ben', text: 'Wait for me.' }] }];
+    let calls = 0;
+    registerMock('story_shots', (input) => {
+      calls += 1;
+      const out = storyShotsMock(input);
+      if (calls > 1) return out;
+      const [first, ...rest] = out.shots;
+      return { shots: [{ ...first, line: 'No. Wait for me.', lineIndex: 0 }, ...rest.map((sh) => ({ ...sh, line: '', lineIndex: undefined }))] };
+    });
+    const { userId, project } = await talking({ scenes, cast: ['Ana', 'Ben'], seconds: 7 });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(calls).toBe(2);
+    expect(shots.filter((sh) => sh.line).map((sh) => sh.line)).toEqual(['No.', 'Wait for me.']);
+    registerMock('story_shots', storyShotsMock);
+  });
+
+  it('a line index that cannot be checked after the one new plan is refused, with the way out that both makers have', async () => {
+    registerMock('story_shots', (input) => {
+      const out = storyShotsMock(input);
+      return { shots: out.shots.map((sh) => (sh.line ? { ...sh, lineIndex: 9 } : sh)) };
+    });
+    const { userId, project } = await talking();
+    await expect(buildShotList({ userId, projectId: project.id })).rejects.toMatchObject({
+      status: 422, code: 'speaker_unresolved', message: expect.stringContaining('Ask the chat to fix who says this line.'),
+    });
     expect(await shotRows(project.id)).toHaveLength(0);
+    registerMock('story_shots', storyShotsMock);
   });
 
   it('a narrated video does not check speakers (character lines are never spoken there)', async () => {

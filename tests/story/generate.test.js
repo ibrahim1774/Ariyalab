@@ -457,21 +457,37 @@ describe('sound in the clip prompt (narrator and character lines)', () => {
     expect(prompt).toContain('@Maya says, in a warm, low and unhurried voice: "Watch me prove them wrong."');
   });
 
-  it('a character line whose speaker is not in the cast is refused before anything is claimed, held or queued', async () => {
+  it('a speaker who is not in the cast is named in the clip prompt with no voice note (not an error)', async () => {
     const ctx = await soundProject({ cast: ['Maya'] });
-    const before = await balance(ctx.userId);
-    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
-    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved', field: 'line' });
-    expect(await clipJobs(ctx.project.id)).toHaveLength(0);
-    expect(await balance(ctx.userId)).toEqual(before);
-    expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
-    expect((await shotRows(ctx.project.id)).every((s) => s.status === 'still_ready')).toBe(true);
+    await generateAll(ctx);
+    const [, maya, leo] = await orderedPrompts(ctx);
+    expect(maya).toContain('Maya says, in a warm, low and unhurried voice:');
+    expect(leo).toContain('Leo says: "I will take the first chair." Nobody else speaks. No music.');
+  });
+
+  it('a repeated line goes to the right speaker: the shot\'s stored line index decides', async () => {
+    const ctx = await soundProject({ lines: ['Nobody believed this would work.', 'Watch me prove them wrong.', 'I will take the first chair.', 'And that was the start.'] });
+    const scenes = [
+      { id: 's1', title: 'a', visual: 'v', lines: [{ speaker: 'Leo', text: 'No.' }, { speaker: 'Maya', text: 'No.' }] },
+      { id: 's2', title: 'b', visual: 'v', lines: [{ speaker: 'narrator', text: 'x' }] },
+    ];
+    await storyDb().update('story_scripts', { project_id: ctx.project.id }, { scenes });
+    await storyDb().update('story_shots', { project_id: ctx.project.id, scene_id: 's1' }, { scene_sig: sceneSig(scenes[0]) });
+    await storyDb().update('story_shots', { project_id: ctx.project.id, scene_id: 's2' }, { scene_sig: sceneSig(scenes[1]) });
+    const rows = [...ctx.shots].sort((a, b) => a.ord - b.ord);
+    await storyDb().update('story_shots', { id: rows[0].id }, { line: 'No.', line_index: 0 });
+    await storyDb().update('story_shots', { id: rows[1].id }, { line: 'No.', line_index: 1 });
+    await storyDb().update('story_shots', { id: [rows[2].id, rows[3].id] }, { scene_id: 's2', line: null });
+    await generateAll(ctx);
+    const [leo, maya] = await orderedPrompts(ctx);
+    expect(leo).toContain('Leo says');
+    expect(maya).toContain('Maya says');
   });
 
   it('a character line that is no line of its scene (the script changed) is refused the same way', async () => {
     const ctx = await soundProject({ lines: [LINES[0], 'Something Maya never says.', LINES[2], LINES[3]] });
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
-    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved' });
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total })).rejects.toMatchObject({ status: 422, code: 'speaker_unresolved', message: expect.stringContaining('Ask the chat to fix who says this line.') });
     expect(await clipJobs(ctx.project.id)).toHaveLength(0);
   });
 

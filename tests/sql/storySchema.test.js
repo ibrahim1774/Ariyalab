@@ -373,4 +373,20 @@ describe('story_delete_project', () => {
     expect((await one(`select count(*)::int as n from story_projects where id = $1`, [project.id])).n).toBe(0);
     expect((await one(`select story_delete_project($1, $2) as ok`, [USER_A, project.id])).ok).toBe(false);
   });
+
+  it('story_shots_replace stores the line index of each shot, and updates it on a shot it keeps', async () => {
+    const project = await one(`insert into story_projects (user_id) values ($1) returning id`, [USER_A]);
+    const plan = (a, b) => JSON.stringify([
+      { sceneId: 's1', description: 'one', line: 'No.', lineIndex: a, seconds: 3, castIds: [], sceneSig: 'x' },
+      { sceneId: 's1', description: 'two', line: 'No.', lineIndex: b, seconds: 3, castIds: [], sceneSig: 'x' },
+      { sceneId: 's1', description: 'three', line: '', seconds: 3, castIds: [], sceneSig: 'x' },
+    ]);
+    await db.query(`select * from story_shots_replace($1, $2::jsonb)`, [project.id, plan(0, 1)]);
+    let rows = (await db.query(`select description, line_index from story_shots where project_id = $1 order by ord`, [project.id])).rows;
+    expect(rows).toEqual([{ description: 'one', line_index: 0 }, { description: 'two', line_index: 1 }, { description: 'three', line_index: null }]);
+    await db.query(`select * from story_shots_replace($1, $2::jsonb)`, [project.id, plan(1, 0)]);
+    rows = (await db.query(`select description, line_index from story_shots where project_id = $1 order by ord`, [project.id])).rows;
+    expect(rows.map((r) => r.line_index)).toEqual([1, 0, null]);
+    await expect(db.query(`update story_shots set line_index = -1 where project_id = $1`, [project.id])).rejects.toThrow(/check constraint/);
+  });
 });

@@ -9,6 +9,8 @@ import { setStoryDb, storyDb } from '../../lib/story/db.js';
 import { setCreditsDb, grantCredits, getBalance } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache, getPricing } from '../../lib/pricing.js';
 import { registerMock } from '../../lib/providers/mock.js';
+import { ProviderError } from '../../lib/providers/errors.js';
+import { storyScriptMock } from '../../lib/story/mocks.js';
 import { ModerationError, MODERATION_UNAVAILABLE } from '../../lib/moderation.js';
 import { LimitError } from '../../lib/story/errors.js';
 import { storyChatMock } from '../../lib/story/mocks.js';
@@ -974,38 +976,62 @@ describe('simple maker tools', () => {
   });
 
   describe('set_mode', () => {
-    it('sets who tells the story with no clips made: no card, no credits, and it says the script may need rewriting', async () => {
+    const scriptOf = async (projectId) => (await storyDb().select('story_scripts', { project_id: projectId }, { order: '-version', limit: 1 }))[0];
+    const speakers = (script) => [...new Set(script.scenes.flatMap((sc) => sc.lines.map((l) => l.speaker)))];
+
+    it('returns a card that says the script is rewritten for the new style, changes nothing and charges nothing', async () => {
       const ctx = await genProject({ n: 2 });
       const before = await ledgerCount(ctx.userId);
       const out = await run(ctx, 'set_mode', { mode: 'talking' });
-      expect(out).toMatchObject({ ok: true, changed: 'project', project: { mode: 'talking' } });
-      expect(out.note).toMatch(/rewrite the script/i);
-      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'mode', method: 'POST', body: { mode: 'talking', clips: 0 } } });
+      expect(out.quote.label).toBe('The characters speak: This rewrites your script so the characters speak.');
+      expect(out.quote.credits).toBe(0);
+      expect((await run(ctx, 'set_mode', { mode: 'narrated' })).note).toBe('It was already set that way.');
+      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      expect((await scriptOf(ctx.project.id)).version).toBe(1);
       expect(await ledgerCount(ctx.userId)).toBe(before);
-      // The same value again changes nothing more.
-      expect(await run(ctx, 'set_mode', { mode: 'talking' })).toMatchObject({ ok: true, project: { mode: 'talking' }, note: 'It was already set that way.' });
     });
 
-    it('with clips already made it changes nothing and returns a card: how many clips need making again, with the plain wording', async () => {
+    it('pressing it rewrites the script for the new style through the revise service (counted), then changes the mode', async () => {
+      const ctx = await genProject({ n: 2 });
+      const before = await ledgerCount(ctx.userId);
+      const out = await run(ctx, 'set_mode', { mode: 'talking' });
+      await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm });
+      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+      const script = await scriptOf(ctx.project.id);
+      expect(script.version).toBe(2);
+      expect(script.source).toBe('revision');
+      expect(script.instruction).toMatch(/so the characters speak/);
+      expect(speakers(script)).not.toContain('narrator');
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+      // And back: a narrator tells it.
+      const back = await run(ctx, 'set_mode', { mode: 'narrated' });
+      await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: back.confirm });
+      expect(speakers(await scriptOf(ctx.project.id))).toEqual(['narrator']);
+    });
+
+    it('if the rewrite fails the mode is not changed', async () => {
+      const ctx = await genProject({ n: 2 });
+      const out = await run(ctx, 'set_mode', { mode: 'talking' });
+      registerMock('story_script', () => { throw new ProviderError('failed', 'down'); });
+      await expect(runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm })).rejects.toBeDefined();
+      registerMock('story_script', storyScriptMock);
+      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      expect((await scriptOf(ctx.project.id)).version).toBe(1);
+    });
+
+    it('with clips already made the card also counts the clips that will need making again, and pressing it marks them', async () => {
       const ctx = await genProject({ n: 3, clips: true });
       const before = await ledgerCount(ctx.userId);
       const out = await run(ctx, 'set_mode', { mode: 'talking' });
-      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'mode', method: 'POST', body: { mode: 'talking' } } });
-      expect(out.quote.credits).toBe(0);
-      expect(out.quote.clips).toBe(3);
+      expect(out.quote).toMatchObject({ credits: 0, clips: 3 });
       expect(out.quote.remake_credits).toBeGreaterThan(0);
-      expect(out.quote.label).toMatch(/^The characters speak: 3 clips will need making again/);
-      const narr = await run(ctx, 'set_mode', { mode: 'narrated' });
-      expect(narr).toMatchObject({ ok: true, project: { mode: 'narrated' } });
-      // Nothing changed yet (the project is narrated: the card for talking is the open one).
-      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      expect(out.quote.label).toMatch(/^The characters speak: This rewrites your script so the characters speak\. 3 clips will need making again \(\d+ credits\)\.$/);
       expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
       await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm });
       expect((await projectRow(ctx.project.id)).mode).toBe('talking');
       expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale && sh.clip_mismatch && sh.clip_url)).toBe(true);
       expect(await ledgerCount(ctx.userId)).toBe(before);
-      const back = await run(ctx, 'set_mode', { mode: 'narrated' });
-      expect(back.quote.label).toMatch(/^A narrator tells the story: 3 clips will need making again/);
     });
 
     it('the card goes out of date once the mode already has that value, or the clip count moved', async () => {
@@ -1027,8 +1053,10 @@ describe('simple maker tools', () => {
       const ctx = await genProject({ n: 2 });
       expect(await run(ctx, 'set_mode', { mode: 'loud' })).toMatchObject({ ok: false, error: 'validation_failed' });
       expect(await run(ctx, 'set_mode', {})).toMatchObject({ ok: false, error: 'validation_failed' });
+      const out = await run(ctx, 'set_mode', { mode: 'talking' });
       await storyDb().update('story_shots', { id: ctx.shots[0].id }, { status: 'generating' });
-      expect(await run(ctx, 'set_mode', { mode: 'talking' })).toMatchObject({ ok: false, error: 'shots_busy' });
+      await expect(runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm })).rejects.toMatchObject({ code: 'shots_busy' });
+      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
     });
   });
 

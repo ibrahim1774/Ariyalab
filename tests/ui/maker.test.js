@@ -762,6 +762,9 @@ describe('errors', () => {
 
   it('a request that never arrived says so', () => {
     expect(describeError(new StoryApiError({ status: 0, code: 'network' })).message).toMatch(/reach the server/);
+    // A shot whose speaker cannot be told (shot plan or clip start): the server's words, with the way out, are shown as they are.
+    const speaker = describeError(new StoryApiError({ status: 422, code: 'speaker_unresolved', message: 'We could not tell who says a line in this shot. Ask the chat to fix who says this line.' }));
+    expect(speaker.message).toBe('We could not tell who says a line in this shot. Ask the chat to fix who says this line.');
   });
 
   it('only shows a field error next to its own field', () => {
