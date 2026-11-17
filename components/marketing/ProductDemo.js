@@ -350,7 +350,11 @@ function Chat({ id, lt, still }) {
     if (lt >= REPLY_AT) msgs.push({ who: 'ai', text: 'Done. Scene 1 is funnier now.' });
   }
   if (id === 'plan') msgs.push({ who: 'ai', text: 'Here is the plan. Try scene 1 first if you want to check the look.' });
-  if (id === 'watch') msgs.push({ who: 'ai', text: still ? 'Your video is ready.' : 'Your video is ready. Pick a scene to change it.' });
+  if (id === 'watch') {
+    if (still) msgs.push({ who: 'ai', text: 'Your video is ready.' });
+    else if (lt >= PLAY_AT) msgs.push({ who: 'ai', text: 'Your video is ready. Pick a scene to change it.' });
+    else msgs.push({ who: 'ai', text: 'Making your video now. This takes a few minutes.' });
+  }
   const focused = id === 'script' && lt >= 2600 && lt < SEND_AT;
   return (
     <div className={styles.chat}>

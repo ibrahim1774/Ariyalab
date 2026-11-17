@@ -241,6 +241,17 @@ describe('polish', () => {
     expect(sawMaking).toBe(true);
   });
 
+  it('the chat says the video is being made, and says ready only once it is', () => {
+    reduceMotion(false);
+    const { container } = render(<ProductDemo />);
+    advance(startOf('watch') + 200 + 3 * 900 + 400);
+    expect(container.textContent).toMatch(/Making your video now/);
+    expect(container.textContent).not.toMatch(/Your video is ready/);
+    advance(4000);
+    expect(container.textContent).toMatch(/Your video is ready/);
+    expect(container.textContent).not.toMatch(/Making your video now/);
+  });
+
   it('the badge says Making until the last scene is done', () => {
     reduceMotion(false);
     const { container } = render(<ProductDemo />);
