@@ -24,7 +24,9 @@ export default async function handler(req, res) {
       return res.status(200).json({ project: await getProject({ userId, id }) });
     }
     if (req.method === 'PATCH') {
-      return res.status(200).json({ project: await updateProject({ userId, id, patch: req.body ?? {} }) });
+      // expected_credits: the redo total shown for a style change that remakes things already made (409 quote_changed without it).
+      const { expected_credits: expectedCredits, ...patch } = req.body ?? {};
+      return res.status(200).json({ project: await updateProject({ userId, id, patch, expectedCredits }) });
     }
     await deleteProject({ userId, id });
     return res.status(200).json({ deleted: true });

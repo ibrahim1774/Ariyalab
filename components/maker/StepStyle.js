@@ -5,6 +5,7 @@ import Card from '../ui/Card';
 import { STYLES } from '../../lib/story/prompts/styles';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
+import StyleRedoAsk, { isStyleRedo } from './StyleRedoAsk';
 import { StyleImage } from './Tiles';
 import styles from './Steps.module.css';
 
@@ -13,18 +14,22 @@ export default function StepStyle({ project, save, onNext, returnTo }) {
   const [custom, setCustom] = useState(project?.style_custom || '');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  const [redo, setRedo] = useState(null);
   const ready = style && (style !== 'custom' || custom.trim());
 
-  async function submit(e) {
-    e.preventDefault();
+  async function submit(e, expected) {
+    e?.preventDefault();
     if (!ready || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await save(style === 'custom' ? { style, style_custom: custom.trim() } : { style });
+      await save({ ...(style === 'custom' ? { style, style_custom: custom.trim() } : { style }), ...(Number.isInteger(expected) ? { expected_credits: expected } : {}) });
+      setRedo(null);
       onNext?.();
     } catch (err) {
-      setError(err);
+      // Remaking what is made costs credits: the customer sees the total first (the server refuses the change without it).
+      if (isStyleRedo(err)) setRedo({ credits: err.body.credits, render: Number(err.body.render_credits) || 0 });
+      else setError(err);
     } finally {
       setBusy(false);
     }
@@ -59,6 +64,15 @@ export default function StepStyle({ project, save, onNext, returnTo }) {
           <ErrorNotice error={error} field={null} returnTo={returnTo} />
         </div>
       </Card>
+      {redo && (
+        <StyleRedoAsk
+          credits={redo.credits}
+          renderCredits={redo.render}
+          busy={busy}
+          onChange={() => submit(null, redo.credits)}
+          onKeep={() => { setRedo(null); setStyle(project?.style || ''); setCustom(project?.style_custom || ''); }}
+        />
+      )}
       <StepFooter>
         <Button type="submit" disabled={!ready || busy}>{busy ? 'Saving…' : 'Continue'}</Button>
       </StepFooter>

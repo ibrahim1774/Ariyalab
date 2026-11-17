@@ -302,6 +302,47 @@ describe('screen 2, Check the script', () => {
     await waitFor(() => expect(client.reviseScript).toHaveBeenCalledTimes(2));
   }, 15000);
 
+  it('I1: changing the style of a video with things made asks first, with the price, and only then sends it', async () => {
+    fakeServer();
+    const redo = new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 42, render_credits: 5 } });
+    client.updateProject.mockRejectedValueOnce(redo);
+    client.updateProject.mockResolvedValue(project({ step: 'script', style: 'anime' }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByText('Dre gave a crooked fade.');
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+    fireEvent.click(screen.getByRole('button', { name: /Change style/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Use this style/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to the script/ }));
+    const ask = await screen.findByTestId('style-redo');
+    expect(ask).toHaveTextContent('Changing the style remakes your characters, pictures and clips. That costs 42 credits in all.');
+    expect(ask).toHaveTextContent('5 credits extra');
+    expect(client.updateProject).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(ask).getByRole('button', { name: 'Change it' }));
+    await waitFor(() => expect(client.updateProject).toHaveBeenCalledTimes(2));
+    expect(client.updateProject.mock.calls[1][1]).toMatchObject({ style: 'anime', expected_credits: 42 });
+  }, 15000);
+
+  it('I1: Keep my style puts the old style back and sends nothing', async () => {
+    fakeServer();
+    client.updateProject.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 42 } }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByText('Dre gave a crooked fade.');
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+    fireEvent.click(screen.getByRole('button', { name: /Change style/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Use this style/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to the script/ }));
+    fireEvent.click(within(await screen.findByTestId('style-redo')).getByRole('button', { name: 'Keep my style' }));
+    expect(screen.queryByTestId('style-redo')).toBeNull();
+    expect(screen.getByTestId('style-chosen')).toHaveTextContent('3D animated family film');
+    expect(client.updateProject).toHaveBeenCalledTimes(1);
+  }, 15000);
+
   it('lists the included parts of the quote and says an unpriced total is included', async () => {
     fakeServer();
     client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [{ key: 'fee', label: 'Project fee', credits: 0, included: true }, { key: 'pictures', label: 'Storyboard pictures', credits: 0, included: true }] });

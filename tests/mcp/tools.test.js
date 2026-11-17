@@ -386,6 +386,17 @@ describe('money', () => {
     expect(await storyDb().select('story_cast', { project_id: projectId })).toHaveLength(0);
   });
 
+  it('get_status shows a character cleared by a style change as needing pictures, never as ready', async () => {
+    const user = newUser();
+    await fund(user.id, 500);
+    const client = await connect(await tokenFor(user));
+    const { data: created } = await use(client, 'create_project', { title: 'Style', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = created.project.id;
+    await storyDb().insert('story_cast', { project_id: projectId, ord: 0, name: 'Maya', description: 'F.', status: 'ready', candidates: [], image_url: null, style_stale: true });
+    const { data } = await use(client, 'get_status', { project_id: projectId });
+    expect(data.cast[0]).toMatchObject({ name: 'Maya', status: 'needs_pictures', pictures: [], sheet_ready: false });
+  });
+
   it('create_project can set consistent_cast false; generate_cast then queues nothing, quotes nothing and spends nothing', async () => {
     const user = newUser();
     await fund(user.id, 500);

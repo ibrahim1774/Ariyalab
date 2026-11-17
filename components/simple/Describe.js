@@ -13,6 +13,7 @@ import { StyleImage, Skeleton } from '../maker/Tiles';
 import { titleFromIdea } from '../maker/StepStart';
 import { DEFAULT_QUALITY, DEFAULT_SECONDS, DEFAULT_STYLE, hasScript, lengthCredits, lengthLabel } from './derive';
 import { Announce, BillingLink, Dock, ScreenHead, count, priceText } from './parts';
+import StyleRedoAsk, { isStyleRedo } from '../maker/StyleRedoAsk';
 import styles from './Simple.module.css';
 
 const POLL_MS = 3000;
@@ -115,6 +116,8 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
   const [available, setAvailable] = useState(null);
+  const [redo, setRedo] = useState(null);
+  const expected = useRef(null); // the redo total the customer confirmed for a style change that remakes things
   const created = useRef(null); // the project made by a first press that then failed to write: the retry reuses it
   const { reference, error: referenceError, reload } = useReference(project?.id, project?.reference_id);
 
@@ -147,6 +150,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
     ...(style === 'custom' ? { style_custom: custom } : {}),
     seconds,
     ...qualityPatch(quality),
+    ...(expected.current !== null ? { expected_credits: expected.current } : {}),
   });
 
   const refit = useRef(null);
@@ -190,8 +194,11 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
         }
       }
     } catch (err) {
-      setError(err);
+      // Changing the style of a video with things made remakes them: the customer sees the total first.
+      if (isStyleRedo(err) && project) setRedo({ credits: err.body.credits, render: Number(err.body.render_credits) || 0 });
+      else setError(err);
     } finally {
+      expected.current = null;
       setBusy('');
     }
   }
@@ -332,6 +339,15 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
         </div>
       </div>
 
+      {redo && (
+        <StyleRedoAsk
+          credits={redo.credits}
+          renderCredits={redo.render}
+          busy={Boolean(busy)}
+          onChange={() => { expected.current = redo.credits; setRedo(null); submit(); }}
+          onKeep={() => { setRedo(null); setStyle(project?.style || DEFAULT_STYLE); setCustom(project?.style_custom || ''); }}
+        />
+      )}
       <ErrorNotice error={error} returnTo={returnTo} onRetry={() => submit()} />
       <Announce>{busy}</Announce>
 

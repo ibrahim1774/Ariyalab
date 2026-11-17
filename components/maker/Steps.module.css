@@ -211,3 +211,5 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 
 /* Start step: the note shown once a project was started from a video (Task 22). */
 .referenceNote { min-height: 0; height: auto; padding: 14px 16px; border-radius: 16px; align-items: flex-start; text-align: left; }
+.styleRedo { padding: 12px 14px; border-radius: 12px; background: rgba(183, 121, 31, 0.1); color: #5f3f0c; display: grid; gap: 10px; }
+.styleRedo p { margin: 0; font-size: 14px; line-height: 1.45; }

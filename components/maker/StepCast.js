@@ -64,7 +64,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       <div className={styles.castHead}>
         <h3>{cast.name}</h3>
         {cast.description && <p>{cast.description}</p>}
-        {cast.style_stale && !cast.image_url && !(cast.candidates || []).length && (
+        {cast.style_stale && cast.status === 'ready' && !cast.image_url && !(cast.candidates || []).length && (
           <>
             <p role="note"><small>The art style changed, so {cast.name} needs new pictures.</small></p>
             <Button size="sm" disabled={Boolean(busy)} onClick={() => run('redraw', async () => { await regenCast(projectId, cast.id, '', regenCost); })}>

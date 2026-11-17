@@ -313,6 +313,35 @@ describe('brief steps', () => {
     expect(container.querySelector('img[src="/styles/clay.jpg"]')).not.toBeNull();
   });
 
+  it('I1: a style change that would remake things asks first with the price, then sends it with the total; Keep my style sends nothing', async () => {
+    const redo = () => new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 30 } });
+    const save = vi.fn().mockRejectedValueOnce(redo()).mockRejectedValueOnce(redo()).mockResolvedValue({});
+    const onNext = vi.fn();
+    render(<StepStyle project={project({ style: 'clay' })} save={save} onNext={onNext} />);
+    fireEvent.click(screen.getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const ask = await screen.findByTestId('style-redo');
+    expect(ask).toHaveTextContent('Changing the style remakes your characters, pictures and clips. That costs 30 credits in all.');
+    expect(onNext).not.toHaveBeenCalled();
+    fireEvent.click(within(ask).getByRole('button', { name: 'Keep my style' }));
+    expect(screen.queryByTestId('style-redo')).toBeNull();
+    expect(screen.getByRole('radio', { name: /Clay/ })).toBeChecked();
+    expect(save).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Change it' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ style: 'anime', expected_credits: 30 }));
+    await waitFor(() => expect(onNext).toHaveBeenCalled());
+  });
+
+  it('M5: a character cleared by a style change offers the redraw button, but not while its pictures are being drawn', () => {
+    const cleared = { id: 'c1', name: 'Maya', status: 'ready', candidates: [], image_url: null, style_stale: true, regen_credits: 0 };
+    const { rerender } = render(<StepCast project={project()} cast={[cleared]} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.getByRole('button', { name: /Draw again in the new style/ })).toBeInTheDocument();
+    rerender(<StepCast project={project()} cast={[{ ...cleared, status: 'pending' }]} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(screen.queryByRole('button', { name: /Draw again in the new style/ })).toBeNull();
+  });
+
   it('asks for the custom style text', () => {
     render(<StepStyle project={project({ style: null })} save={vi.fn()} onNext={vi.fn()} />);
     fireEvent.click(screen.getByRole('radio', { name: 'Your own style' }));
