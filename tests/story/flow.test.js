@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fitPrompt, flowOf, lookLine, PROMPT_MAX } from '../../lib/story/flow.js';
-import { stillPrompt } from '../../lib/story/prompts/shot.js';
+import { shorten } from '../../lib/story/flow.js';
+import { buildShotsSystem, stillPrompt } from '../../lib/story/prompts/shot.js';
 
 const cast = new Map([
   ['c1', { id: 'c1', name: 'Maya', description: 'A woman in her thirties with short dark hair, a green apron and a warm smile.' }],
@@ -35,9 +36,35 @@ describe('story flow context', () => {
     expect(stillPrompt({ style: 's', description: 'd' })).toBe('A single frame from an animated short film, 9:16 framing. d s No text, no captions, no logos, no watermark.');
   });
 
-  it('the previous shot is the one before in story order across scene borders; mock tokens do not travel', () => {
-    const rows = [{ id: 'x', ord: 5, scene_id: 's2', description: 'Second scene. [[mock:fail]]' }, { id: 'w', ord: 4, scene_id: 's1', description: 'Last of the first scene [[mock:fail]]' }];
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('the previous shot is the one before in story order across scene borders', () => {
+    const rows = [{ id: 'x', ord: 5, scene_id: 's2', description: 'Second scene.' }, { id: 'w', ord: 4, scene_id: 's1', description: 'Last of the first scene' }];
     expect(flowOf({ shot: rows[0], allShots: rows }).previous).toBe('Just before this: Last of the first scene.');
+  });
+
+  it('only [[mock:...]] markers, and only in mock mode, are dropped from the previous line; customer text is never altered', () => {
+    const rows = [{ id: 'w', ord: 4, description: 'A sign says [[open]] and [[mock:fail]] here' }, { id: 'x', ord: 5, description: 'Next.' }];
+    vi.stubEnv('STORY_MOCK', '1');
+    expect(flowOf({ shot: rows[1], allShots: rows }).previous).toBe('Just before this: A sign says [[open]] and here.');
+    vi.stubEnv('STORY_MOCK', '');
+    expect(flowOf({ shot: rows[1], allShots: rows }).previous).toBe('Just before this: A sign says [[open]] and [[mock:fail]] here.');
+  });
+
+  it('shorten never splits an emoji', () => {
+    const text = '\u{1F600}'.repeat(100);
+    for (const max of [1, 2, 3, 7, 51]) {
+      const out = shorten(text, max);
+      expect([...out].length).toBeLessThanOrEqual(max);
+      expect(out).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+    }
+  });
+
+  it('the planner prompt says unchanged scenes are context only', () => {
+    const system = buildShotsSystem({ seconds: 30 });
+    expect(system).toMatch(/"changed": true/);
+    expect(system).toMatch(/context only/i);
+    expect(system).not.toMatch(/return the shots of every scene that did not change/i);
   });
 
   it('different people in every scene gives no look lines', () => {

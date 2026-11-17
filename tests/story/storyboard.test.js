@@ -19,6 +19,7 @@ import {
   _setStoryboardDeps, FREE_FIRST_TRIES, STALE_CLAIM_MS, PENDING_PLAN_MS, sceneSig, _clearSettledStale,
 } from '../../lib/story/storyboard.js';
 import { holdCredits } from '../../lib/credits.js';
+import { readFileSync } from 'node:fs';
 import { enqueue } from '../../lib/story/runner.js';
 import { stillHandler } from '../../lib/story/stillJobs.js';
 import { tick, _handlerCallScope } from '../../lib/story/runner.js';
@@ -1603,5 +1604,67 @@ describe('story flow: scene settings and neighbouring shots', () => {
     expect(after.filter((s) => s.scene_id === 's2').every((s) => s.setting === shot.setting && s.status === 'still_ready' && s.still_url)).toBe(true);
     expect(after.filter((s) => s.scene_id !== 's2').every((s) => s.setting !== shot.setting)).toBe(true);
     await expect(updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: s2[0].id, patch: { setting: 'x'.repeat(401) } })).rejects.toMatchObject({ field: 'setting' });
+  });
+
+  it('story_shots_replace writes the setting of fresh and matched rows, and keeps it when none is sent', async () => {
+    const ctx = await builtProject();
+    const keep = ctx.shots.filter((x) => x.scene_id !== 's2').map((x) => ({ id: x.id }));
+    const s2 = ctx.shots.filter((x) => x.scene_id === 's2');
+    const plan = [
+      ...keep.slice(0, 2),
+      { sceneId: 's2', sceneSig: s2[0].scene_sig, description: s2[0].description, line: s2[0].line, lineIndex: s2[0].line_index, seconds: s2[0].seconds, quality: 'standard', castIds: [], setting: 'Matched row setting.' },
+      { sceneId: 's2', sceneSig: s2[0].scene_sig, description: 'A brand new shot.', line: null, lineIndex: null, seconds: 3, quality: 'standard', castIds: [], setting: 'Fresh row setting.' },
+      ...keep.slice(2),
+    ];
+    const rows = await storyDb().rpc('story_shots_replace', { p_project: ctx.project.id, p_shots: plan, p_confirm: 0, p_min: null, p_max: null });
+    const mine = rows.filter((r) => r.scene_id === 's2');
+    expect(mine.map((r) => r.setting)).toEqual(['Matched row setting.', 'Fresh row setting.']);
+    expect(mine[0].line_index).toBe(s2[0].line_index);
+    // Old callers (no setting key) leave settings as they are.
+    const again = await storyDb().rpc('story_shots_replace', { p_project: ctx.project.id, p_shots: rows.map((r) => ({ id: r.id })), p_confirm: 0, p_min: null, p_max: null });
+    expect(again.map((r) => r.setting)).toEqual(rows.map((r) => r.setting));
+  });
+
+  it('a rebuild confirmed after a 409 stores the planned settings', async () => {
+    const ctx = await builtProject();
+    for (const s of ctx.shots.filter((x) => x.scene_id === 's2')) await storyDb().update('story_shots', { id: s.id }, { clip_url: `/clip/${s.id}.mp4`, status: 'ready', still_url: '/s.png' });
+    await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
+    registerMock('story_shots', (args) => { const r = storyShotsMock(args); return { ...r, settings: r.settings.map((x) => ({ ...x, setting: 'Planned and confirmed setting.' })) }; });
+    const ask = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id }).catch((e) => e);
+    expect(ask).toMatchObject({ code: 'rebuild_loses_clips' });
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id, confirm: ask.extra.token });
+    const after = await shotRows(ctx.project.id);
+    expect(after.filter((s) => s.scene_id === 's2').every((s) => s.setting === 'Planned and confirmed setting.')).toBe(true);
+  });
+
+  it('scenes whose shots have no setting get one on the next build, without touching their shots, stills or clips', async () => {
+    const ctx = await stilledProject();
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { clip_url: '/clip/x.mp4' });
+    await storyDb().update('story_shots', { project_id: ctx.project.id }, { setting: null });
+    const before = await shotRows(ctx.project.id);
+    const { shots } = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(shots.every((s) => s.setting)).toBe(true);
+    const after = await shotRows(ctx.project.id);
+    for (const [i, b] of before.entries()) expect(after[i]).toMatchObject({ id: b.id, description: b.description, still_url: b.still_url, clip_url: b.clip_url, status: b.status, still_round: b.still_round, stale: b.stale });
+    // Each scene has one setting; a scene that has one is left alone.
+    await storyDb().update('story_shots', { id: after[0].id }, { setting: 'Mine.' });
+    await storyDb().update('story_shots', { scene_id: 's3', project_id: ctx.project.id }, { setting: null });
+    await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    const last = await shotRows(ctx.project.id);
+    expect(last[0].setting).toBe('Mine.');
+    expect(last.filter((s) => s.scene_id === 's3').every((s) => s.setting)).toBe(true);
+  });
+
+  it('a patch with a bad key saves nothing, not even the setting', async () => {
+    const ctx = await stilledProject();
+    await expect(updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id, patch: { setting: 'Changed.', quality: 'bogus' } })).rejects.toMatchObject({ field: 'quality' });
+    await expect(updateShot({ userId: ctx.userId, projectId: ctx.project.id, shotId: ctx.shots[0].id, patch: { setting: 'Changed.', description: '' } })).rejects.toMatchObject({ field: 'description' });
+    expect((await shotRow(ctx.shots[0].id)).setting).toBe(ctx.shots[0].setting);
+  });
+
+  it('the newest replace function still has every line of the line-index version', () => {
+    const dir = 'supabase/migrations/';
+    const sql = readFileSync(`${dir}20261117000400_story_shots_replace_setting.sql`, 'utf8');
+    for (const part of ['line_index = case when kept_li[k] is null then line_index else kept_li[k] end', "raise exception 'shots_busy'", "raise exception 'rebuild_loses_clips:%'", 'fresh_free[k]', "(fresh[k] ->> 'lineIndex')::integer"]) expect(sql).toContain(part);
   });
 });
