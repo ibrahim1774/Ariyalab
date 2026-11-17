@@ -174,6 +174,45 @@ describe('fitSeconds', () => {
   });
 });
 
+// ---------------------------------------------------------------- consistent_cast false
+
+describe('consistent_cast false: shots are described and pictured on their own', () => {
+  it('asks the model with an empty cast (and says each person is described in full), so no shot has cast ids', async () => {
+    const { userId, project } = await newProject();
+    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+    let seen = null;
+    registerMock('story_shots', (input) => { seen = input; return storyShotsMock(input); });
+    const { shots } = await buildShotList({ userId, projectId: project.id });
+    expect(shots.length).toBeGreaterThan(0);
+    expect(shots.every((s) => (s.cast_ids || []).length === 0)).toBe(true);
+    expect(seen.messages[0].content).toMatch(/"cast":\[\]/);
+    expect(seen.system).toMatch(/on its own|by itself|stands alone/i);
+    expect(seen.system).toMatch(/different people|each person/i);
+  });
+
+  it('the default keeps the cast in the shot plan', async () => {
+    const { userId, project } = await newProject();
+    let seen = null;
+    registerMock('story_shots', (input) => { seen = input; return storyShotsMock(input); });
+    await buildShotList({ userId, projectId: project.id });
+    expect(seen.messages[0].content).toContain('Maya looks friendly.');
+    expect(seen.system).not.toMatch(/stands alone/i);
+  });
+
+  it('still pictures get no cast sheets or character references (the product photo stays)', async () => {
+    const { userId, project, shots } = await builtProject({ product: true });
+    await storyDb().update('story_shots', { id: shots.map((s) => s.id) }, { cast_ids: [(await storyDb().select('story_cast', { project_id: project.id }))[0].id] });
+    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+    await generateStills({ userId, projectId: project.id });
+    const jobs = await stillJobs(project.id);
+    expect(jobs.length).toBe(shots.length);
+    for (const job of jobs) {
+      expect(job.payload.refs).toEqual(['/product/bottle.png']);
+      expect(job.payload.prompt).not.toMatch(/Reference picture 1 is Maya/);
+    }
+  });
+});
+
 // ---------------------------------------------------------------- 7 and 120 seconds
 
 describe('shot planning at 7 and 120 seconds', () => {

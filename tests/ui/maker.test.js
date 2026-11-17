@@ -599,6 +599,16 @@ describe('cast step', () => {
     expect(screen.getByRole('button', { name: /Continue to the storyboard/ })).toBeDisabled();
   });
 
+  it('says the cast is not needed when each scene has different people, and never asks the server to make one', () => {
+    const onNext = vi.fn();
+    render(<StepCast {...props([], { onNext, project: project({ step: 'cast', consistent_cast: false }) })} />);
+    expect(screen.getByText(/different people in every scene/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Make my cast' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /Continue to the storyboard/ }));
+    expect(onNext).toHaveBeenCalled();
+    expect(client.startCast).not.toHaveBeenCalled();
+  });
+
   it('expects 0 credits when the setup fee was already paid', async () => {
     client.startCast.mockResolvedValue({});
     render(<StepCast {...props([], { project: project({ step: 'cast', fee_charged: true }) })} />);

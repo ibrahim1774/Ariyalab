@@ -188,6 +188,8 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
     }
   }
 
+  // Different people in every scene: there is no cast to make, and the setup fee is taken with the clips.
+  const noCast = project.consistent_cast === false;
   const allPicked = cast.length > 0 && cast.every((c) => c.chosen_index != null || c.image_url);
 
   return (
@@ -202,7 +204,13 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
         <p className={styles.srOnly} role="status" aria-live="polite">Drawing {makingCount} character{makingCount === 1 ? '' : 's'}</p>
       )}
 
-      {cast.length === 0 && (
+      {noCast && (
+        <EmptyState icon="user" title="No cast needed" text="This video shows different people in every scene, so there are no characters to pick. Each scene is pictured on its own.">
+          <Button onClick={onNext}>Continue to the storyboard</Button>
+        </EmptyState>
+      )}
+
+      {!noCast && cast.length === 0 && (
         <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged ? '' : ` The project setup fee of ${projectFeeFor(pricing, project.seconds)} credits is taken when the cast is first made.`}`}>
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={start} />
           <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
@@ -216,7 +224,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       </div>
 
       <FilesNote project={project} />
-      {cast.length > 0 && (
+      {!noCast && cast.length > 0 && (
         <StepFooter>
           <Button onClick={onNext} disabled={!allPicked}>Continue to the storyboard</Button>
           {!allPicked && <span className={styles.hint}>Every character needs a look to continue.</span>}

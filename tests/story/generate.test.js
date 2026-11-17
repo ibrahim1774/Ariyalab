@@ -338,6 +338,60 @@ describe('generate', () => {
   });
 });
 
+describe('consistent_cast false: clips and the project fee', () => {
+  async function noCast({ feeCharged = false } = {}) {
+    const ctx = await newProject({ n: 2, feeCharged });
+    const [maya] = await storyDb().insert('story_cast', [
+      { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'A barber in an apron.', status: 'ready', image_url: '/pick/maya.png', image_key: 'pm', sheet: { url: '/sheet/maya.png', key: 'sm', from_key: 'pm' } },
+    ]);
+    await storyDb().update('story_shots', { id: ctx.shots.map((s) => s.id) }, { cast_ids: [maya.id] });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
+    return ctx;
+  }
+
+  it('clips are made without character elements', async () => {
+    const ctx = await noCast({ feeCharged: true });
+    await generateAll(ctx);
+    for (const job of await clipJobs(ctx.project.id)) {
+      expect(job.payload.elements ?? []).toEqual([]);
+      expect(job.payload.prompt).not.toContain('@Maya');
+    }
+  });
+
+  it('the project fee is a line of the quote and is charged once, with the cast fee ref and the fee_charged guard', async () => {
+    const ctx = await noCast();
+    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(q.lines[0]).toEqual({ label: 'Project fee', credits: 90 });
+    const out = await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+    expect(out.charged).toBe(q.total);
+    await finishJobs(ctx.project.id);
+    const fee = (await ledger(ctx.userId)).filter((r) => r.reason === 'story_project_fee');
+    expect(fee).toHaveLength(1);
+    expect(fee[0]).toMatchObject({ ref: `project-fee:${ctx.project.id}`, amount: 90 });
+    expect((await projectRow(ctx.project.id)).fee_charged).toBe(true);
+    // A later quote has no fee line, and a second generation spends no second fee.
+    const again = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    expect(again.lines.some((l) => l.label === 'Project fee')).toBe(false);
+    expect(charged(await ledger(ctx.userId))).toBe(q.total);
+  });
+
+  it('the status payload carries consistent_cast', async () => {
+    const ctx = await noCast({ feeCharged: true });
+    expect((await getStatus(ctx)).body.project.consistent_cast).toBe(false);
+    await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: true });
+    expect((await getStatus(ctx)).body.project.consistent_cast).toBe(true);
+  });
+
+  it('a retry of the same start never charges the fee twice', async () => {
+    const ctx = await noCast();
+    const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+    await startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total });
+    await expect(startGeneration({ userId: ctx.userId, projectId: ctx.project.id, confirmTotal: q.total })).rejects.toBeDefined();
+    await finishJobs(ctx.project.id);
+    expect((await ledger(ctx.userId)).filter((r) => r.reason === 'story_project_fee')).toHaveLength(1);
+  });
+});
+
 describe('re-roll', () => {
   async function readyProject(n = 15) {
     const ctx = await newProject({ n });

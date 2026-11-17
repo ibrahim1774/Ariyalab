@@ -386,6 +386,25 @@ describe('money', () => {
     expect(await storyDb().select('story_cast', { project_id: projectId })).toHaveLength(0);
   });
 
+  it('create_project can set consistent_cast false; generate_cast then queues nothing, quotes nothing and spends nothing', async () => {
+    const user = newUser();
+    await fund(user.id, 500);
+    const client = await connect(await tokenFor(user));
+    const { data: plain } = await use(client, 'create_project', { title: 'Same people', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    expect(plain.project.consistent_cast).toBe(true);
+    const { data: created } = await use(client, 'create_project', { title: 'Different people', purpose: 'app', offer: 'A booking app for barbers', seconds: 15, consistent_cast: false });
+    const projectId = created.project.id;
+    expect(created.project.consistent_cast).toBe(false);
+    const before = (await ledger(user.id)).length;
+    const out = await use(client, 'generate_cast', { project_id: projectId });
+    expect(out.isError, out.text).toBe(false);
+    expect(out.data).toMatchObject({ project_id: projectId, credits: 0, cast: [] });
+    expect(out.data.drafting).toBeUndefined();
+    expect(out.data.status_text).toMatch(/generate_storyboard/);
+    expect((await ledger(user.id)).length).toBe(before);
+    expect(await storyDb().select('story_cast', { project_id: projectId })).toHaveLength(0);
+  });
+
   it('create_project starts with the brand kit: offer and audience unless given, and the kit pictures attached', async () => {
     const user = newUser();
     const client = await connect(await tokenFor(user));

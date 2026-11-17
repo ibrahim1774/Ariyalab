@@ -525,6 +525,50 @@ describe('writeScript', () => {
   });
 });
 
+describe('consistent cast from the script model', () => {
+  const projectOf = async (id) => (await storyDb().select('story_projects', { id }))[0];
+
+  it('the model schema has a required boolean consistentCast and the prompt says when to set it false', async () => {
+    const { SCRIPT_SCHEMA } = await import('../../lib/story/prompts/script.js');
+    expect(SCRIPT_SCHEMA.properties.consistentCast).toEqual({ type: 'boolean' });
+    expect(SCRIPT_SCHEMA.required).toContain('consistentCast');
+    const system = buildScriptSystem({ mode: 'narrated', seconds: 30, purpose: 'story', offer: 'x' });
+    expect(system).toMatch(/consistentCast/);
+    expect(system).toMatch(/different people/i);
+    expect(system).toMatch(/not sure|doubt|unsure/i);
+    expect(system).not.toMatch(/[\u2013\u2014]/);
+  });
+
+  it('stays true for an ordinary idea', async () => {
+    const { userId, project } = await newProject();
+    await writeScript({ userId, projectId: project.id });
+    expect((await projectOf(project.id)).consistent_cast).toBe(true);
+  });
+
+  it('is set false when the model says each scene has different people', async () => {
+    const { userId, project } = await newProject({ offer: 'Ten different customers tell their story [[mock:different-people]]' });
+    await writeScript({ userId, projectId: project.id });
+    expect((await projectOf(project.id)).consistent_cast).toBe(false);
+  });
+
+  it('a missing or odd answer keeps true (default true on doubt)', async () => {
+    const { userId, project } = await newProject();
+    registerMock('story_script', (input) => { const { consistentCast, ...rest } = storyScriptMock(input); return rest; });
+    await writeScript({ userId, projectId: project.id });
+    registerMock('story_script', storyScriptMock);
+    expect((await projectOf(project.id)).consistent_cast).toBe(true);
+  });
+
+  it('never overrides the choice on a later write or a revise', async () => {
+    const { userId, project } = await newProject({ offer: 'Different customers [[mock:different-people]]' });
+    await writeScript({ userId, projectId: project.id });
+    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: true });
+    await writeScript({ userId, projectId: project.id });
+    await reviseScript({ userId, projectId: project.id, instruction: 'Shorter [[mock:different-people]]' });
+    expect((await projectOf(project.id)).consistent_cast).toBe(true);
+  });
+});
+
 describe('reviseScript', () => {
   it('bumps the version, keeps unchanged scene ids and reports only the changed scene', async () => {
     const { userId, project } = await newProject();

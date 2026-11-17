@@ -92,6 +92,35 @@ async function readyCast() {
 
 // ---------------------------------------------------------------- prompts
 
+describe('consistent_cast false: the cast step is not needed', () => {
+  it('starting the cast makes no characters, asks no model, charges nothing and moves on to the storyboard', async () => {
+    const { userId, project } = await newProject();
+    await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+    const model = vi.fn(storyCastMock);
+    registerMock('story_cast', model);
+    const before = await available(userId);
+    const out = await generateCast({ userId, projectId: project.id });
+    registerMock('story_cast', storyCastMock);
+    expect(out).toMatchObject({ cast: [], charged: 0, skipped: true });
+    expect(model).not.toHaveBeenCalled();
+    expect(await castRows(project.id)).toHaveLength(0);
+    expect(await jobsOf(project.id)).toHaveLength(0);
+    expect(await available(userId)).toBe(before);
+    expect(await feeEntries(userId)).toHaveLength(0);
+    const row = await projectRow(project.id);
+    expect(row.fee_charged).toBe(false);
+    expect(row.step).toBe('storyboard');
+    expect(await castFeeDue(row, await getPricing())).toBe(0);
+  });
+
+  it('with consistent_cast true (the default) it still makes the cast and charges the fee', async () => {
+    const { userId, project } = await newProject();
+    const out = await generateCast({ userId, projectId: project.id });
+    expect(out.skipped).toBeUndefined();
+    expect(await castRows(project.id)).toHaveLength(2);
+  });
+});
+
 describe('cast prompts', () => {
   const all = () => [
     buildCastSystem({ mode: 'narrated' }),

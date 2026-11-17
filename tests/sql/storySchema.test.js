@@ -98,6 +98,21 @@ describe('story schema', () => {
     expect(ok.mode).toBe('talking');
   });
 
+  it('consistent_cast is a boolean that is never null and defaults to true', async () => {
+    const row = await one(`insert into story_projects (user_id) values ($1) returning consistent_cast`, [USER_A]);
+    expect(row.consistent_cast).toBe(true);
+    await expect(db.query(`insert into story_projects (user_id, consistent_cast) values ($1, null)`, [USER_A])).rejects.toThrow(/null/);
+    const off = await one(`insert into story_projects (user_id, consistent_cast) values ($1, false) returning consistent_cast`, [USER_A]);
+    expect(off.consistent_cast).toBe(false);
+  });
+
+  it('accepts 7 and 120 seconds', async () => {
+    for (const seconds of [7, 120]) {
+      const row = await one(`insert into story_projects (user_id, seconds) values ($1, $2) returning seconds`, [USER_A, seconds]);
+      expect(row.seconds).toBe(seconds);
+    }
+  });
+
   it('rejects seconds outside 7 to 120', async () => {
     await expect(db.query(`insert into story_projects (user_id, seconds) values ($1, 6)`, [USER_A])).rejects.toThrow(/check/);
     await expect(db.query(`insert into story_projects (user_id, seconds) values ($1, 121)`, [USER_A])).rejects.toThrow(/check/);

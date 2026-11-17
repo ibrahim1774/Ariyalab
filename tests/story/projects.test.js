@@ -43,6 +43,41 @@ const BRIEF = {
 
 const userA = () => randomUUID();
 
+describe('consistent_cast', () => {
+  it('is true on a new project and updateProject accepts true or false', async () => {
+    const userId = userA();
+    const project = await createProject({ userId, input: BRIEF });
+    expect(project.consistent_cast).toBe(true);
+    expect((await updateProject({ userId, id: project.id, patch: { consistent_cast: false } })).consistent_cast).toBe(false);
+    expect((await updateProject({ userId, id: project.id, patch: { consistent_cast: true } })).consistent_cast).toBe(true);
+  });
+
+  it.each([['yes'], [1], [null], [undefined]])('refuses %j', async (value) => {
+    const userId = userA();
+    const project = await createProject({ userId, input: BRIEF });
+    await expect(updateProject({ userId, id: project.id, patch: { consistent_cast: value } })).rejects.toBeInstanceOf(ValidationError);
+  });
+
+  it('changing it marks the shots that have characters and a picture or a clip stale, once', async () => {
+    const userId = userA();
+    const project = await createProject({ userId, input: BRIEF });
+    const [cast] = await storyDb().insert('story_cast', { project_id: project.id, ord: 0, name: 'Maya', description: 'd', status: 'ready' });
+    const rows = await storyDb().insert('story_shots', [
+      { project_id: project.id, ord: 0, scene_id: 's1', description: 'a', seconds: 3, still_url: '/a.png', cast_ids: [cast.id], quality: 'standard' },
+      { project_id: project.id, ord: 1, scene_id: 's1', description: 'b', seconds: 3, still_url: '/b.png', clip_url: '/b.mp4', cast_ids: [cast.id], quality: 'standard' },
+      { project_id: project.id, ord: 2, scene_id: 's1', description: 'c', seconds: 3, still_url: '/c.png', cast_ids: [], quality: 'standard' },
+    ]);
+    // Saving the same value changes nothing.
+    await updateProject({ userId, id: project.id, patch: { consistent_cast: true } });
+    expect((await storyDb().select('story_shots', { project_id: project.id })).some((s) => s.stale)).toBe(false);
+    await updateProject({ userId, id: project.id, patch: { consistent_cast: false } });
+    const after = await storyDb().select('story_shots', { project_id: project.id }, { order: 'ord' });
+    expect(after.map((s) => s.stale)).toEqual([true, true, false]);
+    expect(after[1].clip_mismatch).toBe(true);
+    expect(rows).toHaveLength(3);
+  });
+});
+
 describe('createProject', () => {
   it('creates a project at the brief step', async () => {
     const userId = userA();
