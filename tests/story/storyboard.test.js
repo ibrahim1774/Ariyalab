@@ -904,7 +904,8 @@ describe('updateShot', () => {
   it('changing the video quality gives every shot the new quality and marks made clips out of date', async () => {
     const { userId, project, shots } = await stilledProject();
     await storyDb().update('story_shots', { id: shots[0].id }, { clip_url: '/c.mp4', clip_key: 'c', status: 'ready' });
-    await updateProject({ userId, id: project.id, patch: { quality: 'pro_talking' } });
+    await expect(updateProject({ userId, id: project.id, patch: { quality: 'pro_talking' } })).rejects.toMatchObject({ code: 'quote_changed' });
+    await updateProject({ userId, id: project.id, patch: { quality: 'pro_talking' }, expectedCredits: (await import('../../lib/pricing.js')).creditsForShot(await getPricing(), 'pro_talking', shots[0].seconds) });
     const rows = await shotRows(project.id);
     expect(rows.every((r) => r.quality === 'pro_talking')).toBe(true);
     expect(rows[0]).toMatchObject({ stale: true, clip_mismatch: true });

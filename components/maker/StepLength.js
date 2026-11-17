@@ -2,6 +2,7 @@ import { useRef, useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
+import StyleRedoAsk, { isStyleRedo, redoFrom } from './StyleRedoAsk';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
 import { SIMPLE_LENGTHS } from '../../lib/pricingConstants';
@@ -31,20 +32,27 @@ export default function StepLength({ project, save, onNext, returnTo }) {
   const pricing = usePricing();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
+  const [redo, setRedo] = useState(null); // a quality change that remakes finished clips, waiting for the customer's yes
 
   // The last choices the server accepted. A failed save puts these back, never the values from the first render.
   const saved = useRef({ seconds, quality, aspect });
 
-  async function choose(key, value, patch, setValue) {
+  async function choose(key, value, patch, setValue, expected) {
     setValue(value);
     setSaving(true);
     setError(null);
     try {
-      await save(patch);
+      await save({ ...patch, ...(Number.isInteger(expected) ? { expected_credits: expected } : {}) });
       saved.current = { ...saved.current, [key]: value };
+      setRedo(null);
     } catch (err) {
-      setValue(saved.current[key]);
-      setError(err);
+      if (key === 'quality' && isStyleRedo(err)) {
+        // Remaking the finished clips costs credits: the customer sees the total first. The choice stays shown until they answer.
+        setRedo({ ...redoFrom(err, expected), choice: value });
+      } else {
+        setValue(saved.current[key]);
+        setError(err);
+      }
     } finally {
       setSaving(false);
     }
@@ -107,6 +115,17 @@ export default function StepLength({ project, save, onNext, returnTo }) {
           </fieldset>
 
           <p className={styles.saveState} role="status" aria-live="polite">{saving ? 'Saving…' : ''}</p>
+          {redo && (
+            <StyleRedoAsk
+              credits={redo.credits}
+              renderCredits={redo.render}
+              kind="quality"
+              changed={redo.changed}
+              busy={saving}
+              onChange={() => choose('quality', redo.choice, qualityPatch(redo.choice), setQuality, redo.credits)}
+              onKeep={() => { setRedo(null); setQuality(saved.current.quality); }}
+            />
+          )}
           <ErrorNotice error={error} returnTo={returnTo} />
         </div>
       </Card>

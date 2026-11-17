@@ -1024,6 +1024,86 @@ describe('simple maker tools', () => {
       expect((await projectRow(ctx.project.id)).style).not.toBe('anime');
     });
 
+    it('R3-I1: style and quality in one update are priced as the project will be after it (clips at the new quality)', async () => {
+      const ctx = await genProject({ n: 10, clips: true });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      const { creditsForShot } = await import('../../lib/pricing.js');
+      const pricing = await getPricing();
+      const refused = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime', quality: 'pro_narrated' } }).catch((e) => e);
+      expect(refused).toMatchObject({ status: 409, code: 'quote_changed' });
+      const atPro = 10 * creditsForShot(pricing, 'pro_narrated', 3);
+      expect(refused.extra.lines.find((l) => l.key === 'clips').credits).toBe(atPro);
+      await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime', quality: 'pro_narrated' }, expectedCredits: refused.extra.credits });
+      // What the later steps charge: the pictures at their price and the clips at Pro.
+      const { shotsView } = await import('../../lib/story/storyboard.js');
+      const stills = (await shotsView(ctx.project.id)).reduce((n, sh) => n + sh.still_credits, 0);
+      const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+      expect(stills + q.total).toBe(refused.extra.credits);
+    });
+
+    it('R3-I1: style plus consistent_cast false to true puts the characters\' redraw in the total', async () => {
+      const ctx = await genProject({ n: 1 });
+      const pricing = await getPricing();
+      await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
+      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'F.', status: 'ready', image_url: '/p.png', image_key: 'p', regens_used: pricing.included.castRegenPerCharacter });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      const refused = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime', consistent_cast: true } }).catch((e) => e);
+      expect(refused).toMatchObject({ status: 409, code: 'quote_changed' });
+      expect(refused.extra.lines.find((l) => l.key === 'characters').credits).toBe(pricing.castRegen);
+    });
+
+    it('R3-I1: a quality change alone with clips made needs the clip redo total; with none it goes straight through', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      const { creditsForShot } = await import('../../lib/pricing.js');
+      const pricing = await getPricing();
+      const refused = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'economy' } }).catch((e) => e);
+      expect(refused).toMatchObject({ status: 409, code: 'quote_changed' });
+      expect(refused.extra.credits).toBe(2 * creditsForShot(pricing, 'economy', 3));
+      expect(refused.extra.kind).toBe('quality');
+      expect((await projectRow(ctx.project.id)).quality).toBe('standard');
+      await expect(updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'economy' }, expectedCredits: 1 })).rejects.toMatchObject({ code: 'quote_changed' });
+      await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'economy' }, expectedCredits: refused.extra.credits });
+      expect((await projectRow(ctx.project.id)).quality).toBe('economy');
+      const bare = await genProject({ n: 2 });
+      expect((await updateProject({ userId: bare.userId, id: bare.project.id, patch: { quality: 'economy' } })).quality).toBe('economy');
+    });
+
+    it('R3-m1: old automatic character pictures alone on a different-people video are said to be cleared, not remade', async () => {
+      const ctx = await newProject();
+      await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
+      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'F.', status: 'ready', image_url: '/p.png', image_key: 'p' });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      const refused = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime' } }).catch((e) => e);
+      expect(refused).toMatchObject({ status: 409, extra: { credits: 0, only_cleared: true } });
+    });
+
+    it('R3-m5: a render price that cannot be read refuses the change with a plain try-again error, never as 0', async () => {
+      const ctx = await genProject({ n: 1, clips: true });
+      const { updateProject } = await import('../../lib/story/projects.js');
+      const real = storyDb().select.bind(storyDb());
+      const spy = vi.spyOn(storyDb(), 'select').mockImplementation(async (table, where, ...rest) => {
+        if (table === 'story_renders' && where?.status === 'done') throw new Error('render price boom');
+        return real(table, where, ...rest);
+      });
+      const err = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'anime' }, expectedCredits: 0 }).catch((e) => e);
+      spy.mockRestore();
+      expect(err).toMatchObject({ status: 503, code: 'price_unavailable' });
+      expect(err.message).toMatch(/Try again/);
+      expect((await projectRow(ctx.project.id)).style).not.toBe('anime');
+    });
+
+    it('R3-a: a customer\'s own photo is kept, but a sheet drawn from it in the old style is cleared and counted', async () => {
+      const ctx = await genProject({ n: 1 });
+      const [asset] = await storyDb().insert('story_assets', { user_id: ctx.userId, kind: 'image', url: '/own/l.png' });
+      await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Leo', description: 'O.', status: 'ready', image_url: '/own/l.png', image_key: 'l', asset_id: asset.id, sheet: { url: '/old/sheet.png', key: 'os', from_key: 'l' } });
+      const card = await run(ctx, 'set_style', { style: 'anime' });
+      expect(card.quote.characters).toMatchObject({ count: 1, credits: 0 });
+      await runConfirm({ userId: ctx.userId, projectId: ctx.project.id, confirm: card.confirm });
+      const [leo] = await storyDb().select('story_cast', { project_id: ctx.project.id });
+      expect(leo).toMatchObject({ image_url: '/own/l.png', sheet: {} });
+    });
+
     it('M4: the reset runs before the style is saved, so a failed reset leaves the old style and asking again redoes it', async () => {
       const ctx = await genProject({ n: 1 });
       const { updateProject } = await import('../../lib/story/projects.js');
@@ -1475,20 +1555,25 @@ describe('simple maker tools', () => {
       expect(counted).toBeLessThanOrEqual(base + 1);
     });
 
-    it('M2: a job of another project never counts as the landed rewrite', async () => {
+    it('M2: a job id of another project never makes the rewrite count as landed; the same job id in the right project does', async () => {
       const ctx = await genProject({ n: 2 });
       const other = await genProject({ n: 1 });
       const { card, pressed } = await press(ctx);
       await pressed();
       const [job] = await scriptJobs(ctx.project.id);
       const script = await scriptOf(ctx.project.id);
-      // The script of this project points at a finished mode job that belongs to the other project.
+      // The job fails the way a real one does (the runner gives the count and the card back).
+      await raw.query(`update story_jobs set status = 'running', attempts = 2, started_at = now() - interval '1 hour', run_after = null where id = $1`, [job.id]);
+      await sweep({ now: new Date(Date.now() + 120_000) });
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.findLast((m) => m.confirms?.length).confirms[0].state).toBe('open');
+      // The script of this project points at a failed mode job that belongs to the OTHER project.
       const [foreign] = await storyDb().insert('story_jobs', { project_id: other.project.id, user_id: other.userId, kind: 'script', status: 'failed', payload: { task: 'mode', mode: 'talking' } });
       await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: script.scenes, source: 'revision', instruction: 'x', draft_job_id: foreign.id });
-      await raw.query(`update story_jobs set status = 'failed' where id = $1`, [job.id]);
       const again = await confirmVia({ projectId: ctx.project.id, confirmId: card.id });
+      expect(again.statusCode).toBe(200);
       expect(again.body.queued).not.toBe(false);
       expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      expect(await scriptJobs(ctx.project.id)).toHaveLength(2);
     });
 
     it('R4-4: a job that ends because the mode already matches posts the normal done line', async () => {

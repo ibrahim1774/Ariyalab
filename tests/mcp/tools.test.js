@@ -397,6 +397,24 @@ describe('money', () => {
     expect(data.cast[0]).toMatchObject({ name: 'Maya', status: 'needs_pictures', pictures: [], sheet_ready: false });
   });
 
+  it('generate_cast draws needs_pictures characters again through the quote and confirm_total steps', async () => {
+    const user = newUser();
+    await fund(user.id, 500);
+    const client = await connect(await tokenFor(user));
+    const { data: created } = await use(client, 'create_project', { title: 'Style', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = created.project.id;
+    const pricing = await getPricing();
+    await storyDb().insert('story_cast', { project_id: projectId, ord: 0, name: 'Maya', description: 'F.', status: 'ready', candidates: [], image_url: null, style_stale: true, regens_used: pricing.included.castRegenPerCharacter });
+    const quote = await use(client, 'generate_cast', { project_id: projectId });
+    expect(quote.data).toMatchObject({ quote: { total: pricing.castRegen } });
+    expect((await storyDb().select('story_cast', { project_id: projectId }))[0].status).toBe('ready');
+    const wrong = await use(client, 'generate_cast', { project_id: projectId, confirm_total: pricing.castRegen + 1 });
+    expect(wrong).toMatchObject({ isError: true, data: { error: 'quote_changed', quote: { total: pricing.castRegen } } });
+    const started = await use(client, 'generate_cast', { project_id: projectId, confirm_total: pricing.castRegen });
+    expect(started.data.cast[0].status).toBe('pending');
+    expect(started.data.credits).toBe(pricing.castRegen);
+  });
+
   it('create_project can set consistent_cast false; generate_cast then queues nothing, quotes nothing and spends nothing', async () => {
     const user = newUser();
     await fund(user.id, 500);

@@ -13,7 +13,7 @@ import { StyleImage, Skeleton } from '../maker/Tiles';
 import { titleFromIdea } from '../maker/StepStart';
 import { DEFAULT_QUALITY, DEFAULT_SECONDS, DEFAULT_STYLE, hasScript, lengthCredits, lengthLabel } from './derive';
 import { Announce, BillingLink, Dock, ScreenHead, count, priceText } from './parts';
-import StyleRedoAsk, { isStyleRedo } from '../maker/StyleRedoAsk';
+import StyleRedoAsk, { isStyleRedo, redoFrom } from '../maker/StyleRedoAsk';
 import styles from './Simple.module.css';
 
 const POLL_MS = 3000;
@@ -117,7 +117,8 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
   const [error, setError] = useState(null);
   const [available, setAvailable] = useState(null);
   const [redo, setRedo] = useState(null);
-  const expected = useRef(null); // the redo total the customer confirmed for a style change that remakes things
+  const expected = useRef(null);
+  const shown = useRef(null); // the redo total the customer was last shown // the redo total the customer confirmed for a style change that remakes things
   const created = useRef(null); // the project made by a first press that then failed to write: the retry reuses it
   const { reference, error: referenceError, reload } = useReference(project?.id, project?.reference_id);
 
@@ -162,6 +163,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
     // The length the script still has to be fitted to: kept until the fit has worked, so a refused fit (drafting_busy, any error)
     // is tried again on the next press even though the new length is already saved.
     if (scripted && (refit.current !== null || seconds !== project.seconds)) refit.current = seconds;
+    const asked = expected.current;
     try {
       let id = project?.id || created.current;
       if (!id) {
@@ -195,7 +197,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
       }
     } catch (err) {
       // Changing the style of a video with things made remakes them: the customer sees the total first.
-      if (isStyleRedo(err) && project) setRedo({ credits: err.body.credits, render: Number(err.body.render_credits) || 0 });
+      if (isStyleRedo(err) && project) setRedo(redoFrom(err, asked));
       else setError(err);
     } finally {
       expected.current = null;
@@ -343,9 +345,16 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
         <StyleRedoAsk
           credits={redo.credits}
           renderCredits={redo.render}
+          kind={redo.kind}
+          onlyCleared={redo.onlyCleared}
+          changed={redo.changed}
           busy={Boolean(busy)}
           onChange={() => { expected.current = redo.credits; setRedo(null); submit(); }}
-          onKeep={() => { setRedo(null); setStyle(project?.style || DEFAULT_STYLE); setCustom(project?.style_custom || ''); }}
+          onKeep={() => {
+            setRedo(null);
+            if (redo.kind === 'quality') setQuality(project?.quality || DEFAULT_QUALITY);
+            else { setStyle(project?.style || DEFAULT_STYLE); setCustom(project?.style_custom || ''); }
+          }}
         />
       )}
       <ErrorNotice error={error} returnTo={returnTo} onRetry={() => submit()} />

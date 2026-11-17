@@ -334,6 +334,21 @@ describe('brief steps', () => {
     await waitFor(() => expect(onNext).toHaveBeenCalled());
   });
 
+  it('R3: the confirm says what is true when only old character pictures are cleared, and says "The price changed." (taking focus) when the total moved', async () => {
+    const save = vi.fn()
+      .mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 0, only_cleared: true } }))
+      .mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 9 } }));
+    render(<StepStyle project={project({ style: 'clay' })} save={save} onNext={vi.fn()} />);
+    fireEvent.click(screen.getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue' }));
+    const first = await screen.findByTestId('style-redo');
+    expect(first).toHaveTextContent('Your old character pictures are cleared. Nothing is remade now.');
+    expect(first).not.toHaveTextContent('remakes your characters');
+    fireEvent.click(within(first).getByRole('button', { name: 'Change it' }));
+    await waitFor(() => expect(screen.getByTestId('style-redo')).toHaveTextContent('The price changed. Changing the style remakes your characters, pictures and clips. That costs 9 credits in all.'));
+    expect(screen.getByTestId('style-redo')).toHaveFocus();
+  });
+
   it('M5: a character cleared by a style change offers the redraw button, but not while its pictures are being drawn', () => {
     const cleared = { id: 'c1', name: 'Maya', status: 'ready', candidates: [], image_url: null, style_stale: true, regen_credits: 0 };
     const { rerender } = render(<StepCast project={project()} cast={[cleared]} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);

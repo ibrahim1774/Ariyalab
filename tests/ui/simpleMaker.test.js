@@ -343,6 +343,24 @@ describe('screen 2, Check the script', () => {
     expect(client.updateProject).toHaveBeenCalledTimes(1);
   }, 15000);
 
+  it('R3: changing only the quality of a video with clips made asks first ("remakes your clips"), and Keep my quality puts it back', async () => {
+    fakeServer();
+    client.updateProject.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 18, kind: 'quality' } }));
+    client.updateProject.mockResolvedValue(project({ step: 'script', quality: 'economy' }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByText('Dre gave a crooked fade.');
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+    fireEvent.click(screen.getByRole('button', { name: /Change quality/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Budget' }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to the script/ }));
+    const ask = await screen.findByTestId('style-redo');
+    expect(ask).toHaveTextContent('Changing the quality remakes your clips. That costs 18 credits in all.');
+    fireEvent.click(within(ask).getByRole('button', { name: 'Keep my quality' }));
+    expect(screen.queryByTestId('style-redo')).toBeNull();
+    expect(client.updateProject).toHaveBeenCalledTimes(1);
+  }, 15000);
+
   it('lists the included parts of the quote and says an unpriced total is included', async () => {
     fakeServer();
     client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [{ key: 'fee', label: 'Project fee', credits: 0, included: true }, { key: 'pictures', label: 'Storyboard pictures', credits: 0, included: true }] });

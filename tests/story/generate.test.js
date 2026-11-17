@@ -950,7 +950,9 @@ describe('carry 1: GET /status', () => {
 /** The video's quality changes for every shot (the only way a shot's quality changes); -> the row of shot `sid` after. */
 async function setQuality(ctx, quality, sid) {
   const { updateProject } = await import('../../lib/story/projects.js');
-  await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality } });
+  // Clips made: the change needs the redo total (the server's own number is sent back, as the customer's confirm does).
+  const asked = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality } }).catch((e) => e);
+  if (asked?.code === 'quote_changed') await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality }, expectedCredits: asked.extra.credits });
   return (await storyDb().select('story_shots', { id: sid }))[0];
 }
 

@@ -5,7 +5,7 @@ import Card from '../ui/Card';
 import { STYLES } from '../../lib/story/prompts/styles';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
-import StyleRedoAsk, { isStyleRedo } from './StyleRedoAsk';
+import StyleRedoAsk, { isStyleRedo, redoFrom } from './StyleRedoAsk';
 import { StyleImage } from './Tiles';
 import styles from './Steps.module.css';
 
@@ -28,7 +28,7 @@ export default function StepStyle({ project, save, onNext, returnTo }) {
       onNext?.();
     } catch (err) {
       // Remaking what is made costs credits: the customer sees the total first (the server refuses the change without it).
-      if (isStyleRedo(err)) setRedo({ credits: err.body.credits, render: Number(err.body.render_credits) || 0 });
+      if (isStyleRedo(err)) setRedo(redoFrom(err, expected));
       else setError(err);
     } finally {
       setBusy(false);
@@ -68,6 +68,9 @@ export default function StepStyle({ project, save, onNext, returnTo }) {
         <StyleRedoAsk
           credits={redo.credits}
           renderCredits={redo.render}
+          kind={redo.kind}
+          onlyCleared={redo.onlyCleared}
+          changed={redo.changed}
           busy={busy}
           onChange={() => submit(null, redo.credits)}
           onKeep={() => { setRedo(null); setStyle(project?.style || ''); setCustom(project?.style_custom || ''); }}
