@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 
 import CreditBadge from './CreditBadge';
+import SignOutButton from './SignOutButton';
 import styles from './AppShell.module.css';
 
 const NAV = [
@@ -48,6 +49,7 @@ export default function AppShell({ children }) {
       <div className={styles.column}>
         <header className={styles.topbar}>
           <CreditBadge />
+          <SignOutButton />
         </header>
         <main className={styles.main}>{children}</main>
       </div>

@@ -52,6 +52,20 @@
   min-height: 44px;
   padding: 6px 28px;
 }
+.signOut {
+  margin-left: 12px;
+  min-height: 36px;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+.signOut:hover { background: var(--surface-1); color: var(--text); }
+.signOut:disabled { opacity: 0.6; cursor: default; }
 .main { flex: 1; padding: 4px 28px 24px; }
 
 .topbar:empty { display: none; }

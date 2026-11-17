@@ -5,6 +5,7 @@ import { useRouter } from 'next/router';
 import styles from './Navbar.module.css';
 import { getBrowserSupabase } from '../lib/supabase';
 import { subscribeEntitlement } from '../lib/entitlementBus';
+import { signOutAndGoHome } from '../lib/signOut';
 
 // Always visible to everyone.
 const ALWAYS_TABS = [
@@ -87,10 +88,7 @@ export default function Navbar() {
   const handleSignOut = async () => {
     setMenuOpen(false);
     setDrawerOpen(false);
-    const supabase = getBrowserSupabase();
-    if (!supabase) return;
-    await supabase.auth.signOut();
-    router.push('/');
+    await signOutAndGoHome(router);
   };
 
   const showTabs = Boolean(user);
