@@ -100,6 +100,7 @@ export default function SignUpPage() {
             onClose={() => (window.location.href = safeReturnTo || '/')}
             initialMode="signup"
             redirectTo={safeReturnTo || '/app'}
+            closeOnSuccess={false}
             lockedEmail={lockedEmail}
             claimSessionId={sessionId}
           />

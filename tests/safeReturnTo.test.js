@@ -16,6 +16,11 @@ describe('safeReturnTo', () => {
     [undefined],
     [['/app']],
     ['/%E0%A4%A'],
+    ['javascript:alert(1)'],
+    ['/%2f/evil.com'],
+    ['/\\\\evil.com'],
+    ['http:/evil.com'],
+    [' //evil.com'],
   ])('falls back for %j', (raw) => {
     expect(safeReturnTo(raw)).toBe('/app');
     expect(safeReturnTo(raw, '/')).toBe('/');

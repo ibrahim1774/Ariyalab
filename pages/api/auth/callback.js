@@ -19,6 +19,6 @@ export default async function handler(req, res) {
     }
   }
 
-  const next = safeReturnTo(req.query.next, '/');
+  const next = safeReturnTo(req.query.next, '/app');
   return res.redirect(302, next);
 }

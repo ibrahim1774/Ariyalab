@@ -17,7 +17,7 @@ export default function SignInPage() {
         <title>Sign in — Ariya Lab</title>
       </Head>
       <main style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <AuthModal open={open} onClose={() => (window.location.href = '/')} initialMode="signin" redirectTo={returnTo} />
+        <AuthModal open={open} onClose={() => (window.location.href = '/')} initialMode="signin" redirectTo={returnTo} closeOnSuccess={false} />
       </main>
     </>
   );

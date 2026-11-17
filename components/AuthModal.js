@@ -46,6 +46,9 @@ export default function AuthModal({
   lockedEmail = null,
   claimSessionId = null,
   ticketClaim = false,
+  // The sign-in and sign-up pages use onClose to leave the page; after a success we navigate to
+  // redirectTo ourselves, so they turn this off or the two navigations race.
+  closeOnSuccess = true,
 }) {
   const [mode, setMode] = useState(initialMode);
   const [email, setEmail] = useState(lockedEmail || '');
@@ -152,7 +155,7 @@ export default function AuthModal({
             });
           })
           .catch(() => {});
-        if (typeof onClose === 'function') onClose();
+        if (closeOnSuccess && typeof onClose === 'function') onClose();
         router.push(redirectTo);
       } catch (err) {
         if (!cancelled) {
@@ -193,7 +196,7 @@ export default function AuthModal({
       cancelled = true;
       if (pollId) clearInterval(pollId);
     };
-  }, [open, mode, googleClientId, router, onClose, redirectTo, isClaimFlow, isTicketClaim, lockedEmail, claimSessionId]);
+  }, [open, mode, googleClientId, router, onClose, closeOnSuccess, redirectTo, isClaimFlow, isTicketClaim, lockedEmail, claimSessionId]);
 
   if (!open) return null;
 
@@ -268,7 +271,7 @@ export default function AuthModal({
           });
         })
         .catch(() => {});
-      if (typeof onClose === 'function') onClose();
+      if (closeOnSuccess && typeof onClose === 'function') onClose();
       router.push(redirectTo);
     } catch (err) {
       setError(err.message || 'Authentication failed.');
