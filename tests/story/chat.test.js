@@ -409,7 +409,7 @@ describe('money', () => {
   it('every tool result is plain data the model can read, and no tool exposes a spend', () => {
     expect(CHAT_TOOLS.map((t) => t.name)).toEqual([
       'get_project', 'revise_script', 'update_scene', 'regenerate_character', 'update_shot', 'set_style', 'set_length', 'get_quote',
-      'make_picture', 'remake_clip',
+      'make_picture', 'remake_clip', 'set_quality', 'pick_character', 'set_consistent_cast', 'make_scene',
     ]);
     for (const t of CHAT_TOOLS) {
       expect(t.description, t.name).toMatch(/\S/);
@@ -810,5 +810,185 @@ describe('round 4', () => {
     await storyDb().update('story_shots', { id: pic.shots[0].id }, { status: 'still_pending' });
     expect(await runTool({ userId: pic.userId, user: pic.user, chatProjectId: pic.project.id, name: 'make_picture', input: { shot_id: pic.shots[0].id } }))
       .toMatchObject({ ok: false, error: 'conflict', message: expect.stringMatching(/still being made/) });
+  });
+});
+
+
+// ---------------------------------------------------------------- simple maker tools
+
+describe('simple maker tools', () => {
+  const run = (ctx, name, input = {}) => runTool({ userId: ctx.userId, user: ctx.user, chatProjectId: ctx.project.id, name, input });
+  const projectRow = async (id) => (await storyDb().select('story_projects', { id }))[0];
+
+  describe('set_quality', () => {
+    it('sets the quality, applies the talking rule both ways and returns the new quote, spending nothing', async () => {
+      const ctx = await genProject({ n: 2 });
+      const before = await ledgerCount(ctx.userId);
+      const talking = await run(ctx, 'set_quality', { quality: 'pro_talking' });
+      expect(talking).toMatchObject({ ok: true, changed: 'project', project: { quality: 'pro_talking', mode: 'talking' } });
+      expect(talking.quote.total).toBeGreaterThan(0);
+      const row = await projectRow(ctx.project.id);
+      expect([row.quality, row.mode]).toEqual(['pro_talking', 'talking']);
+      const back = await run(ctx, 'set_quality', { quality: 'economy' });
+      expect(back).toMatchObject({ ok: true, project: { quality: 'economy', mode: 'narrated' } });
+      expect(back.quote.total).toBeLessThan(talking.quote.total);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+    });
+
+    it('the quote is the price the generate card would charge at that quality (shots without a clip follow the new quality)', async () => {
+      const ctx = await genProject({ n: 3 });
+      const out = await run(ctx, 'set_quality', { quality: 'pro_narrated' });
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.quality === 'pro_narrated')).toBe(true);
+      const server = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+      expect(out.quote.total).toBe(server.total);
+    });
+
+    it('shots that already have a clip keep the quality they were made at', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      await run(ctx, 'set_quality', { quality: 'pro_narrated' });
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.quality === 'standard')).toBe(true);
+    });
+
+    it('with no shots yet, it quotes the estimate for the length (fee plus 3 second shots)', async () => {
+      const ctx = await newProject();
+      const out = await run(ctx, 'set_quality', { quality: 'standard' });
+      const pricing = await getPricing();
+      expect(out.quote).toMatchObject({ estimate: true, total: pricing.projectFee + pricing.perSecond.standard * 30 });
+    });
+
+    it('refuses an unknown quality', async () => {
+      const ctx = await newProject();
+      expect(await run(ctx, 'set_quality', { quality: 'ultra' })).toMatchObject({ ok: false, error: 'validation_failed' });
+    });
+  });
+
+  describe('pick_character', () => {
+    it('picks option 2 by name (case does not matter) and by id, through pickCast', async () => {
+      const ctx = await newProject({ cast: { regens_used: 0 } });
+      const byName = await run(ctx, 'pick_character', { name: 'maya', option: 2 });
+      expect(byName).toMatchObject({ ok: true, changed: 'cast', cast: { id: ctx.cast.id, picked_option: 2 } });
+      expect((await storyDb().select('story_cast', { id: ctx.cast.id }))[0]).toMatchObject({ chosen_index: 1, image_key: 'b' });
+      const jobs = (await storyDb().select('story_jobs', { project_id: ctx.project.id })).filter((j) => j.payload?.stage === 'sheet');
+      expect(jobs).toHaveLength(1);
+    });
+
+    it('refuses a bad option, an unknown character and a character still being drawn; nothing is spent', async () => {
+      const ctx = await newProject({ cast: { regens_used: 0 } });
+      const before = await ledgerCount(ctx.userId);
+      for (const option of [0, 4, 1.5, 'one', undefined]) {
+        expect(await run(ctx, 'pick_character', { cast_id: ctx.cast.id, option })).toMatchObject({ ok: false, error: 'validation_failed' });
+      }
+      expect(await run(ctx, 'pick_character', { name: 'Nobody', option: 1 })).toMatchObject({ ok: false, error: 'not_found' });
+      expect(await run(ctx, 'pick_character', { option: 1 })).toMatchObject({ ok: false, error: 'validation_failed' });
+      await storyDb().update('story_cast', { id: ctx.cast.id }, { status: 'pending' });
+      expect(await run(ctx, 'pick_character', { cast_id: ctx.cast.id, option: 1 })).toMatchObject({ ok: false, error: 'conflict' });
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+    });
+
+    it("another user's character is not found", async () => {
+      const mine = await newProject();
+      const theirs = await newProject({ cast: { regens_used: 0 } });
+      expect(await run(mine, 'pick_character', { cast_id: theirs.cast.id, option: 1 })).toMatchObject({ ok: false, error: 'not_found' });
+    });
+
+    it('says there is no cast when the video has different people in every scene', async () => {
+      const ctx = await newProject();
+      await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
+      expect(await run(ctx, 'pick_character', { name: 'Maya', option: 1 })).toMatchObject({ ok: false, error: 'no_cast' });
+    });
+  });
+
+  describe('set_consistent_cast', () => {
+    it('sets the flag and marks the shots with characters stale the way a cast change does', async () => {
+      const ctx = await genProject({ n: 2 });
+      const [maya] = await storyDb().insert('story_cast', { project_id: ctx.project.id, ord: 0, name: 'Maya', description: 'd', status: 'ready' });
+      await storyDb().update('story_shots', { id: ctx.shots.map((sh) => sh.id) }, { cast_ids: [maya.id] });
+      const before = await ledgerCount(ctx.userId);
+      const out = await run(ctx, 'set_consistent_cast', { consistent_cast: false });
+      expect(out).toMatchObject({ ok: true, changed: 'project', project: { consistent_cast: false } });
+      expect((await projectRow(ctx.project.id)).consistent_cast).toBe(false);
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale === true)).toBe(true);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+      // The same value again changes nothing more.
+      await storyDb().update('story_shots', { id: ctx.shots.map((sh) => sh.id) }, { stale: false });
+      await run(ctx, 'set_consistent_cast', { consistent_cast: false });
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).some((sh) => sh.stale)).toBe(false);
+    });
+
+    it('needs a true or false', async () => {
+      const ctx = await newProject();
+      expect(await run(ctx, 'set_consistent_cast', { consistent_cast: 'no' })).toMatchObject({ ok: false, error: 'validation_failed' });
+      expect(await run(ctx, 'set_consistent_cast', {})).toMatchObject({ ok: false, error: 'validation_failed' });
+    });
+  });
+
+  describe('make_scene', () => {
+    it('returns a card with the quote for that scene shots only, and starts nothing', async () => {
+      const ctx = await genProject({ n: 3 });
+      const before = await ledgerCount(ctx.userId);
+      const out = await run(ctx, 'make_scene', { scene_number: 2 });
+      expect(out).toMatchObject({ ok: true, needsConfirm: true, confirm: { action: 'generate', method: 'POST' } });
+      expect(out.confirm.body.shotIds).toEqual([ctx.shots[1].id]);
+      const server = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[1].id] });
+      expect(out.quote.credits).toBe(server.total);
+      expect(out.confirm.body.confirmTotal).toBe(server.total);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+      expect(await jobCount(ctx.project.id)).toBe(0);
+    });
+
+    it('confirming runs startGeneration with those ids at the quoted total, once', async () => {
+      const ctx = await genProject({ n: 3 });
+      const out = await run(ctx, 'make_scene', { scene_number: 1 });
+      expect(out.confirm.body.shotIds).toEqual([ctx.shots[0].id, ctx.shots[2].id]);
+      const done = await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm });
+      expect(done.charged).toBe(out.quote.credits);
+      expect(done.queued).toHaveLength(2);
+      const again = await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: out.confirm }).catch((e) => e);
+      expect(again).toBeInstanceOf(Error);
+    });
+
+    it('the first scene quote carries the project fee once and the next scene does not (the total equals all at once)', async () => {
+      const ctx = await genProject({ n: 3 });
+      await storyDb().update('story_projects', { id: ctx.project.id }, { fee_charged: false });
+      const all = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
+      const first = await run(ctx, 'make_scene', { scene_number: 1 });
+      expect(first.quote.lines.some((l) => l.label === 'Project fee')).toBe(true);
+      await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: first.confirm });
+      const second = await run(ctx, 'make_scene', { scene_number: 2 });
+      expect(second.quote.lines.some((l) => l.label === 'Project fee')).toBe(false);
+      expect(first.quote.credits + second.quote.credits).toBe(all.total);
+    });
+
+    it('refuses a scene that does not exist, one with nothing to make and one whose pictures are not ready', async () => {
+      const ctx = await genProject({ n: 3 });
+      expect(await run(ctx, 'make_scene', { scene_number: 9 })).toMatchObject({ ok: false, error: 'not_found' });
+      expect(await run(ctx, 'make_scene', { scene_number: 0 })).toMatchObject({ ok: false, error: 'validation_failed' });
+      expect(await run(ctx, 'make_scene', { scene_number: 'two' })).toMatchObject({ ok: false, error: 'validation_failed' });
+      await storyDb().update('story_shots', { id: ctx.shots[1].id }, { still_url: null, status: 'draft' });
+      expect(await run(ctx, 'make_scene', { scene_number: 2 })).toMatchObject({ ok: false, error: 'still_missing' });
+      const made = await genProject({ n: 3, clips: true });
+      expect(await run(made, 'make_scene', { scene_number: 1 })).toMatchObject({ ok: false, error: 'nothing_to_make' });
+    });
+
+    it('the card goes through the chat route and stays open at its price', async () => {
+      const ctx = await genProject({ n: 3 });
+      signIn(ctx.user);
+      const sent = await post({ projectId: ctx.project.id, message: tool('make_scene', { scene_number: 2 }) });
+      const [card] = sent.body.confirms;
+      expect(card.confirm.body.shotIds).toEqual([ctx.shots[1].id]);
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('open');
+    });
+  });
+
+  describe('the system prompt', () => {
+    it('knows the simple flow and the new tools, and still says the chat never spends', async () => {
+      const { buildChatSystem } = await import('../../lib/story/chat.js');
+      const system = buildChatSystem({ project: {} });
+      for (const name of ['set_quality', 'pick_character', 'set_consistent_cast', 'make_scene']) expect(system).toContain(name);
+      expect(system).toMatch(/next step/i);
+      expect(system).toMatch(/four screens/i);
+      expect(system).toMatch(/never spend/i);
+      expect(system).not.toMatch(/[\u2013\u2014]/);
+    });
   });
 });

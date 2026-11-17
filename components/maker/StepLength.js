@@ -5,7 +5,7 @@ import Card from '../ui/Card';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
 import { SIMPLE_LENGTHS } from '../../lib/pricingConstants';
-import { QUALITY_INFO, QUALITY_ORDER, outputLine } from '../../lib/qualityInfo';
+import { QUALITY_INFO, QUALITY_ORDER, outputLine, qualityPatch } from '../../lib/qualityInfo';
 import { usePricing } from './PricingContext';
 import { estimateCredits } from './steps';
 import styles from './Steps.module.css';
@@ -21,8 +21,7 @@ export const ASPECTS = [
   { id: '16:9', label: 'Wide 16:9', helper: 'YouTube, websites' },
 ];
 
-/** Pro talking means talking mode and nothing else does; the server enforces the same. */
-export const qualityPatch = (quality) => ({ quality, mode: quality === 'pro_talking' ? 'talking' : 'narrated' });
+export { qualityPatch };
 
 /** Saves each choice as it is made, so the quote bar always matches. */
 export default function StepLength({ project, save, onNext, returnTo }) {
