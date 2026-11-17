@@ -80,3 +80,30 @@ describe('the plan pipeline never stays busy after a refusal', () => {
     await waitFor(() => expect(client.makeStills).toHaveBeenCalledTimes(2));
   });
 });
+
+describe('a free start that keeps coming back is not sent forever', () => {
+  const old = new Date(Date.now() - 10 * 60_000).toISOString();
+  const stuck = () => withScript({ project: project({ fee_charged: true, plan_requested: true }), cast: [{ id: 'c1', name: 'Dre', status: 'draft', updated_at: old }] });
+  const working = () => withScript({ project: project({ fee_charged: true, plan_requested: true }), cast: [{ id: 'c1', name: 'Dre', status: 'pending', updated_at: new Date().toISOString() }], jobs: [{ kind: 'cast_image', status: 'running', payload: { castId: 'c1' } }] });
+
+  it('resume_cast coming back three times is sent twice, then asks the customer; pressing sends once more', async () => {
+    client.startCast.mockResolvedValue({});
+    let status = stuck();
+    const refresh = vi.fn(async () => {});
+    const { result, rerender } = renderHook(() => usePlanPipeline({ status, screen: 'plan', refresh }));
+    for (let round = 1; round <= 3; round += 1) {
+      if (round <= 2) await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(round));
+      status = working(); rerender();
+      await waitFor(() => expect(result.current.action.type).toBe('wait'));
+      status = stuck(); rerender();
+      await waitFor(() => expect(result.current.action.type).toBe('resume_cast'));
+    }
+    await waitFor(() => expect(result.current.tired).toBe(true));
+    await new Promise((r) => setTimeout(r, 100));
+    expect(client.startCast).toHaveBeenCalledTimes(2);
+    expect(result.current.working).toBe(false);
+    await act(async () => { result.current.retry(); });
+    await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(3));
+  });
+});
+

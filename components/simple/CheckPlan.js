@@ -254,6 +254,12 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
           <Button variant="ghost" arrow={false} onClick={refresh}>Look again</Button>
         </div>
       )}
+      {plan.tired && (
+        <div className={styles.askCard} role="status" data-testid="plan-tired">
+          <p>This part did not get going. Nothing was charged. Try it again, or look again in a moment.</p>
+          <Button variant="ghost" arrow={false} onClick={plan.retry}>Try again</Button>
+        </div>
+      )}
       {plan.note && <p className={styles.planNote} data-testid="plan-note" role="status">{plan.note}</p>}
       <ErrorNotice error={plan.error} returnTo={returnTo} onRefresh={refresh} />
       {plan.error && plan.error.status !== 402 && <div><Button variant="ghost" arrow={false} size="sm" onClick={plan.retry}>Try again</Button></div>}

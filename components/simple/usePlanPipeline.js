@@ -4,6 +4,8 @@ import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, pickCas
 import { FREE_STARTS, actionKey, clipsStarted, confirmedFrom, nextPlanAction } from './derive';
 
 const COOL_MS = 4000;
+// A free start the project keeps coming back to (a character whose start died again) is sent by itself this many times per screen.
+const MAX_AUTO_SENDS = 2;
 // The confirmed amount (usePlanPipeline `confirmed`) each kind of start spends.
 const CONFIRM_FIELD = { cast: 'fee', stills: 'pictures', redraw: 'redraw', narration: 'voice', music: 'music' };
 // A wait older than this gets a message and a next step instead of a spinner.
@@ -83,6 +85,8 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   const [tick, setTick] = useState(0);
   const inflight = useRef(false);
   const sent = useRef(new Set());
+  const autoSends = useRef(new Map());
+  const [tired, setTired] = useState('');
   const cool = useRef(new Map());
   const quoteRun = useRef(0);
   const [stalled, setStalled] = useState(false);
@@ -183,6 +187,16 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
       const timer = setTimeout(() => setTick((n) => n + 1), wait + 20);
       return () => clearTimeout(timer);
     }
+    // A free start (nothing to pay, nobody pressed for it) is sent by itself at most MAX_AUTO_SENDS times per type; then the
+    // customer is asked. A paid, confirmed start is the customer's own press and is not counted.
+    const auto = free && !(action.expected > 0);
+    if (auto) {
+      if ((autoSends.current.get(action.type) || 0) >= MAX_AUTO_SENDS) {
+        if (tired !== action.type) setTired(action.type);
+        return undefined;
+      }
+      autoSends.current.set(action.type, (autoSends.current.get(action.type) || 0) + 1);
+    }
     inflight.current = true;
     setBusy(true);
     (async () => {
@@ -236,7 +250,7 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
     })();
     return undefined;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [enabled, actionSig, error, projectId, tick]);
+  }, [enabled, actionSig, error, projectId, tick, tired]);
 
   /** "Looks good, design my video": the customer confirms the quote they are looking at. */
   const design = useCallback(async () => {
@@ -290,6 +304,8 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
 
   /** After an error: allow the stopped start again. */
   const retry = useCallback(() => {
+    autoSends.current = new Map();
+    setTired('');
     setError(null);
     setNote('');
     setTick((n) => n + 1);
@@ -297,7 +313,8 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
 
   // Something is really being started or made: a start is in flight, or the customer pressed the button and the next step is
   // a start or a wait. A refusal, a question or a failure is not "working", so no spinner stays behind it.
-  const working = busy || (armed && !error && (actionNow !== '' || action.type === 'wait'));
+  const tiredNow = tired !== '' && tired === action.type;
+  const working = !tiredNow && (busy || (armed && !error && (actionNow !== '' || action.type === 'wait')));
 
-  return { quote, quoteError, action, busy, armed, working, error, note, stalled, manual, otherTab, design, carryOn, confirm, retry, reloadQuote };
+  return { quote, quoteError, action, busy, armed, working, tired: tiredNow, error, note, stalled, manual, otherTab, design, carryOn, confirm, retry, reloadQuote };
 }
