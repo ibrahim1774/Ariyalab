@@ -23,7 +23,11 @@ export const redoFrom = (err, previous = null) => ({
  */
 export default function StyleRedoAsk({ credits, renderCredits = 0, kind = 'style', what = null, onlyCleared = false, changed = false, busy = false, onChange, onKeep }) {
   const ref = useRef(null);
-  useEffect(() => { if (changed) ref.current?.focus(); }, [changed, credits]);
+  // The card must not be missed: when it appears, or its total moves, bring it into view and focus it.
+  useEffect(() => {
+    ref.current?.scrollIntoView?.({ block: 'nearest' });
+    ref.current?.focus?.();
+  }, [changed, credits, kind]);
   const sentence = onlyCleared
     ? 'Your old character pictures are cleared. Nothing is remade now.'
     : `Changing the ${what || kind} remakes your ${kind === 'quality' ? 'clips' : 'characters, pictures and clips'}. ${credits > 0 ? `That costs ${credits} credits in all.` : 'All of it is included.'}`;

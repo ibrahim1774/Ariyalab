@@ -114,6 +114,7 @@ function SimpleMakerInner({ id, returnTo }) {
         onOpen={onOpen}
         save={save}
         refresh={refresh}
+        made={(data.shots || []).length > 0 || (data.cast || []).length > 0}
         onDone={() => setManual(null)}
         backLabel={BACK_LABELS[derived]}
         returnTo={returnTo}

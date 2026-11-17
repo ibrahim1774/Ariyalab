@@ -101,7 +101,7 @@ function StyleDialog({ open, style, custom, onClose, onUse }) {
  *   refresh   reload status
  *   onDone    called when an existing project's script is in place, to go on to screen 2
  */
-export default function Describe({ project, onCreate, onOpen, save, refresh, onDone, returnTo, backLabel = 'Back to the script' }) {
+export default function Describe({ project, onCreate, onOpen, save, refresh, onDone, returnTo, made = false, backLabel = 'Back to the script' }) {
   const pricing = usePricing();
   const scripted = hasScript(project);
   const [idea, setIdea] = useState(project?.offer || '');
@@ -154,6 +154,34 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
   });
 
   const refit = useRef(null);
+  const probeRun = useRef(0);
+
+  /**
+   * A new style or quality on a video that already has things made remakes them and costs credits. The server only says how many
+   * with the save itself (a refusal that saves nothing), so the pick asks right away and the card shows where the customer is
+   * looking, instead of waiting for the "Back to your video" press. `next` is the picked { style, custom, quality }.
+   */
+  async function probe(next) {
+    if (!project || !made) return;
+    const styleDiffers = next.style !== project.style || (next.style === 'custom' && next.custom !== (project.style_custom || ''));
+    const qualityDiffers = next.quality !== project.quality;
+    const run = ++probeRun.current;
+    if (!styleDiffers && !qualityDiffers) { setRedo(null); return; }
+    const fields = {
+      ...(styleDiffers ? { style: next.style, ...(next.style === 'custom' ? { style_custom: next.custom } : {}) } : {}),
+      ...(qualityDiffers ? qualityPatch(next.quality) : {}),
+    };
+    try {
+      await save(fields);
+      // Nothing made needed remaking: it was saved as picked.
+      if (run === probeRun.current) setRedo(null);
+      await refresh?.();
+    } catch (err) {
+      if (run !== probeRun.current) return;
+      if (isStyleRedo(err)) setRedo({ ...redoFrom(err, redo?.credits ?? null), both: styleDiffers && qualityDiffers });
+      else setError(err);
+    }
+  }
 
   async function submit(e) {
     e?.preventDefault();
@@ -326,7 +354,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
                   const q = QUALITY_INFO[id];
                   return (
                     <label key={id} className={`${styles.qualityCard} ${quality === id ? styles.optionOn : ''}`} data-quality={id}>
-                      <input type="radio" name="simple-quality" aria-label={q.name} checked={quality === id} onChange={() => { setQuality(id); setQualityOpen(false); }} />
+                      <input type="radio" name="simple-quality" aria-label={q.name} checked={quality === id} onChange={() => { setQuality(id); setQualityOpen(false); probe({ style, custom, quality: id }); }} />
                       <QualityText id={id} seconds={seconds} credits={lengthCredits(pricing, project, seconds, id)} />
                     </label>
                   );
@@ -355,6 +383,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
           busy={Boolean(busy)}
           onChange={() => { expected.current = redo.credits; setRedo(null); submit(); }}
           onKeep={() => {
+            probeRun.current += 1;
             setRedo(null);
             if (redo.kind === 'quality' || redo.both) setQuality(project?.quality || DEFAULT_QUALITY);
             if (redo.kind !== 'quality') { setStyle(project?.style || DEFAULT_STYLE); setCustom(project?.style_custom || ''); }
@@ -365,12 +394,14 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
       <Announce>{busy}</Announce>
 
       <Dock
-        label="Estimated cost"
-        total={lengthCredits(pricing, project, seconds, quality)}
-        meta={`${info?.name || 'Standard'}, ${seconds === 120 ? '2 minutes' : `${seconds} seconds`}`}
-        hint={!canWrite && !busy ? (mustWait ? 'Your video is being broken down first.' : waiting ? 'Describe your video to write it without the video.' : 'Describe your video to start.') : null}
+        // While a change that remakes things waits for an answer, the price is the change's (the card above), never an estimate
+        // for making the whole video again.
+        label={redo ? 'This change' : 'Estimated cost'}
+        total={redo ? redo.credits : lengthCredits(pricing, project, seconds, quality)}
+        meta={redo ? (redo.render > 0 ? `Making the finished video again may cost ${redo.render} credits extra` : 'Nothing is charged until you press Change it') : `${info?.name || 'Standard'}, ${seconds === 120 ? '2 minutes' : `${seconds} seconds`}`}
+        hint={redo ? 'Choose Change it or keep what you had.' : !canWrite && !busy ? (mustWait ? 'Your video is being broken down first.' : waiting ? 'Describe your video to write it without the video.' : 'Describe your video to start.') : null}
       >
-        <Button type="submit" disabled={!canWrite}>{label}</Button>
+        <Button type="submit" disabled={!canWrite || Boolean(redo)}>{label}</Button>
       </Dock>
 
       <StyleDialog
@@ -378,7 +409,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
         style={style}
         custom={custom}
         onClose={() => setStyleOpen(false)}
-        onUse={(pick, text) => { setStyle(pick); setCustom(text); setStyleOpen(false); }}
+        onUse={(pick, text) => { setStyle(pick); setCustom(text); setStyleOpen(false); probe({ style: pick, custom: text, quality }); }}
       />
     </form>
   );

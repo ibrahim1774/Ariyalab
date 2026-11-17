@@ -1252,3 +1252,73 @@ describe('e2e round 1: busy states and credit wording', () => {
     expect(need).toHaveTextContent('Try scene 1 first: you need 16 more credits.');
   });
 });
+
+describe('e2e round 1: the change card appears where the choice is made', () => {
+  beforeEach(() => { client.getScript.mockResolvedValue(SCRIPT); client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 40)); });
+  const madeVideo = () => fakeServer({
+    project: project({ step: 'review', fee_charged: true }), cast: [castRow()], shots: [ready(1, 'a'), ready(2, 'b')], audio: done,
+    jobs: [{ id: 'j1', kind: 'clip', status: 'done', updated_at: T(1), payload: {} }], renderPrice: { credits: 5 },
+    render: { id: 'r', version: 1, status: 'done', url: '/v.mp4', created_at: T(5), warnings: [] }, renders: [],
+  });
+  const openDescribe = async () => {
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('heading', { name: /Watch and fix/ });
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+  };
+
+  it('picking a different quality on a made video shows the confirm card at once, with the total, and no whole-video estimate', async () => {
+    madeVideo();
+    client.updateProject.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 160, render_credits: 5, kind: 'quality' } }));
+    await openDescribe();
+    expect(screen.getByTestId('dock')).toHaveTextContent('Estimated cost');
+    fireEvent.click(screen.getByRole('button', { name: /Change quality/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Pro' }));
+    // No "Back to your video" press: the card is there.
+    const ask = await screen.findByTestId('style-redo');
+    expect(ask).toHaveTextContent('Changing the quality remakes your clips. That costs 160 credits in all.');
+    expect(client.updateProject).toHaveBeenCalledTimes(1);
+    // Only the quality was asked about, and nothing was saved.
+    expect(client.updateProject.mock.calls[0][1]).toMatchObject({ quality: 'pro_narrated' });
+    expect(client.updateProject.mock.calls[0][1]).not.toHaveProperty('expected_credits');
+    expect(client.updateProject.mock.calls[0][1]).not.toHaveProperty('seconds');
+    // The card takes focus so it cannot be missed.
+    expect(document.activeElement).toBe(ask);
+    // While the choice is pending the bar does not offer an estimate for making the whole video again.
+    expect(screen.getByTestId('dock')).not.toHaveTextContent('Estimated cost');
+    expect(screen.getByTestId('dock')).toHaveTextContent('160');
+    fireEvent.click(within(ask).getByRole('button', { name: 'Keep my quality' }));
+    expect(screen.queryByTestId('style-redo')).toBeNull();
+    expect(screen.getByTestId('dock')).toHaveTextContent('Estimated cost');
+  }, 15000);
+
+  it('picking a different style on a made video asks at once too, and Change it sends the total shown', async () => {
+    madeVideo();
+    client.updateProject.mockRejectedValueOnce(new StoryApiError({ status: 409, code: 'quote_changed', message: 'x', body: { credits: 84, render_credits: 5, kind: 'style' } }));
+    client.updateProject.mockResolvedValue(project({ step: 'script', style: 'anime' }));
+    await openDescribe();
+    fireEvent.click(screen.getByRole('button', { name: /Change style/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /Anime/ }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /Use this style/ }));
+    const ask = await screen.findByTestId('style-redo');
+    expect(ask).toHaveTextContent('That costs 84 credits in all.');
+    expect(client.updateProject.mock.calls[0][1]).toMatchObject({ style: 'anime' });
+    fireEvent.click(within(ask).getByRole('button', { name: 'Change it' }));
+    await waitFor(() => expect(client.updateProject).toHaveBeenCalledTimes(2));
+    expect(client.updateProject.mock.calls[1][1]).toMatchObject({ style: 'anime', expected_credits: 84 });
+  }, 15000);
+
+  it('a video with nothing made yet keeps the old way: nothing is asked at the pick', async () => {
+    fakeServer();
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByText('Dre gave a crooked fade.');
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+    fireEvent.click(screen.getByRole('button', { name: /Change quality/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Pro' }));
+    await flush();
+    expect(client.updateProject).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('style-redo')).toBeNull();
+  });
+});
