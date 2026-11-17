@@ -100,7 +100,7 @@ function StyleDialog({ open, style, custom, onClose, onUse }) {
  *   refresh   reload status
  *   onDone    called when an existing project's script is in place, to go on to screen 2
  */
-export default function Describe({ project, onCreate, onOpen, save, refresh, onDone, returnTo }) {
+export default function Describe({ project, onCreate, onOpen, save, refresh, onDone, returnTo, backLabel = 'Back to the script' }) {
   const pricing = usePricing();
   const scripted = hasScript(project);
   const [idea, setIdea] = useState(project?.offer || '');
@@ -187,7 +187,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
     }
   }
 
-  const label = busy || (scripted ? 'Back to the script' : 'Write my script');
+  const label = busy || (scripted ? backLabel : 'Write my script');
 
   return (
     <form className={styles.screen} onSubmit={submit} data-screen="describe">

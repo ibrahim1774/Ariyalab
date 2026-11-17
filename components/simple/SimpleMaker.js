@@ -9,8 +9,11 @@ import { signInHref } from '../maker/errors';
 import MakerLayout from '../maker/MakerLayout';
 import { PricingProvider } from '../maker/PricingContext';
 import useProject from '../maker/useProject';
+import CheckPlan from './CheckPlan';
+import CheckScript from './CheckScript';
 import Describe from './Describe';
 import { SCREENS, deriveScreen, screenIndex } from './derive';
+import usePlanPipeline from './usePlanPipeline';
 import styles from './Simple.module.css';
 
 const CHAT_NOTES = {
@@ -19,6 +22,8 @@ const CHAT_NOTES = {
   plan: 'Here is the plan. Want to change anything?',
   watch: 'Want to change anything?',
 };
+
+const BACK_LABELS = { describe: 'Back to the script', script: 'Back to the script', plan: 'Back to the plan', watch: 'Back to your video' };
 
 function Aside({ text }) {
   return (
@@ -54,6 +59,13 @@ function SimpleMakerInner({ id, returnTo }) {
   }, [error, returnTo]);
 
   const screen = manual || derived;
+  // The plan pipeline lives here, not in a screen: it carries on while the customer moves between screens.
+  const plan = usePlanPipeline({
+    status: data,
+    screen: derived,
+    refresh,
+    quoteKey: `${project?.seconds}|${project?.quality}|${project?.fee_charged}|${project?.consistent_cast}|${scriptRev}`,
+  });
   const goTo = useCallback((target) => setManual(target === derived ? null : target), [derived]);
   const askChat = useCallback((text) => {
     setPrefill({ text, nonce: Date.now() });
@@ -88,9 +100,23 @@ function SimpleMakerInner({ id, returnTo }) {
         save={save}
         refresh={refresh}
         onDone={() => setManual(null)}
+        backLabel={BACK_LABELS[derived]}
         returnTo={returnTo}
       />
     );
+  } else if (screen === 'script') {
+    body = (
+      <CheckScript
+        key={scriptRev}
+        project={project}
+        plan={plan}
+        refresh={refresh}
+        returnTo={returnTo}
+        revisit={derived !== 'script' ? { label: BACK_LABELS[derived], onBack: () => setManual(null) } : null}
+      />
+    );
+  } else if (screen === 'plan') {
+    body = <CheckPlan project={project} shots={data.shots} cast={data.cast} audio={data.audio} plan={plan} refresh={refresh} returnTo={returnTo} />;
   } else {
     body = <p className={styles.muted}>This screen is coming.</p>;
   }

@@ -1,0 +1,301 @@
+import { useMemo, useState } from 'react';
+
+import Button from '../ui/Button';
+import Modal from '../ui/Modal';
+import { buildShots, pickCast, regenCast, retryCast, startGeneration } from '../../lib/story/client';
+import ErrorNotice from '../maker/ErrorNotice';
+import ShotCard from '../maker/ShotCard';
+import StepAudio from '../maker/StepAudio';
+import { Icon, Skeleton, Tile } from '../maker/Tiles';
+import { allStillsReady, isGenerated } from '../maker/steps';
+import { scenesOf, startableIds } from './derive';
+import { Announce, Dock, ScreenHead, withPrice } from './parts';
+import { stageText } from './usePlanPipeline';
+import useStartQuote from './useStartQuote';
+import styles from './Simple.module.css';
+
+const castPicture = (c) => (c.image_url || c.candidates?.[c.chosen_index ?? 0]?.url || c.candidates?.[0]?.url || null);
+
+/** A character: the options, and a note to change it. The existing cast calls, with the price on every button. */
+function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState(null);
+  if (!cast) return null;
+  const regen = Number.isInteger(cast.regen_credits) ? cast.regen_credits : 0;
+  const retry = Number.isInteger(cast.retry_credits) ? cast.retry_credits : 0;
+
+  async function run(kind, fn) {
+    setBusy(kind);
+    setError(null);
+    try {
+      await fn();
+      await refresh?.();
+    } catch (err) {
+      setError(err);
+      if (err?.status === 409) await refresh?.();
+    } finally {
+      setBusy('');
+    }
+  }
+  const failed = cast.status === 'failed' || cast.status === 'blocked';
+
+  return (
+    <Modal open={open} onClose={onClose} title={cast.name} footer={<Button variant="ghost" arrow={false} onClick={onClose}>Close</Button>}>
+      {cast.description && <p className={styles.hint}>{cast.description}</p>}
+      {cast.status === 'pending' && <Skeleton ratio="3 / 2" status="Drawing your character" />}
+      {failed && (
+        <Tile tone="error" icon={cast.status === 'blocked' ? 'block' : 'alert'} title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'} text="Describe a change below, or try again.">
+          {cast.status === 'failed' && (
+            <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('retry', () => retryCast(projectId, cast.id, retry))}>
+              {withPrice('Try again', retry)}
+            </Button>
+          )}
+        </Tile>
+      )}
+      {(cast.candidates || []).length > 0 && cast.status !== 'pending' && (
+        <div className={styles.optionRow}>
+          {cast.candidates.map((c, i) => {
+            const chosen = cast.chosen_index === i;
+            return (
+              <button
+                key={c.key || c.url || i}
+                type="button"
+                className={`${styles.optionPic} ${chosen ? styles.optionOn : ''}`}
+                aria-pressed={chosen}
+                aria-label={chosen ? `${cast.name}, option ${i + 1}, picked` : `Pick ${cast.name}, option ${i + 1}`}
+                disabled={Boolean(busy)}
+                onClick={() => run('pick', () => pickCast(projectId, cast.id, i))}
+              >
+                <img src={c.url} alt="" loading="lazy" />
+                <span>{chosen ? 'Picked' : 'Pick this one'}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {cast.status !== 'pending' && (
+        <form
+          className={styles.field}
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (!note.trim()) return;
+            run('regen', async () => { await regenCast(projectId, cast.id, note.trim(), regen); setNote(''); });
+          }}
+        >
+          <label className={styles.field}>
+            <span>Describe a change</span>
+            <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="A bit older, with round glasses." />
+          </label>
+          <Button type="submit" variant="ghost" size="sm" arrow={false} disabled={busy === 'regen' || !note.trim()}>
+            {busy === 'regen' ? 'Making new pictures…' : withPrice('Make new pictures', regen)}
+          </Button>
+        </form>
+      )}
+      <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+    </Modal>
+  );
+}
+
+function ShotTile({ shot, onOpen }) {
+  const waiting = shot.status === 'still_pending';
+  const failed = shot.status === 'failed' || shot.status === 'blocked';
+  const label = `Shot ${shot.ord + 1}${shot.line ? `: ${shot.line}` : ''}`;
+  return (
+    <li className={styles.shotItem}>
+      <button type="button" className={styles.shotButton} onClick={() => onOpen(shot)} aria-label={`Open ${label}`} data-shot={shot.id} data-status={shot.status}>
+        <span className={styles.shotImg}>
+          {shot.still_url && !waiting ? <img src={shot.still_url} alt="" loading="lazy" /> : null}
+          {waiting && <Skeleton status="Sketching" />}
+          {failed && <span className={styles.shotFailed}><Icon name="alert" size={18} /><span>Did not work</span></span>}
+          {!shot.still_url && !waiting && !failed && <span className={styles.shotEmpty}><Icon name="image" size={18} /></span>}
+          <span className={styles.shotNum}>{shot.ord + 1}</span>
+        </span>
+        {shot.line && <span className={styles.shotLine}>{shot.line}</span>}
+      </button>
+    </li>
+  );
+}
+
+/**
+ * Screen 3, Check the plan: the characters, the storyboard pictures, the voice and the music, each one a thing to click.
+ * While the pipeline still makes something it shows what; when it is ready the buttons carry the server's price:
+ * "Make my video (N credits)" and "Try scene 1 first (N credits)".
+ */
+export default function CheckPlan({ project, shots, cast, audio, plan, refresh, returnTo }) {
+  const [castOpen, setCastOpen] = useState(null);
+  const [shotOpen, setShotOpen] = useState(null);
+  const [audioOpen, setAudioOpen] = useState(false);
+  const [busy, setBusy] = useState('');
+  const [error, setError] = useState(null);
+  const [note, setNote] = useState('');
+
+  const scenes = useMemo(() => scenesOf(shots), [shots]);
+  const ids = useMemo(() => startableIds(shots), [shots]);
+  const sceneIds = scenes[0]?.startIds || [];
+  const picturesOk = allStillsReady(shots);
+  const staleShots = shots.some((s) => s.needs_rebuild);
+  const sig = `${project.fee_charged}|${project.seconds}|${project.quality}`;
+  const all = useStartQuote(project.id, picturesOk && !staleShots ? ids : [], { key: sig });
+  const first = useStartQuote(project.id, picturesOk && !staleShots && scenes.length > 1 ? sceneIds : [], { key: sig });
+
+  const action = plan.action;
+  const progressText = stageText(action);
+  const pipelineBusy = action.type === 'wait' || plan.busy || (plan.armed && action.type !== 'done');
+  const noCast = project.consistent_cast === false;
+  const model = audio?.narration;
+
+  async function start(quote, kind) {
+    if (!quote || busy) return;
+    setBusy(kind);
+    setError(null);
+    setNote('');
+    try {
+      await startGeneration(project.id, quote.shotIds || [], quote.total);
+      await refresh?.();
+    } catch (err) {
+      if (err?.status === 409 && err?.code === 'quote_changed') {
+        // Nothing started. Show the new price and ask again.
+        setNote('The price changed. Check the new price, then press the button again.');
+        await all.reload();
+        await first.reload();
+        await refresh?.();
+      } else {
+        setError(err);
+        if (err?.status === 409) await refresh?.();
+      }
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function rebuild() {
+    setBusy('rebuild');
+    setError(null);
+    try {
+      await buildShots(project.id);
+      await refresh?.();
+    } catch (err) {
+      setError(err);
+    } finally {
+      setBusy('');
+    }
+  }
+
+  const ready = action.type === 'done';
+  const canMake = Boolean(all.quote) && !busy && all.quote.shotIds?.length > 0;
+  let hint = null;
+  if (!ready && !canMake) hint = progressText || 'Getting your plan ready…';
+  else if (staleShots) hint = 'Update the storyboard first.';
+  else if (!all.quote && all.error && all.error.code !== 'needs_rebuild') hint = 'We could not work out the price. Try again in a moment.';
+  else if (!all.quote && ids.length === 0 && picturesOk) hint = 'Every shot is already made.';
+
+  return (
+    <div className={styles.screen} data-screen="plan">
+      <ScreenHead
+        title="Check the plan"
+        sub="Press a character, a picture, the voice or the music to change it. Or ask the chat helper."
+        status={ready ? 'Ready to make' : progressText || 'Getting ready…'}
+        done={ready}
+      />
+      <Announce>{pipelineBusy ? progressText : ''}</Announce>
+
+      {action.type === 'ask' && (
+        <div className={styles.askCard} data-testid="plan-ask">
+          <p>{action.what === 'pictures' ? 'The storyboard pictures now cost credits.' : `The ${action.what} now costs credits.`} Nothing is charged until you press the button.</p>
+          <Button onClick={plan.confirm}>{withPrice(action.what === 'pictures' ? 'Make the pictures' : `Make the ${action.what}`, action.credits)}</Button>
+        </div>
+      )}
+      {action.type === 'stale' && (
+        <div className={styles.askCard} data-testid="plan-stale">
+          <p>Your script changed after the storyboard was made. Update the storyboard so the pictures match the new script.</p>
+          <Button onClick={rebuild} disabled={busy === 'rebuild'}>{busy === 'rebuild' ? 'Updating…' : 'Update the storyboard'}</Button>
+        </div>
+      )}
+      {action.type === 'blocked' && (
+        <p className={styles.planNote} role="status">Something needs a look: {action.what.join(', ')}. Open it below to fix or try again.</p>
+      )}
+      {plan.note && <p className={styles.planNote} role="status">{plan.note}</p>}
+      <ErrorNotice error={plan.error} returnTo={returnTo} onRefresh={refresh} />
+      {plan.error && plan.error.status !== 402 && <div><Button variant="ghost" arrow={false} size="sm" onClick={plan.retry}>Try again</Button></div>}
+
+      <section className={styles.block} aria-labelledby="plan-chars">
+        <h3 id="plan-chars" className={styles.blockTitle}>Characters</h3>
+        {noCast ? (
+          <p className={styles.hint}>Different people in every scene, so there are no characters to pick. Each scene is pictured on its own.</p>
+        ) : cast.length === 0 ? (
+          <div className={styles.castRow}>{[0, 1].map((i) => <div key={i} className={styles.castCard}><Skeleton ratio="3 / 4" status="Drawing" /></div>)}</div>
+        ) : (
+          <ul className={styles.castRow}>
+            {cast.map((c) => (
+              <li key={c.id} className={styles.castCard}>
+                <button type="button" className={styles.castButton} onClick={() => setCastOpen(c.id)} aria-label={`${c.name}, change this character`} data-cast={c.id} data-status={c.status}>
+                  <span className={styles.castImg}>
+                    {c.status === 'pending' ? <Skeleton ratio="3 / 4" status="Drawing" /> : castPicture(c) ? <img src={castPicture(c)} alt="" loading="lazy" /> : <span className={styles.shotEmpty}><Icon name="user" size={20} /></span>}
+                  </span>
+                  <span className={styles.castName}>{c.name}</span>
+                  <span className={styles.castRole}>{c.status === 'failed' || c.status === 'blocked' ? 'Needs a look' : c.status === 'pending' ? 'Drawing…' : c.description}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      <section className={styles.block} aria-labelledby="plan-sound">
+        <h3 id="plan-sound" className={styles.blockTitle}>Voice and music</h3>
+        <div className={styles.soundRow}>
+          <button type="button" className={styles.pill} onClick={() => setAudioOpen(true)} data-pill="voice">
+            <Icon name="mic" size={15} />
+            <span><strong>{project.mode === 'talking' ? 'Voices' : 'Narrator'}</strong> {project.mode === 'talking' ? 'The people speak' : model?.status === 'ready' ? 'Ready' : model?.status === 'pending' ? 'Recording…' : model?.status === 'failed' ? 'Needs a look' : 'Included'}</span>
+          </button>
+          <button type="button" className={styles.pill} onClick={() => setAudioOpen(true)} data-pill="music">
+            <Icon name="music" size={15} />
+            <span><strong>Music</strong> {audio?.music?.type === 'none' ? 'Off' : audio?.music?.status === 'ready' ? 'Ready' : audio?.music?.status === 'pending' ? 'Composing…' : audio?.music?.status === 'failed' ? 'Needs a look' : 'Included'}</span>
+          </button>
+        </div>
+      </section>
+
+      <section className={styles.block} aria-labelledby="plan-shots">
+        <h3 id="plan-shots" className={styles.blockTitle}>Storyboard</h3>
+        {shots.length === 0 ? (
+          <div className={styles.shotGrid}>{[0, 1, 2, 3].map((i) => <div key={i} className={styles.shotImg}><Skeleton status={i === 0 ? 'Planning your shots' : ''} /></div>)}</div>
+        ) : (
+          <ol className={styles.shotGrid} aria-label="Shots">
+            {shots.filter(isGenerated).map((s) => <ShotTile key={s.id} shot={s} onOpen={(x) => setShotOpen(x.id)} />)}
+          </ol>
+        )}
+      </section>
+
+      {note && <p className={styles.planNote} data-testid="plan-note" role="status">{note}</p>}
+      <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
+
+      <Dock
+        label="Making the video"
+        total={all.quote ? all.quote.total : undefined}
+        meta={all.quote ? `${scenes.length} ${scenes.length === 1 ? 'scene' : 'scenes'}, ${shots.filter(isGenerated).length} shots` : undefined}
+        hint={hint}
+      >
+        {first.quote && scenes.length > 1 && (
+          <Button variant="ghost" arrow={false} disabled={Boolean(busy)} onClick={() => start(first.quote, 'first')}>
+            {busy === 'first' ? 'Starting…' : withPrice('Try scene 1 first', first.quote.total)}
+          </Button>
+        )}
+        <Button disabled={!canMake} onClick={() => start(all.quote, 'all')}>
+          {busy === 'all' ? 'Starting…' : all.quote ? withPrice('Make my video', all.quote.total) : 'Make my video'}
+        </Button>
+      </Dock>
+
+      <CastDialog open={Boolean(castOpen)} cast={cast.find((c) => c.id === castOpen)} projectId={project.id} onClose={() => setCastOpen(null)} refresh={refresh} returnTo={returnTo} />
+      <Modal open={Boolean(shotOpen)} onClose={() => setShotOpen(null)} title={shotOpen ? `Shot ${(shots.find((s) => s.id === shotOpen)?.ord ?? 0) + 1}` : ''} footer={<Button variant="ghost" arrow={false} onClick={() => setShotOpen(null)}>Close</Button>}>
+        {shotOpen && shots.find((s) => s.id === shotOpen) && (
+          <ShotCard shot={shots.find((s) => s.id === shotOpen)} project={project} onChanged={refresh} returnTo={returnTo} />
+        )}
+      </Modal>
+      <Modal open={audioOpen} onClose={() => setAudioOpen(false)} title="Voice and music" footer={<Button variant="ghost" arrow={false} onClick={() => setAudioOpen(false)}>Close</Button>}>
+        {audioOpen && <StepAudio project={project} refresh={refresh} onNext={() => setAudioOpen(false)} returnTo={returnTo} />}
+      </Modal>
+    </div>
+  );
+}
+
