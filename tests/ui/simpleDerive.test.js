@@ -1,7 +1,7 @@
 // The simple maker's decisions are pure functions of the status payload: which screen, what the pipeline does next, scenes, auto render.
 import { describe, it, expect } from 'vitest';
 import {
-  deriveScreen, nextPlanAction, actionKey, confirmedFrom, scenesOf, nextScenes, shouldAutoRender, lengthCredits, SCREENS, audioIssues, FREE_STARTS,
+  deriveScreen, nextPlanAction, actionKey, confirmedFrom, scenesOf, nextScenes, shouldAutoRender, lengthCredits, SCREENS, audioIssues, FREE_STARTS, planGaps, planReason, furthestScreen,
 } from '../../components/simple/derive';
 import { DEFAULTS } from '../../lib/pricingConstants';
 
@@ -41,7 +41,7 @@ describe('which screen shows', () => {
     expect(deriveScreen(st({ ...base, project: project({ step: 'audio' }), shots: [shot({ status: 'generating', still_url: '/s.png' })] }))).toBe('watch');
     expect(deriveScreen(st({ ...base, project: project({ step: 'audio' }), shots: [shot({ status: 'ready', still_url: '/s.png' })] }))).toBe('watch');
     expect(deriveScreen(st({ ...base, project: project({ step: 'audio' }), shots: [shot({ status: 'failed', still_url: '/s.png' })], jobs: [{ kind: 'clip', status: 'failed' }] }))).toBe('watch');
-    expect(deriveScreen(st({ project: project({ step: 'review' }), shots: [shot({ status: 'ready' })] }))).toBe('watch');
+    expect(deriveScreen(st({ project: project({ step: 'review' }), cast: [castRow()], shots: [shot({ status: 'ready', still_url: '/s.png' })] }))).toBe('watch');
   });
 });
 
@@ -230,5 +230,40 @@ describe('small helpers', () => {
     const full = lengthCredits(DEFAULTS, p, 30, 'standard');
     expect(full).toBe(DEFAULTS.projectFee + DEFAULTS.perSecond.standard * 30);
     expect(lengthCredits(DEFAULTS, { fee_charged: true }, 30, 'standard')).toBe(full - DEFAULTS.projectFee);
+  });
+});
+
+describe('an incomplete plan brings screen 3 back, even after clips exist', () => {
+  const clipped = (over = {}) => st({ project: project({ step: 'generate' }), cast: [castRow()], shots: [shot({ status: 'ready', still_url: '/s.png', clip_url: '/c.mp4' })], ...over });
+  it('a complete plan with clips is Watch and fix, and the furthest screen is Watch and fix', () => {
+    expect(deriveScreen(clipped())).toBe('watch');
+    expect(planGaps(clipped())).toEqual({ cast: false, pick: false, rebuild: false, pictures: false });
+    expect(planReason(clipped())).toBeNull();
+  });
+  it('a script that changed (shots need a rebuild) -> plan, with a plain reason', () => {
+    const s = clipped({ shots: [shot({ status: 'ready', still_url: '/s.png', needs_rebuild: true })] });
+    expect(deriveScreen(s)).toBe('plan');
+    expect(furthestScreen(s)).toBe('watch');
+    expect(planReason(s)).toBe('Your script changed, so some pictures need making again.');
+  });
+  it('a shot with no picture (a rebuild, a flag switch) -> plan', () => {
+    const s = clipped({ shots: [shot({ status: 'draft', still_url: null }), shot({ id: 's2', ord: 1, status: 'ready', still_url: null, clip_url: '/c.mp4' })] });
+    expect(deriveScreen(s)).toBe('plan');
+    expect(planGaps(s).pictures).toBe(true);
+    expect(planReason(s)).toMatch(/pictures need making again/);
+  });
+  it('the switch to the same characters on a project with no cast -> plan, asking for the cast', () => {
+    const s = clipped({ cast: [] });
+    expect(deriveScreen(s)).toBe('plan');
+    expect(planReason(s)).toBe('This video now uses the same characters throughout, so they need making first.');
+    expect(nextPlanAction(s, { quote: { castFee: 90 } })).toEqual({ type: 'ask', what: 'cast', credits: 90 });
+    expect(nextPlanAction(s, { quote: null })).toEqual({ type: 'ask', what: 'cast', credits: null });
+    expect(nextPlanAction(s, { confirmed: { fee: 90 }, quote: { castFee: 90 } })).toEqual({ type: 'cast', expected: 90 });
+    // Different people in every scene never needs a cast.
+    expect(deriveScreen(clipped({ cast: [], project: project({ step: 'generate', consistent_cast: false }) }))).toBe('watch');
+  });
+  it('pictures a clip outlived (ready, no picture) are made again like any other missing picture', () => {
+    const s = clipped({ shots: [shot({ status: 'ready', still_url: null, clip_url: '/c.mp4', still_credits: 2 })] });
+    expect(nextPlanAction(s)).toEqual({ type: 'ask', what: 'pictures', credits: 2, ids: ['s1'] });
   });
 });

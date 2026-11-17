@@ -13,7 +13,7 @@ import CheckPlan from './CheckPlan';
 import CheckScript from './CheckScript';
 import Describe from './Describe';
 import Watch from './Watch';
-import { SCREENS, deriveScreen, screenIndex } from './derive';
+import { SCREENS, deriveScreen, furthestScreen, planReason, screenIndex } from './derive';
 import usePlanPipeline from './usePlanPipeline';
 import styles from './Simple.module.css';
 
@@ -80,7 +80,9 @@ function SimpleMakerInner({ id, returnTo }) {
     setOpenChat((n) => n + 1);
   }, []);
 
-  const steps = SCREENS.map((s, i) => ({ id: s.id, label: s.label, locked: i > screenIndex(derived) }));
+  // Finished scenes stay watchable while the plan is being finished: the furthest screen follows the clips, the shown one the plan.
+  const reach = id ? furthestScreen(data) : 'describe';
+  const steps = SCREENS.map((s, i) => ({ id: s.id, label: s.label, locked: i > screenIndex(reach) }));
   const editorHref = id ? `/app/p/${encodeURIComponent(id)}?view=steps` : '/app/new?view=steps';
 
   async function onCreate(input) {
@@ -127,7 +129,7 @@ function SimpleMakerInner({ id, returnTo }) {
   } else if (screen === 'plan') {
     body = <CheckPlan project={project} shots={data.shots} cast={data.cast} audio={data.audio} plan={plan} refresh={refresh} returnTo={returnTo} />;
   } else {
-    body = <Watch status={data} project={project} refresh={refresh} returnTo={returnTo} onAskChat={askChat} />;
+    body = <Watch status={data} project={project} refresh={refresh} returnTo={returnTo} onAskChat={askChat} gap={planReason(data)} onFinishPlan={() => setManual(null)} />;
   }
 
   return (

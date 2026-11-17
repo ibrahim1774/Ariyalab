@@ -2,13 +2,14 @@ import { useMemo, useState } from 'react';
 
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
-import { buildShots, pickCast, regenCast, retryCast, startGeneration } from '../../lib/story/client';
+import { pickCast, regenCast, retryCast, startGeneration } from '../../lib/story/client';
+import useRebuild, { RebuildDialog } from './useRebuild';
 import ErrorNotice from '../maker/ErrorNotice';
 import ShotCard from '../maker/ShotCard';
 import StepAudio from '../maker/StepAudio';
 import { Icon, Skeleton, Tile } from '../maker/Tiles';
 import { allStillsReady, isGenerated } from '../maker/steps';
-import { scenesOf, startableIds } from './derive';
+import { planReason, scenesOf, startableIds } from './derive';
 import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
 import useStartQuote from './useStartQuote';
@@ -139,6 +140,8 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
   const all = useStartQuote(project.id, picturesOk && !staleShots ? ids : [], { key: sig });
   const first = useStartQuote(project.id, picturesOk && !staleShots && scenes.length > 1 ? sceneIds : [], { key: sig });
 
+  const rebuild = useRebuild({ projectId: project.id, refresh });
+  const reason = planReason({ project, shots, cast, jobs: [] , audio });
   const [pickBusy, setPickBusy] = useState('');
   const unpicked = cast.filter((c) => c.status === 'ready' && c.chosen_index == null && !c.image_url && (c.candidates || []).length > 0);
   async function pickLook(castId, index) {
@@ -185,19 +188,6 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
     }
   }
 
-  async function rebuild() {
-    setBusy('rebuild');
-    setError(null);
-    try {
-      await buildShots(project.id);
-      await refresh?.();
-    } catch (err) {
-      setError(err);
-    } finally {
-      setBusy('');
-    }
-  }
-
   const ready = action.type === 'done';
   const canMake = Boolean(all.quote) && !busy && all.quote.shotIds?.length > 0;
   let hint = null;
@@ -216,16 +206,26 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
       />
       <Announce>{pipelineBusy ? progressText : ''}</Announce>
 
+      {reason && <p className={styles.reason} data-testid="plan-reason" role="status">{reason}</p>}
       {action.type === 'ask' && (
         <div className={styles.askCard} data-testid="plan-ask">
-          <p>{action.what === 'pictures' ? 'The storyboard pictures now cost credits.' : `The ${action.what} now costs credits.`} Nothing is charged until you press the button.</p>
-          <Button onClick={plan.confirm}>{withPrice(action.what === 'pictures' ? 'Make the pictures' : `Make the ${action.what}`, action.credits)}</Button>
+          {action.what === 'cast' ? (
+            <>
+              <p>{Number.isInteger(action.credits) ? 'Nothing is charged until you press the button.' : 'Working out the price…'}</p>
+              <Button disabled={!Number.isInteger(action.credits)} onClick={plan.confirm}>{Number.isInteger(action.credits) ? withPrice('Carry on designing', action.credits) : 'Carry on designing'}</Button>
+            </>
+          ) : (
+            <>
+              <p>{action.what === 'pictures' ? 'The storyboard pictures now cost credits.' : `The ${action.what} now costs credits.`} Nothing is charged until you press the button.</p>
+              <Button onClick={plan.confirm}>{withPrice(action.what === 'pictures' ? 'Make the pictures' : `Make the ${action.what}`, action.credits)}</Button>
+            </>
+          )}
         </div>
       )}
       {action.type === 'stale' && (
         <div className={styles.askCard} data-testid="plan-stale">
           <p>Your script changed after the storyboard was made. Update the storyboard so the pictures match the new script.</p>
-          <Button onClick={rebuild} disabled={busy === 'rebuild'}>{busy === 'rebuild' ? 'Updating…' : 'Update the storyboard'}</Button>
+          <Button onClick={() => rebuild.run()} disabled={rebuild.busy}>{rebuild.busy ? 'Updating…' : 'Update the storyboard'}</Button>
         </div>
       )}
       {action.type === 'blocked' && (
@@ -244,7 +244,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
           <Button variant="ghost" arrow={false} onClick={refresh}>Look again</Button>
         </div>
       )}
-      {plan.note && <p className={styles.planNote} role="status">{plan.note}</p>}
+      {plan.note && <p className={styles.planNote} data-testid="plan-note" role="status">{plan.note}</p>}
       <ErrorNotice error={plan.error} returnTo={returnTo} onRefresh={refresh} />
       {plan.error && plan.error.status !== 402 && <div><Button variant="ghost" arrow={false} size="sm" onClick={plan.retry}>Try again</Button></div>}
 
@@ -334,6 +334,8 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         </Button>
       </Dock>
 
+      <ErrorNotice error={rebuild.error} returnTo={returnTo} onRefresh={refresh} />
+      <RebuildDialog rebuild={rebuild} />
       <CastDialog open={Boolean(castOpen)} cast={cast.find((c) => c.id === castOpen)} projectId={project.id} onClose={() => setCastOpen(null)} refresh={refresh} returnTo={returnTo} />
       <Modal open={Boolean(shotOpen)} onClose={() => setShotOpen(null)} title={shotOpen ? `Shot ${(shots.find((s) => s.id === shotOpen)?.ord ?? 0) + 1}` : ''} footer={<Button variant="ghost" arrow={false} onClick={() => setShotOpen(null)}>Close</Button>}>
         {shotOpen && shots.find((s) => s.id === shotOpen) && (

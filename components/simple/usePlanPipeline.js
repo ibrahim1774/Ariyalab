@@ -109,11 +109,13 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   }, [projectId]);
 
   // The price on the "design my video" button: read while the script screen is open, and again when what it depends on changes.
+  // The plan screen needs it too when the cast is missing after clips exist (the switch to the same characters): the cast fee.
+  const castMissing = screen === 'plan' && project?.consistent_cast !== false && (status?.cast || []).length === 0;
   useEffect(() => {
-    if (screen === 'script' && projectId) reloadQuote();
-  }, [screen, projectId, quoteKey, reloadQuote]);
+    if ((screen === 'script' || castMissing) && projectId) reloadQuote();
+  }, [screen, castMissing, projectId, quoteKey, reloadQuote]);
 
-  const action = useMemo(() => nextPlanAction(status, { confirmed }), [status, confirmed]);
+  const action = useMemo(() => nextPlanAction(status, { confirmed, quote }), [status, confirmed, quote]);
   const marker = Boolean(project?.plan_requested);
   const lockHeld = usePlanLock(projectId, (armed || marker) && (screen === 'plan' || screen === 'script'));
   // Free parts start by themselves only when the customer pressed "Looks good" (this tab now, or the project's marker) AND this
@@ -182,7 +184,10 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
           setNote('The price changed. Check the new price, then press the button again.');
           if (alive.current) reloadQuote();
         } else if (err?.status === 409) {
-          // Another tab (or an earlier request) is already doing this. Not an error: look again after a moment.
+          // Another tab (or an earlier request) is already doing this, or something is still being made. Not an error: say what
+          // it waits for and look again after a moment.
+          if (err.code === 'shots_busy') setNote('Waiting for what is being made now to finish…');
+          else if (err.code === 'cast_needed') setNote('Your characters need to be made first.');
           cool.current.set(key, Date.now() + COOL_MS);
         } else if (alive.current) {
           setError(err);
@@ -232,15 +237,23 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   }, [projectId, refresh]);
 
   /** Confirms the price of a part that now costs credits ("Make the pictures (2 credits)"). */
-  const confirm = useCallback(() => {
-    if (action.type !== 'ask') return;
-    const field = { pictures: 'pictures', voice: 'voice', music: 'music' }[action.what];
+  const confirm = useCallback(async () => {
+    if (action.type !== 'ask' || !Number.isInteger(action.credits)) return;
+    const field = { pictures: 'pictures', voice: 'voice', music: 'music', cast: 'fee' }[action.what];
     if (!field) return;
     setError(null);
     setNote('');
+    try {
+      // Pressing carries the plan on: the marker lets the free parts after it start by themselves in this tab.
+      await setPlanRequested(projectId, true);
+    } catch (err) {
+      if (alive.current) setError(err);
+      return;
+    }
+    cleared.current = false;
     setConfirmed((c) => ({ ...c, [field]: action.credits }));
     setArmed(true);
-  }, [action]);
+  }, [action, projectId]);
 
   /** After an error: allow the stopped start again. */
   const retry = useCallback(() => {

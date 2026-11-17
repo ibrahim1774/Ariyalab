@@ -32,16 +32,55 @@ export function clipsStarted({ project, shots = [], jobs = [] } = {}) {
 }
 
 /**
+ * What is missing from the plan (cast, looks, storyboard, pictures), read from server state. A plan that was complete can become
+ * incomplete again after clips exist: the script changed (needs_rebuild), a flag switch cleared the pictures, or the project now
+ * wants the same characters and has no cast.
+ *   cast      same characters wanted, no cast rows, and the plan had begun (shots or clips exist)
+ *   pick      a character failed, was blocked, or has no look picked
+ *   rebuild   a shot needs the storyboard rebuilt
+ *   pictures  a generated shot has no picture (and none is a clip in flight)
+ */
+export function planGaps(status) {
+  const { project, shots = [], cast = [] } = status || {};
+  const none = { cast: false, pick: false, rebuild: false, pictures: false };
+  if (!project || !hasScript(project)) return none;
+  const gen = shots.filter((s) => (s.source || 'generated') !== 'footage');
+  const begun = shots.length > 0 || clipsStarted(status);
+  return {
+    cast: project.consistent_cast !== false && cast.length === 0 && begun,
+    pick: cast.some((c) => c.status === 'failed' || c.status === 'blocked' || (c.status === 'ready' && c.chosen_index == null && !c.image_url)),
+    rebuild: shots.some((s) => s.needs_rebuild),
+    pictures: gen.some((s) => !s.still_url && !IN_FLIGHT.includes(s.status)),
+  };
+}
+
+/** The one line that says why the plan screen is back, in plain words; null when the plan is complete. */
+export function planReason(status) {
+  const g = planGaps(status);
+  if (g.cast) return 'This video now uses the same characters throughout, so they need making first.';
+  if (g.rebuild || g.pictures) return 'Your script changed, so some pictures need making again.';
+  if (g.pick) return 'A character needs a look before the video can go on.';
+  return null;
+}
+
+/**
  * The screen the server state calls for.
  *   no script -> describe; script, no cast and no storyboard -> script; a plan in progress or ready, no clips -> plan;
- *   any clip started -> watch.
+ *   any clip started -> watch, unless the plan is incomplete again (planGaps), which brings the plan screen back.
  */
 export function deriveScreen(status) {
   const { project, shots = [], cast = [] } = status || {};
   if (!project || !hasScript(project)) return 'describe';
-  if (clipsStarted(status)) return 'watch';
+  if (clipsStarted(status)) return planReason(status) ? 'plan' : 'watch';
   if (cast.length > 0 || shots.length > 0) return 'plan';
   return 'script';
+}
+
+/** The furthest screen the customer may open: finished scenes stay watchable while the plan is being finished. */
+export function furthestScreen(status) {
+  const { project } = status || {};
+  if (project && hasScript(project) && clipsStarted(status)) return 'watch';
+  return deriveScreen(status);
 }
 
 // ---- the idea box
@@ -83,7 +122,7 @@ const lacksPicture = (s) => isGenerated(s) && !s.still_url;
  * confirming; a part that costs more only starts when its price equals what was confirmed (never a number nobody saw).
  * Audio does not depend on the cast, so it can start while pictures are being drawn.
  */
-export function nextPlanAction(status, { confirmed = {}, now = Date.now() } = {}) {
+export function nextPlanAction(status, { confirmed = {}, now = Date.now(), quote = null } = {}) {
   const { project, shots = [], cast = [], audio = null, jobs = [] } = status || {};
   if (!project || !hasScript(project)) return { type: 'none' };
   const actions = [];
@@ -98,6 +137,8 @@ export function nextPlanAction(status, { confirmed = {}, now = Date.now() } = {}
     if (cast.length === 0) {
       castClear = false;
       if (confirmed.fee !== undefined) actions.push({ type: 'cast', expected: confirmed.fee });
+      // The plan already began (shots or clips) and the cast is missing: the price comes from the server and needs a press.
+      else if (shots.length > 0 || clipsStarted(status)) asks.push({ type: 'ask', what: 'cast', credits: Number.isInteger(quote?.castFee) ? quote.castFee : null });
     } else {
       const running = (c) => jobs.some((j) => j.kind === 'cast_image' && (j.status === 'queued' || j.status === 'running') && j.payload?.castId === c.id);
       const old = (c, ms) => now - (Date.parse(c.updated_at) || now) > ms;
@@ -134,7 +175,7 @@ export function nextPlanAction(status, { confirmed = {}, now = Date.now() } = {}
     } else {
       if (gen.some((s) => s.status === 'still_pending')) waits.push('pictures');
       if (gen.some((s) => lacksPicture(s) && (s.status === 'failed' || s.status === 'blocked'))) blocked.push('pictures');
-      const need = gen.filter((s) => lacksPicture(s) && s.status === 'draft');
+      const need = gen.filter((s) => lacksPicture(s) && (s.status === 'draft' || s.status === 'ready'));
       if (need.length) {
         const credits = need.reduce((n, s) => n + (Number(s.still_credits) || 0), 0);
         const ids = need.map((s) => s.id);

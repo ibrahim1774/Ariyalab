@@ -4,7 +4,8 @@ import Button from '../ui/Button';
 import buttonStyles from '../ui/Button.module.css';
 import VideoPlayer from '../app/VideoPlayer';
 import Modal from '../ui/Modal';
-import { buildShots, makeMusic, makeNarration, rerollShot, startGeneration, startRender } from '../../lib/story/client';
+import { makeMusic, makeNarration, rerollShot, startGeneration, startRender } from '../../lib/story/client';
+import useRebuild, { RebuildDialog } from './useRebuild';
 import ErrorNotice from '../maker/ErrorNotice';
 import { clock, downloadFilename, downloadHref, renderActive } from '../maker/finish';
 import { usePricing } from '../maker/PricingContext';
@@ -100,7 +101,7 @@ function ChangePanel({ scene, status, project, refresh, returnTo }) {
  * scene or the rest with their prices, "Change this scene", and the final video: made by itself once when every clip is ready
  * (the included render), downloadable, with the render's warnings shown as they are. A later render shows its price.
  */
-export default function Watch({ status, project, refresh, returnTo, onAskChat }) {
+export default function Watch({ status, project, refresh, returnTo, onAskChat, gap = null, onFinishPlan }) {
   const { shots, jobs, render, renders, renderPrice } = status;
   const [selected, setSelected] = useState(null); // scene id whose clip plays in the stage
   const [changing, setChanging] = useState(null); // scene id whose change panel is open
@@ -110,7 +111,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
   const autoFor = useRef('');
   const [refused, setRefused] = useState(null); // the reason an automatic render was refused, in the server's words
   const [waitedLong, setWaitedLong] = useState(false);
-  const [rebuildAsk, setRebuildAsk] = useState(null); // { count, own, token } when a rebuild would replace clips
+  const rebuild = useRebuild({ projectId: project.id, refresh });
 
   const scenes = useMemo(() => scenesOf(shots), [shots]);
   const generated = shots.filter(isGenerated);
@@ -229,21 +230,6 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
     }
   }
 
-  async function rebuild(confirm) {
-    setBusy('rebuild');
-    setError(null);
-    try {
-      await (confirm ? buildShots(project.id, { confirm }) : buildShots(project.id));
-      setRebuildAsk(null);
-      await refresh?.();
-    } catch (err) {
-      if (err?.code === 'rebuild_loses_clips') setRebuildAsk({ count: Number(err.body?.count) || 0, own: Number(err.body?.own) || 0, token: err.body?.token || null });
-      else setError(err);
-    } finally {
-      setBusy('');
-    }
-  }
-
   // The stage plays the scene the customer picked; before the final video exists it shows the first ready scene.
   const playing = selected
     ? scenes.find((s) => s.id === selected)
@@ -262,7 +248,9 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
   let secondary = null;
   let hint = null;
   const manualRender = Boolean(refused) || waitedLong;
-  if (needsRebuild) {
+  if (gap) {
+    primary = <Button onClick={onFinishPlan}>Finish the plan</Button>;
+  } else if (needsRebuild) {
     hint = 'Update the storyboard first, then the prices for the changed scenes show here.';
   } else if (!allReady) {
     if (showNext) {
@@ -350,10 +338,16 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
         ) : null}
       </div>
 
-      {needsRebuild && (
+      {gap && (
+        <div className={styles.askCard} data-testid="watch-finish-plan">
+          <p>{gap} The plan needs finishing before more scenes can be made.</p>
+        </div>
+      )}
+      {needsRebuild && !gap && (
         <div className={styles.askCard} data-testid="watch-stale">
           <p>Your script changed after these scenes were made. Update the storyboard so the pictures match, then remake the scenes that changed. Each price shows before anything is charged.</p>
-          <Button onClick={() => rebuild()} disabled={busy === 'rebuild'}>{busy === 'rebuild' ? 'Updating…' : 'Update the storyboard'}</Button>
+          <Button onClick={() => rebuild.run()} disabled={rebuild.busy}>{rebuild.busy ? 'Updating…' : 'Update the storyboard'}</Button>
+          <ErrorNotice error={rebuild.error} returnTo={returnTo} onRefresh={refresh} />
         </div>
       )}
       {issues.map((i) => (
@@ -415,24 +409,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
         })}
       </ol>
 
-      <Modal
-        open={rebuildAsk !== null}
-        onClose={() => setRebuildAsk(null)}
-        title="Update the storyboard?"
-        footer={(
-          <>
-            <Button variant="ghost" arrow={false} onClick={() => setRebuildAsk(null)}>Cancel</Button>
-            <Button arrow={false} disabled={busy === 'rebuild'} onClick={() => rebuild(rebuildAsk?.token)}>Rebuild anyway</Button>
-          </>
-        )}
-      >
-        <p>
-          This replaces {[
-            rebuildAsk?.count > 0 ? `${rebuildAsk.count} finished ${rebuildAsk.count === 1 ? 'clip' : 'clips'}` : null,
-            rebuildAsk?.own > 0 ? `${rebuildAsk.own} ${rebuildAsk.own === 1 ? 'shot' : 'shots'} with your own footage or picture-in-picture` : null,
-          ].filter(Boolean).join(' and ')}. You can make them again after, and each price shows first. Rebuild anyway?
-        </p>
-      </Modal>
+      <RebuildDialog rebuild={rebuild} />
 
       {changing && scenes.find((s) => s.id === changing) && (
         <ChangePanel scene={scenes.find((s) => s.id === changing)} status={status} project={project} refresh={refresh} returnTo={returnTo} />
