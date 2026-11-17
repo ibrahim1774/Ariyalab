@@ -9,11 +9,16 @@ import styles from './MakerLayout.module.css';
  * side slot for the chat panel that becomes a bottom sheet under 900 px.
  * `steps` = [{ id, label, stale?, locked? }]; `chat` = the chat panel (the slot is shown when there is none, e.g. before a project exists)
  */
-export default function MakerLayout({ title, steps, currentId, onSelect, quote, chat, children, notice, extra = null, stepsLabel = 'Steps' }) {
+export default function MakerLayout({ title, steps, currentId, onSelect, quote, chat, children, notice, extra = null, stepsLabel = 'Steps', openChat = 0 }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
   const summaryRef = useRef(null);
   const chatToggleRef = useRef(null);
+
+  // A screen can ask for the chat to open (a number that changes each time): the phone sheet slides up.
+  useEffect(() => {
+    if (openChat) setSheetOpen(true);
+  }, [openChat]);
 
   // Escape closes whichever sheet is open and gives focus back to the button that opened it.
   useEffect(() => {

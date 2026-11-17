@@ -107,6 +107,7 @@ function MakerPageInner({ id, returnTo }) {
       currentId={current}
       onSelect={goTo}
       notice={error ? <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} /> : null}
+      extra={<Link href={`/app/p/${encodeURIComponent(id)}`}>Back to the simple view</Link>}
       quote={showQuote ? <QuoteBar project={project} shots={shots} reloadKey={reloadKey} /> : null}
       chat={(
         <ChatPanel

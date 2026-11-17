@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import MakerLayout from '../../components/maker/MakerLayout';
 import StepStart from '../../components/maker/StepStart';
 import { stepsFor } from '../../components/maker/steps';
+import SimpleMaker from '../../components/simple/SimpleMaker';
 import { createProject } from '../../lib/story/client';
 
 export default function NewVideoPage() {
@@ -21,6 +22,16 @@ export default function NewVideoPage() {
   }
   async function onOpenProject(id) {
     await router.replace(`/app/p/${id}`);
+  }
+  // The simple view is the default; ?view=steps keeps the 12 step start screen.
+  if (!router.isReady) return <Head><title>New video | Ariya Lab</title></Head>;
+  if (router.query?.view !== 'steps') {
+    return (
+      <>
+        <Head><title>New video | Ariya Lab</title></Head>
+        <SimpleMaker id={null} returnTo="/app/new" />
+      </>
+    );
   }
   const steps = stepsFor(null).map((s) => ({ id: s.id, label: s.label, locked: s.id !== 'start' }));
   return (

@@ -1,0 +1,128 @@
+/* The simple maker. The look follows the homepage demo (components/marketing/ProductDemo.module.css):
+   one calm column, a textbox, option chips, a bottom bar with the price and the one main button. */
+
+.screen { display: flex; flex-direction: column; gap: 14px; min-width: 0; padding-bottom: 4px; }
+.srOnly { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.muted, .hint { margin: 0; color: var(--text-dim); font-size: 14px; }
+.link, .linkButton { color: var(--accent-deep); font: inherit; font-size: 13px; font-weight: 600; text-decoration: underline; text-underline-offset: 3px; background: none; border: 0; padding: 0; cursor: pointer; }
+.link:focus-visible, .linkButton:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: 4px; }
+
+.head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.h { margin: 0; font-size: 22px; line-height: 1.2; letter-spacing: -0.02em; font-weight: 600; }
+.sub { margin: 4px 0 0; color: var(--text-dim); font-size: 14px; max-width: 70ch; }
+.status { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 4px 10px; border-radius: var(--radius-pill); background: var(--accent-tint); color: var(--accent-deep); font-size: 12px; font-weight: 600; }
+.statusDone { background: var(--success-bg); color: var(--success); }
+
+.asideCard { padding: 14px 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card); }
+.asideCard h3 { font-size: 16px; margin: 0 0 6px; }
+.asideCard p { margin: 0; color: var(--text-dim); font-size: 14px; }
+
+/* ---- screen 1 */
+.ideaWrap { display: block; }
+.idea {
+  width: 100%;
+  min-height: 92px;
+  padding: 14px 16px;
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 18px;
+  line-height: 1.45;
+  resize: vertical;
+  field-sizing: content;
+  max-height: 40dvh;
+}
+.idea:focus-visible { outline: none; border-color: var(--accent); box-shadow: var(--focus-ring); }
+.videoDoor { min-width: 0; }
+
+.settings { display: grid; gap: 12px; padding: 14px 16px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg); min-width: 0; }
+.setting { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px; border: 0; margin: 0; padding: 0; min-width: 0; }
+.settingLabel { font-size: 12px; font-weight: 600; color: var(--text-dim); padding: 0; }
+.settingBody { display: inline-flex; align-items: center; gap: 12px; flex-wrap: wrap; min-width: 0; }
+.stylePill { display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border-radius: var(--radius-pill); border: 1px solid var(--border-strong); background: var(--surface); font-size: 13px; font-weight: 500; }
+.styleThumb { display: block; width: 28px; height: 28px; border-radius: 50%; overflow: hidden; flex: none; }
+.styleThumb img, .styleThumb > div { width: 100%; height: 100%; object-fit: cover; aspect-ratio: 1 / 1; }
+
+.chips { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.chip {
+  position: relative;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 6px 13px;
+  min-width: 74px;
+  border: 1px solid var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s var(--ease), background 0.15s var(--ease);
+}
+.chip:hover { border-color: var(--accent); }
+.chip input, .qualityCard input, .styleTile input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; width: 100%; height: 100%; }
+.chip:focus-within, .qualityCard:focus-within, .styleTile:focus-within { box-shadow: var(--focus-ring); }
+.chip strong { font-weight: 600; }
+.chip small { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.needs { color: var(--warning) !important; font-weight: 600; }
+.optionOn { border-color: var(--accent) !important; background: var(--accent-tint) !important; box-shadow: 0 0 0 1px var(--accent); }
+.optionOn small { color: var(--accent-deep); }
+.balanceNote { grid-column: 1 / -1; margin: -4px 0 0; font-size: 13px; color: var(--text-dim); }
+
+.qualityBody { min-width: 0; }
+.qualityGrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 8px; }
+.qualityChosen { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.qualityCard { position: relative; display: flex; flex-direction: column; gap: 3px; padding: 10px 14px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); cursor: pointer; min-width: 0; font-size: 13px; }
+.qualityChosen .qualityCard { cursor: default; flex: 1 1 260px; max-width: 420px; }
+.qualityHead { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.qualityHead strong { font-size: 15px; }
+.recommended { font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 999px; background: var(--accent); color: var(--on-accent, #fff); }
+.qualityVoice { font-weight: 500; }
+.qualityLine { color: var(--text-dim); font-size: 12px; }
+.qualityCredits { font-size: 15px; font-variant-numeric: tabular-nums; }
+.qualityModel { font-size: 11px; color: var(--text-dim); }
+
+.styleGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 10px 0; }
+.styleTile { position: relative; display: flex; flex-direction: column; gap: 4px; padding: 6px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); cursor: pointer; min-width: 0; }
+.styleName { font-size: 13px; font-weight: 600; text-align: center; }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; }
+.field textarea { width: 100%; font: inherit; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); color: var(--text); }
+
+.refCard { min-width: 0; }
+.refReady { margin: 0; padding: 12px 14px; border-radius: 14px; background: var(--success-bg); color: var(--text); font-size: 14px; }
+.refFailed { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 12px 14px; border-radius: 14px; background: var(--error-bg); font-size: 14px; }
+
+/* ---- the bar at the bottom of every screen */
+.dock {
+  position: sticky;
+  bottom: 8px;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  min-height: 56px;
+  padding: 8px 8px 8px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: var(--shadow-md);
+}
+.quote { display: grid; grid-template-columns: auto minmax(0, auto); align-items: baseline; column-gap: 10px; min-width: 0; }
+.quoteLabel { grid-column: 1 / -1; font-size: 11px; color: var(--text-dim); }
+.quoteTotal { font-size: 19px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.quoteMeta { font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dockHint { grid-column: 1 / -1; font-size: 13px; color: var(--text-dim); }
+.dockButtons { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
+
+@media (max-width: 640px) {
+  .setting { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .idea { font-size: 16px; }
+  .dock { bottom: 4px; padding-left: 12px; }
+  .dockButtons { width: 100%; justify-content: stretch; }
+  .dockButtons > * { flex: 1 1 auto; justify-content: center; }
+  .h { font-size: 20px; }
+}

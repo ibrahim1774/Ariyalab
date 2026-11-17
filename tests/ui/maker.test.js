@@ -495,6 +495,7 @@ describe('project thumbnails', () => {
 describe('/app/new', () => {
   it('creates nothing on load, and creates the project on submit', async () => {
     client.createProject.mockResolvedValue({ id: 'new1' });
+    routerMock.query = { view: 'steps' };
     render(<NewVideoPage />);
     await flush();
     expect(client.createProject).not.toHaveBeenCalled();
