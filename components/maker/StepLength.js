@@ -5,17 +5,16 @@ import Card from '../ui/Card';
 import ErrorNotice from './ErrorNotice';
 import StepFooter from './StepFooter';
 import { SIMPLE_LENGTHS } from '../../lib/pricingConstants';
+import { QUALITY_INFO, QUALITY_ORDER, outputLine } from '../../lib/qualityInfo';
+import { usePricing } from './PricingContext';
+import { estimateCredits } from './steps';
 import styles from './Steps.module.css';
 
 export { SIMPLE_LENGTHS };
 export const LENGTHS = SIMPLE_LENGTHS;
 const lengthLabel = (n) => (n === 120 ? '2 minutes' : `${n} seconds`);
-// Economy stays hidden until it has been tested.
-export const QUALITIES = [
-  { id: 'standard', label: 'Standard', helper: 'Clean 720p pictures with a narrator. A good place to start.' },
-  { id: 'pro_narrated', label: 'Pro narrated', helper: 'Sharper 1080p pictures with a narrator.' },
-  { id: 'pro_talking', label: 'Pro talking', helper: 'Sharp 1080p pictures where the characters speak their own lines.' },
-];
+// The cards come from lib/qualityInfo.js (one source for the website, the chat and the connector).
+export const QUALITIES = QUALITY_ORDER.map((id) => ({ id, label: QUALITY_INFO[id].name, helper: QUALITY_INFO[id].bestFor }));
 export const ASPECTS = [
   { id: '9:16', label: 'Vertical 9:16', helper: 'Reels, TikTok, Shorts' },
   { id: '1:1', label: 'Square 1:1', helper: 'Feeds' },
@@ -30,6 +29,7 @@ export default function StepLength({ project, save, onNext, returnTo }) {
   const [seconds, setSeconds] = useState(project?.seconds || 30);
   const [quality, setQuality] = useState(project?.quality || 'standard');
   const [aspect, setAspect] = useState(project?.aspect || '9:16');
+  const pricing = usePricing();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
 
@@ -75,13 +75,25 @@ export default function StepLength({ project, save, onNext, returnTo }) {
 
           <fieldset className={styles.optionGrid}>
             <legend>Quality</legend>
-            {QUALITIES.map((q) => (
-              <label key={q.id} className={`${styles.option} ${quality === q.id ? styles.optionOn : ''}`}>
-                <input type="radio" name="quality" value={q.id} checked={quality === q.id} onChange={() => pickQuality(q.id)} />
-                <span className={styles.optionTitle}>{q.label}</span>
-                <span className={styles.optionHelper}>{q.helper}</span>
-              </label>
-            ))}
+            {QUALITY_ORDER.map((id) => {
+              const info = QUALITY_INFO[id];
+              // The same number the quote bar shows for this quality at this length.
+              const credits = estimateCredits({ ...project, seconds, quality: id }, pricing);
+              return (
+                <label key={id} className={`${styles.option} ${styles.qualityCard} ${quality === id ? styles.optionOn : ''}`} data-quality={id} data-recommended={info.recommended ? '' : undefined}>
+                  <input type="radio" name="quality" value={id} aria-label={info.name} checked={quality === id} onChange={() => pickQuality(id)} />
+                  <span className={styles.qualityHead}>
+                    <span className={styles.optionTitle}>{info.name}</span>
+                    {info.recommended && <span className={styles.recommended}>Recommended</span>}
+                  </span>
+                  <span className={styles.qualityVoice}>{info.voice}</span>
+                  <span className={styles.optionHelper}>{info.picture}. {info.included}.</span>
+                  <span className={styles.qualityOut}>{outputLine(aspect, seconds)}</span>
+                  <strong className={styles.qualityCredits} data-credits="">{credits.toLocaleString()} credits</strong>
+                  <small className={styles.qualityModel}>{info.model}</small>
+                </label>
+              );
+            })}
           </fieldset>
 
           <fieldset className={styles.chips}>

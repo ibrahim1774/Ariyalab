@@ -43,7 +43,7 @@ describe('quoting', () => {
     expect(q.total).toBe(720);
     expect(q.lines.reduce((n, l) => n + l.credits, 0)).toBe(720);
     expect(q.lines.some((l) => /fee/i.test(l.label) && l.credits === 90)).toBe(true);
-    expect(q.lines.map((l) => l.label)).toContain('15 Pro narrated shots');
+    expect(q.lines.map((l) => l.label)).toContain('15 Pro shots');
   });
   it('omits the fee when already charged', async () => {
     const q = await quoteProject({ shots: [{ quality: 'economy', seconds: 5 }], feeAlreadyCharged: true });
@@ -207,7 +207,7 @@ describe('short video fee', () => {
 
 describe('labels', () => {
   it('has display names', () => {
-    expect(QUALITY_LABELS).toEqual({ economy: 'Economy', standard: 'Standard', pro_narrated: 'Pro narrated', pro_talking: 'Pro talking' });
+    expect(QUALITY_LABELS).toEqual({ economy: 'Budget', standard: 'Standard', pro_narrated: 'Pro', pro_talking: 'Pro talking' });
   });
 });
 

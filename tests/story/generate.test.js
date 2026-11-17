@@ -174,7 +174,7 @@ describe('quote', () => {
     const q = await quoteGeneration({ userId: ctx.userId, projectId: ctx.project.id });
     expect(q.total).toBe(630);
     expect(q.holdNeeded).toBe(630);
-    expect(q.lines).toEqual([{ label: '15 Pro narrated shots', credits: 630 }]);
+    expect(q.lines).toEqual([{ label: '15 Pro shots', credits: 630 }]);
     expect(q.shotIds).toHaveLength(15);
   });
 

@@ -398,11 +398,11 @@ describe('round 2', () => {
   });
 
   it('QuoteBar builds its sub-label from the quote and the shots, not the brief', async () => {
-    client.getQuote.mockResolvedValue({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro narrated shots', credits: 420 }] });
+    client.getQuote.mockResolvedValue({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro shots', credits: 420 }] });
     const shots = Array.from({ length: 10 }, (_, i) => shot(i + 1, { seconds: 3 }));
     const { rerender } = render(<QuoteBar project={project({ seconds: 75, quality: 'standard' })} shots={shots} />);
     await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('510 credits'));
-    expect(screen.getByText('10 shots, 30 seconds, Pro narrated')).toBeInTheDocument();
+    expect(screen.getByText('10 shots, 30 seconds, Pro')).toBeInTheDocument();
     const mixed = shots.map((s, i) => (i === 0 ? { ...s, quality: 'standard' } : s));
     rerender(<QuoteBar project={project()} shots={mixed} />);
     await waitFor(() => expect(screen.getByText('10 shots, 30 seconds, Mixed quality')).toBeInTheDocument());
@@ -455,11 +455,11 @@ describe('round 4', () => {
   });
 
   it('QuoteBar marks its sub-label as updating while the quote is older than the shots', async () => {
-    client.getQuote.mockResolvedValueOnce({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro narrated shots', credits: 420 }] });
+    client.getQuote.mockResolvedValueOnce({ total: 510, lines: [{ label: 'Project fee', credits: 90 }, { label: '10 Pro shots', credits: 420 }] });
     const shots = Array.from({ length: 10 }, (_, i) => shot(i + 1, { seconds: 3 }));
     const { rerender } = render(<QuoteBar project={project()} shots={shots} />);
     await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('510 credits'));
-    expect(screen.getByText('10 shots, 30 seconds, Pro narrated')).toBeInTheDocument();
+    expect(screen.getByText('10 shots, 30 seconds, Pro')).toBeInTheDocument();
 
     let resolve;
     client.getQuote.mockReturnValueOnce(new Promise((r) => { resolve = r; }));

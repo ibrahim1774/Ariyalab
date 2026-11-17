@@ -54,9 +54,9 @@ describe('Task 16 maker edits', () => {
   it('QuoteBar describes the shots the quote covers, not every shot', async () => {
     client.getBilling.mockResolvedValue({ v2: true, balance: { available: 900 }, history: [] });
     const shots = [shot(1), shot(2), shot(3, { status: 'still_ready', clip_url: null })];
-    client.getQuote.mockResolvedValue({ total: 42, lines: [{ label: '1 Pro narrated shot', credits: 42 }], holdNeeded: 42, shotIds: ['s3'] });
+    client.getQuote.mockResolvedValue({ total: 42, lines: [{ label: '1 Pro shot', credits: 42 }], holdNeeded: 42, shotIds: ['s3'] });
     const { unmount } = render(<QuoteBar project={project} shots={shots} />);
-    await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('1 shot to make, 3 seconds, Pro narrated'));
+    await waitFor(() => expect(screen.getByTestId('quote-sub')).toHaveTextContent('1 shot to make, 3 seconds, Pro'));
     unmount();
     client.getQuote.mockResolvedValue({ total: 0, lines: [], holdNeeded: 0, shotIds: [] });
     render(<QuoteBar project={project} shots={shots.slice(0, 2)} />);

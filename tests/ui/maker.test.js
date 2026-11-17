@@ -18,6 +18,7 @@ vi.mock('next/router', () => ({ useRouter: () => routerMock }));
 const client = await import('../../lib/story/client');
 const { StoryApiError } = client;
 const { creditsForVideo, QUALITY_LABELS } = await import('../../lib/pricingConstants');
+const { estimateCredits } = await import('../../components/maker/steps');
 const { describeError } = await import('../../components/maker/errors');
 const { default: ErrorNotice } = await import('../../components/maker/ErrorNotice');
 const { default: MakerPage } = await import('../../components/maker/MakerPage');
@@ -126,7 +127,7 @@ describe('generate', () => {
   });
 
   it('confirm modal lists the quote, shows the balance after, and posts the quoted total', async () => {
-    client.getQuote.mockResolvedValue({ total: 777, lines: [{ label: 'Project setup', credits: 90 }, { label: '2 shots, Pro narrated', credits: 687 }], holdNeeded: 777 });
+    client.getQuote.mockResolvedValue({ total: 777, lines: [{ label: 'Project setup', credits: 90 }, { label: '2 shots, Pro', credits: 687 }], holdNeeded: 777 });
     client.startGeneration.mockResolvedValue({ started: 2 });
     const p = props([shot(1), shot(2)]);
     render(<StepGenerate {...p} />);
@@ -320,16 +321,57 @@ describe('brief steps', () => {
     expect(screen.getByRole('button', { name: /Continue/ })).toBeEnabled();
   });
 
-  it('Pro talking sets mode talking; the other two set narrated; Economy is not offered', async () => {
+  it('Pro talking sets mode talking; the other three set narrated; Budget is offered again', async () => {
     const save = vi.fn().mockResolvedValue({});
     render(<StepLength project={project({ quality: 'standard' })} save={save} onNext={vi.fn()} />);
-    expect(screen.queryByRole('radio', { name: /Economy/ })).toBeNull();
-    fireEvent.click(screen.getByRole('radio', { name: /Pro talking/ }));
+    expect(screen.getAllByRole('radio', { name: /^(Budget|Standard|Pro|Pro talking)$/ })).toHaveLength(4);
+    fireEvent.click(screen.getByRole('radio', { name: 'Pro talking' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_talking', mode: 'talking' }));
-    fireEvent.click(screen.getByRole('radio', { name: /Pro narrated/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Pro' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'pro_narrated', mode: 'narrated' }));
-    fireEvent.click(screen.getByRole('radio', { name: /^Standard/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Budget' }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'economy', mode: 'narrated' }));
+    fireEvent.click(screen.getByRole('radio', { name: 'Standard' }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith({ quality: 'standard', mode: 'narrated' }));
+  });
+
+  describe('quality cards', () => {
+    const card = (q) => document.querySelector(`[data-quality="${q}"]`);
+
+    it('shows each card: name, voice line first, picture, music line, model, output line and the credits', () => {
+      render(<StepLength project={project({ quality: 'standard', seconds: 30, aspect: '9:16', fee_charged: false })} save={vi.fn()} onNext={vi.fn()} />);
+      const cards = [...document.querySelectorAll('[data-quality]')];
+      expect(cards.map((c) => c.getAttribute('data-quality'))).toEqual(['economy', 'standard', 'pro_narrated', 'pro_talking']);
+      const std = card('standard');
+      expect(std).toHaveTextContent('Standard');
+      expect(std).toHaveTextContent('Recommended');
+      expect(std.textContent.indexOf('Narrator voiceover')).toBeLessThan(std.textContent.indexOf('720p'));
+      expect(std).toHaveTextContent('Music and captions included');
+      expect(std).toHaveTextContent('Kling 3.0');
+      expect(std).toHaveTextContent('MP4, 9:16, about 30 seconds');
+      expect(card('pro_talking')).toHaveTextContent('Characters speak their own lines');
+      expect(card('pro_talking')).toHaveTextContent('1080p');
+      expect(card('economy')).toHaveTextContent('Seedance 2 Mini');
+      expect(document.querySelectorAll('[data-recommended]')).toHaveLength(1);
+    });
+
+    it('prints the same credits the quote bar shows for that quality at the chosen length', () => {
+      for (const quality of ['economy', 'standard', 'pro_narrated', 'pro_talking']) {
+        const p = project({ quality, seconds: 60, fee_charged: false });
+        const { unmount } = render(<StepLength project={p} save={vi.fn()} onNext={vi.fn()} />);
+        const shown = Number(card(quality).querySelector('[data-credits]').textContent.replace(/[^0-9]/g, ''));
+        expect(shown, quality).toBe(estimateCredits(p));
+        unmount();
+      }
+    });
+
+    it('updates the credits when the length changes, and says 2 minutes for 120', async () => {
+      render(<StepLength project={project({ quality: 'standard', seconds: 30 })} save={vi.fn().mockResolvedValue({})} onNext={vi.fn()} />);
+      const before = card('standard').querySelector('[data-credits]').textContent;
+      fireEvent.click(screen.getByRole('radio', { name: '2 minutes' }));
+      await waitFor(() => expect(card('standard')).toHaveTextContent('about 2 minutes'));
+      expect(card('standard').querySelector('[data-credits]').textContent).not.toBe(before);
+    });
   });
 
   it('offers the five lengths and three shapes, saving each choice', async () => {
@@ -609,7 +651,7 @@ describe('storyboard step', () => {
     await waitFor(() => expect(client.buildShots).toHaveBeenCalledWith('p1'));
     rerender(<StepStoryboard project={project()} shots={[shot(1), shot(2, { status: 'draft', still_url: null })]} refresh={refresh} onNext={vi.fn()} returnTo="/" />);
     expect(screen.getByText('Line 1')).toBeInTheDocument();
-    expect(screen.getAllByText('Pro narrated').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('Pro').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: /Make pictures for 1 shot/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Continue to voice and sound/ })).toBeDisabled();
   });
