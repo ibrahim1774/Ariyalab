@@ -66,7 +66,7 @@ describe('admin pricing editor', () => {
     expect(res.body.readout.plans.studio.usdPerCredit).toBeCloseTo(99 / 3100, 8);
     const m = res.body.readout.margins.standard;
     expect(m.providerUsdPerSecond).toBe(PROVIDER_COSTS_USD.perSecond.standard);
-    expect(m.marginLow).toBeCloseTo(1 - 0.0755 / (11 * (99 / 3100)), 6);
+    expect(m.marginLow).toBeCloseTo(1 - 0.0755 / (11 * ((99 * 0.85) / 3100)), 6);
     expect(res.body.readout.drift).toEqual([]);
   });
 
