@@ -60,10 +60,10 @@ describe('GET /api/story/billing', () => {
 
   it('leaves zero-delta rows out and lists newest first', async () => {
     rows = [
-      row({ delta: 1500, reason: 'plan_renewal', created_at: '2026-11-01T00:00:00Z' }),
-      row({ delta: 0, reason: 'release', created_at: '2026-11-02T00:00:00Z' }),
-      row({ delta: -90, reason: 'project-fee', created_at: '2026-11-03T00:00:00Z' }),
-      row({ user_id: 'someone-else', delta: 9, created_at: '2026-11-04T00:00:00Z' }),
+      row({ id: 1, delta: 1500, reason: 'plan_renewal', created_at: '2026-11-01T00:00:00Z' }),
+      row({ id: 2, delta: 0, reason: 'release', created_at: '2026-11-02T00:00:00Z' }),
+      row({ id: 3, delta: -90, reason: 'project-fee', created_at: '2026-11-03T00:00:00Z' }),
+      row({ id: 4, user_id: 'someone-else', delta: 9, created_at: '2026-11-04T00:00:00Z' }),
     ];
     const res = makeRes();
     await handler(makeReq({ method: 'GET' }), res);
@@ -72,6 +72,17 @@ describe('GET /api/story/billing', () => {
     expect(res.body.balance).toEqual({ plan: 100, topup: 40, held: 10, available: 130 });
     expect(res.body.history.map((r) => r.delta)).toEqual([-90, 1500]);
     expect(ledgerCalls).toContainEqual(['neq', 'delta', 0]);
+  });
+
+  it('orders by id, not by timestamp: a higher id with an EARLIER created_at still comes first', async () => {
+    rows = [
+      row({ id: 3, delta: -40, balance_after: 470, created_at: '2026-11-14T10:00:00.000040Z' }),
+      row({ id: 4, delta: -40, balance_after: 430, created_at: '2026-11-14T10:00:00.000012Z' }),
+    ];
+    const res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(res.body.history.map((r) => r.balance_after)).toEqual([430, 470]);
+    expect(res.body.history[0].created_at).toBeTruthy();
   });
 
   it('puts rows written at the same moment in a stable order, newest id first', async () => {
@@ -89,7 +100,7 @@ describe('GET /api/story/billing', () => {
   });
 
   it('caps history at 50 rows', async () => {
-    rows = Array.from({ length: 80 }, (_, i) => row({ delta: i + 1, created_at: `2026-10-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z` }));
+    rows = Array.from({ length: 80 }, (_, i) => row({ delta: i + 1, id: i + 1, created_at: `2026-10-${String((i % 28) + 1).padStart(2, '0')}T00:00:00Z` }));
     const res = makeRes();
     await handler(makeReq({ method: 'GET' }), res);
     expect(res.body.history).toHaveLength(50);

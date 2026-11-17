@@ -54,8 +54,9 @@ export default async function handler(req, res) {
       .eq('user_id', userId)
       .eq('currency', 'video')
       .neq('delta', 0)
-      // Rows written in one transaction share created_at; the id (bigserial) breaks the tie.
-      .order('created_at', { ascending: false })
+      // The bigserial id follows the order rows were applied under the account lock (credit_apply), which is the order of the
+      // running balance_after. created_at is not reliable for this: rows of one account written back to back can carry
+      // timestamps in the opposite order, so it is only selected for display.
       .order('id', { ascending: false })
       .limit(HISTORY_LIMIT);
     if (error) throw error;
