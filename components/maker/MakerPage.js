@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 
 import ChatPanel from './ChatPanel';
+import useScriptJob from './useScriptJob';
 import ErrorNotice from './ErrorNotice';
 import { signInHref } from './errors';
 import MakerLayout from './MakerLayout';
@@ -32,6 +33,8 @@ function MakerPageInner({ id, returnTo }) {
   const [reachedLocal, setReachedLocal] = useState(null);
   // Bumped when the chat changes the script, so the script step (which loads its own copy) reads it again.
   const [scriptRev, setScriptRev] = useState(0);
+  const [chatKey, setChatKey] = useState(0);
+  const rewriting = useScriptJob(jobs, () => { setScriptRev((n) => n + 1); setChatKey((n) => n + 1); refresh?.(); });
   const lastFurthest = useRef(null);
 
   const list = stepsFor(project);
@@ -89,7 +92,7 @@ function MakerPageInner({ id, returnTo }) {
     case 'style': body = <StepStyle {...common} save={save} />; break;
     case 'length': body = <StepLength {...common} save={save} />; break;
     case 'breakdown': body = <StepBreakdown {...common} />; break;
-    case 'script': body = <StepScript key={scriptRev} {...common} />; break;
+    case 'script': body = <StepScript key={scriptRev} rewriting={rewriting} {...common} />; break;
     case 'cast': body = <StepCast {...common} cast={cast} jobs={jobs} />; break;
     case 'storyboard': body = <StepStoryboard {...common} shots={shots} />; break;
     case 'audio': body = <StepAudio {...common} />; break;
@@ -113,6 +116,7 @@ function MakerPageInner({ id, returnTo }) {
         <ChatPanel
           project={project}
           returnTo={returnTo}
+          reloadKey={chatKey}
           onChanged={(changed) => {
             refresh();
             if (Array.isArray(changed) && changed.includes('script')) setScriptRev((n) => n + 1);

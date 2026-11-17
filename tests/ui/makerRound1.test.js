@@ -185,6 +185,18 @@ describe('script load failure', () => {
   });
 });
 
+describe('I2: the script step while a script job runs', () => {
+  it('says the script is being rewritten and turns editing, revising and continuing off', async () => {
+    client.getScript.mockResolvedValue({ id: 'v1', version: 1, scenes: [{ id: 'a', title: 'One', visual: 'A shop', lines: [{ speaker: 'narrator', text: 'Hello there' }], mention: false }], violations: [] });
+    render(<StepScript project={project({ step: 'script' })} rewriting refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    expect(await screen.findByTestId('rewriting')).toHaveTextContent('Rewriting your script…');
+    expect(await screen.findByLabelText('Scene 1 title')).toBeDisabled();
+    expect(screen.getByLabelText('Scene 1 visual')).toBeDisabled();
+    expect(screen.getByLabelText('Scene 1 line 1, narrator')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Continue to the cast' })).toBeDisabled();
+  });
+});
+
 describe('cast retry rules (round 1)', () => {
   const props = (cast) => ({ project: project(), cast, jobs: [], refresh: vi.fn(), onNext: vi.fn(), returnTo: '/' });
   it('a blocked character has no Try again; Describe a change opens the form', () => {

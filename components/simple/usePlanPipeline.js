@@ -45,6 +45,7 @@ export function stageText(action) {
   if (action.type === 'music') return 'Composing the music';
   if (action.type === 'wait') {
     const w = action.what || [];
+    if (w.includes('script')) return 'Rewriting your script';
     if (w.includes('characters')) return 'Drawing your characters';
     if (w.includes('pictures')) return 'Drawing the storyboard pictures';
     if (w.includes('voice')) return 'Recording the narration';
@@ -189,6 +190,7 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
           // Another tab (or an earlier request) is already doing this, or something is still being made. Not an error: say what
           // it waits for and look again after a moment.
           if (err.code === 'shots_busy') setNote('Waiting for what is being made now to finish…');
+          else if (err.code === 'drafting_busy') setNote('Your script is being rewritten. This will carry on when it is done.');
           else if (err.code === 'cast_needed') setNote('Your characters need to be made first.');
           cool.current.set(key, Date.now() + COOL_MS);
         } else if (alive.current) {

@@ -12,7 +12,7 @@ const draftOf = (scene) => ({ visual: scene.visual || '', lines: (scene.lines ||
 const speakerName = (s) => (s === 'narrator' ? 'Narrator' : s);
 
 /** One scene: its lines as text, and an Edit button that opens the visual and the lines for changing (the existing scene edit call). */
-function Scene({ scene, n, notes, onSave, returnTo }) {
+function Scene({ scene, n, notes, onSave, returnTo, locked = false }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(() => draftOf(scene));
   const [busy, setBusy] = useState(false);
@@ -81,7 +81,7 @@ function Scene({ scene, n, notes, onSave, returnTo }) {
         )}
       </div>
       {!editing && (
-        <button type="button" className={styles.rowAction} aria-label={`Edit scene ${n}`} onClick={() => setEditing(true)}>Edit</button>
+        <button type="button" className={styles.rowAction} aria-label={`Edit scene ${n}`} disabled={locked} onClick={() => setEditing(true)}>Edit</button>
       )}
     </li>
   );
@@ -132,7 +132,7 @@ function PurposeLine({ project, save, refresh, returnTo }) {
   );
 }
 
-export default function CheckScript({ project, plan, refresh, save: saveProject, returnTo, revisit = null }) {
+export default function CheckScript({ project, plan, refresh, save: saveProject, returnTo, revisit = null, rewriting = false }) {
   const [script, setScript] = useState(undefined);
   const [loadError, setLoadError] = useState(null);
   const [attempt, setAttempt] = useState(0);
@@ -172,6 +172,7 @@ export default function CheckScript({ project, plan, refresh, save: saveProject,
       {script && <PurposeLine project={project} save={saveProject} refresh={refresh} returnTo={returnTo} />}
       {loadError && <ErrorNotice error={loadError} returnTo={returnTo} onRefresh={() => setAttempt((n) => n + 1)} onRetry={() => setAttempt((n) => n + 1)} />}
       {script === undefined && !loadError && <p className={styles.muted} role="status">Loading your script…</p>}
+      {rewriting && <p className={styles.muted} role="status" data-testid="rewriting">Rewriting your script…</p>}
       {script === null && <p className={styles.muted}>There is no script yet. Go back to Describe it and write one.</p>}
 
       {general.length > 0 && (
@@ -182,7 +183,7 @@ export default function CheckScript({ project, plan, refresh, save: saveProject,
       {scenes.length > 0 && (
         <ol className={styles.sceneList} aria-label="Scenes">
           {scenes.map((scene, i) => (
-            <Scene key={scene.id} scene={scene} n={i + 1} notes={violations.filter((v) => v.sceneId === scene.id)} onSave={save} returnTo={returnTo} />
+            <Scene key={scene.id} scene={scene} n={i + 1} notes={violations.filter((v) => v.sceneId === scene.id)} onSave={save} returnTo={returnTo} locked={rewriting} />
           ))}
         </ol>
       )}
@@ -213,7 +214,7 @@ export default function CheckScript({ project, plan, refresh, save: saveProject,
         meta={q ? (q.feeLater > 0 ? `Project fee: ${priceText(q.feeLater)}, charged when you make the video` : 'Characters, storyboard, voice and music') : undefined}
         hint={working ? stage || 'Getting started…' : !q && !plan.quoteError ? 'Working out the price…' : null}
       >
-        <Button disabled={!q || working || script === undefined || scenes.length === 0} onClick={plan.design}>
+        <Button disabled={!q || working || rewriting || script === undefined || scenes.length === 0} onClick={plan.design}>
           {working ? 'Designing your video…' : q ? withPrice('Looks good, design my video', q.total) : 'Looks good, design my video'}
         </Button>
       </Dock>

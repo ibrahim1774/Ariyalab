@@ -116,3 +116,5 @@ export function formatDate(value) {
 
 export const ACTIVE_JOB = new Set(['queued', 'running']);
 export const anyJobActive = (jobs = []) => jobs.some((j) => ACTIVE_JOB.has(j.status));
+/** A drafting job of the script (writing it, revising it, or the rewrite for a new style) is waiting or running. */
+export const scriptJobActive = (jobs = []) => jobs.some((j) => j.kind === 'script' && ACTIVE_JOB.has(j.status));

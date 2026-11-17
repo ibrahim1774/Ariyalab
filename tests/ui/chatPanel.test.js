@@ -76,6 +76,17 @@ describe('ChatPanel', () => {
     expect(onChanged).toHaveBeenCalled();
   });
 
+  it('I2: a set_mode card shows the message the server sent and reports the script as changed', async () => {
+    const card = { ...CONFIRM, id: 'c-mode', tool: 'set_mode', quote: { label: 'The characters speak: This rewrites your script so the characters speak.', credits: 0, clips: 0, remake_credits: 0 }, confirm: { action: 'mode', method: 'POST', body: { mode: 'talking', clips: 0, remake_credits: 0 } } };
+    client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'Shall I?', [card])], usage: { used: 1, limit: 150 } });
+    client.confirmChatAction.mockResolvedValue({ queued: true, drafting: { task: 'mode', status: 'queued' }, message: 'Your script is being rewritten. This takes a minute.' });
+    const onChanged = vi.fn();
+    render(<ChatPanel project={project} onChanged={onChanged} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start (included)' }));
+    expect(await screen.findByText('Your script is being rewritten. This takes a minute.')).toBeInTheDocument();
+    expect(onChanged).toHaveBeenCalledWith(['script']);
+  });
+
   it('shows a changed price as an error and keeps the button', async () => {
     client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'That costs 5 credits.', [CONFIRM])], usage: { used: 1, limit: 150 } });
     client.confirmChatAction.mockRejectedValue(new StoryApiError({ status: 409, code: 'quote_changed', message: 'The price is now 7 credits.' }));

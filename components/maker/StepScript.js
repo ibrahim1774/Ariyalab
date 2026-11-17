@@ -28,7 +28,7 @@ function Warnings({ items }) {
 }
 
 /** One scene: its own draft, a debounced save on typing and an immediate one on blur. */
-function SceneEditor({ scene, index, warnings, state, error, onSave, returnTo }) {
+function SceneEditor({ scene, index, warnings, state, error, onSave, returnTo, locked = false }) {
   const [draft, setDraft] = useState(() => draftOf(scene));
   const dirty = useRef(false);
   const timer = useRef(null);
@@ -65,6 +65,7 @@ function SceneEditor({ scene, index, warnings, state, error, onSave, returnTo })
           className={styles.sceneTitle}
           aria-label={`${label} title`}
           value={draft.title}
+          disabled={locked}
           onChange={(e) => change({ ...draft, title: e.target.value })}
           onBlur={flush}
         />
@@ -74,7 +75,7 @@ function SceneEditor({ scene, index, warnings, state, error, onSave, returnTo })
       </div>
       <label className={styles.field}>
         <span>What we see</span>
-        <textarea rows={2} aria-label={`${label} visual`} value={draft.visual} onChange={(e) => change({ ...draft, visual: e.target.value })} onBlur={flush} />
+        <textarea rows={2} aria-label={`${label} visual`} value={draft.visual} disabled={locked} onChange={(e) => change({ ...draft, visual: e.target.value })} onBlur={flush} />
       </label>
       <div className={styles.lines}>
         {draft.lines.map((line, i) => (
@@ -84,6 +85,7 @@ function SceneEditor({ scene, index, warnings, state, error, onSave, returnTo })
               rows={2}
               aria-label={`${label} line ${i + 1}, ${line.speaker}`}
               value={line.text}
+              disabled={locked}
               onChange={(e) => change({ ...draft, lines: draft.lines.map((l, j) => (j === i ? { ...l, text: e.target.value } : l)) })}
               onBlur={flush}
             />
@@ -96,7 +98,7 @@ function SceneEditor({ scene, index, warnings, state, error, onSave, returnTo })
   );
 }
 
-export default function StepScript({ project, onNext, refresh, returnTo }) {
+export default function StepScript({ project, onNext, refresh, returnTo, rewriting = false }) {
   const projectId = project.id;
   const [script, setScript] = useState(undefined); // undefined = loading, null = none yet
   const [error, setError] = useState(null);
@@ -198,6 +200,8 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
         </EmptyState>
       )}
 
+      {rewriting && <p className={styles.muted} role="status" data-testid="rewriting">Rewriting your script…</p>}
+
       {script && (
         <>
           {general.length > 0 && (
@@ -217,6 +221,7 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
                 error={sceneErrors[scene.id]}
                 onSave={saveScene}
                 returnTo={returnTo}
+                locked={rewriting}
               />
             ))}
           </div>
@@ -228,7 +233,7 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
               </label>
               <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={() => revise()} />
               <div className={styles.actions}>
-                <Button type="submit" variant="ghost" disabled={busy === 'revise' || !note.trim()}>
+                <Button type="submit" variant="ghost" disabled={rewriting || busy === 'revise' || !note.trim()}>
                   {busy === 'revise' ? 'Revising…' : 'Revise script'}
                 </Button>
               </div>
@@ -236,7 +241,7 @@ export default function StepScript({ project, onNext, refresh, returnTo }) {
             </form>
           </Card>
           <StepFooter>
-            <Button onClick={onNext}>Continue to the cast</Button>
+            <Button onClick={onNext} disabled={rewriting}>Continue to the cast</Button>
           </StepFooter>
         </>
       )}

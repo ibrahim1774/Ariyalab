@@ -269,6 +269,39 @@ describe('screen 2, Check the script', () => {
     expect(client.getPlanQuote).toHaveBeenCalledWith('p1');
   });
 
+  it('I2: while a script job runs the screen says the script is being rewritten and edits and "Looks good" are off; when it ends the script is read again by itself', async () => {
+    const { s } = fakeServer();
+    s.jobs = [{ id: 'j1', kind: 'script', status: 'running', payload: { task: 'mode' } }];
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    expect(await screen.findByTestId('rewriting')).toHaveTextContent('Rewriting your script…');
+    await screen.findByText('Dre gave a crooked fade.');
+    expect(screen.getByRole('button', { name: 'Edit scene 1' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Looks good, design my video/ })).toBeDisabled();
+    const reads = client.getScript.mock.calls.length;
+    s.jobs = [{ id: 'j1', kind: 'script', status: 'done', payload: { task: 'mode' } }];
+    await waitFor(() => expect(screen.queryByTestId('rewriting')).toBeNull(), { timeout: 8000 });
+    await waitFor(() => expect(client.getScript.mock.calls.length).toBeGreaterThan(reads));
+    expect(screen.getByRole('button', { name: 'Edit scene 1' })).toBeEnabled();
+  }, 15000);
+
+  it('M2: a refused length refit is tried again on the next press, even though the new length is saved', async () => {
+    fakeServer();
+    client.updateProject.mockResolvedValue(project({ step: 'script', seconds: 60 }));
+    client.reviseScript.mockRejectedValueOnce(new client.StoryApiError({ status: 409, code: 'drafting_busy', message: 'Your script is being rewritten. This will carry on when it is done.' }));
+    client.reviseScript.mockResolvedValue({ script: SCRIPT, changedSceneIds: [] });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByText('Dre gave a crooked fade.');
+    fireEvent.click(screen.getByRole('button', { name: /Describe it/ }));
+    await screen.findByRole('heading', { name: /Describe your video/ });
+    fireEvent.click(screen.getByRole('radio', { name: /^60 s/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Back to the script/ }));
+    await waitFor(() => expect(client.reviseScript).toHaveBeenCalledTimes(1));
+    expect(client.reviseScript).toHaveBeenLastCalledWith('p1', 'Fit the script to 60 seconds.');
+    // The length is saved by now; the next press still fits the script.
+    fireEvent.click(await screen.findByRole('button', { name: /Back to the script/ }));
+    await waitFor(() => expect(client.reviseScript).toHaveBeenCalledTimes(2));
+  }, 15000);
+
   it('lists the included parts of the quote and says an unpriced total is included', async () => {
     fakeServer();
     client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [{ key: 'fee', label: 'Project fee', credits: 0, included: true }, { key: 'pictures', label: 'Storyboard pictures', credits: 0, included: true }] });

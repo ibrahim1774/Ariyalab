@@ -12,6 +12,7 @@ const SUGGESTIONS = ['Make the opening funnier', 'Make it 45 seconds', 'What wil
  * be pressed.
  */
 function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
+  const [message, setMessage] = useState('');
   const [state, setState] = useState(item.state || 'open'); // open | busy | used | outdated
   // The server's state wins whenever the panel reloads (another tab may have pressed it).
   useEffect(() => {
@@ -24,8 +25,9 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
     setState('busy');
     setError(null);
     try {
-      await client.confirmChatAction(projectId, item.id);
-      setState('used');
+      const out = await client.confirmChatAction(projectId, item.id);
+      setMessage(typeof out?.message === 'string' ? out.message : '');
+      setState(out?.queued === false ? 'outdated' : 'used');
       onDone?.();
     } catch (err) {
       if (err?.code === 'confirm_used') setState('used');
@@ -42,7 +44,7 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
         <span className={styles.confirmLabel}>{quote.label}</span>
         {note && <span className={styles.confirmNote}>{note}</span>}
       </span>
-      {state === 'used' && <span className={styles.confirmDone} role="status">Started</span>}
+      {state === 'used' && <span className={styles.confirmDone} role="status">{message || 'Started'}</span>}
       {state === 'outdated' && <span className={styles.confirmOld}>Out of date</span>}
       {(state === 'open' || state === 'busy') && (
         <button type="button" className={styles.confirmButton} onClick={press} disabled={state === 'busy'}>
@@ -61,7 +63,7 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
  * prefill ({ text, nonce }, optional): puts text in the message box (a new nonce each time, so "Change scene 2: " can be sent
  * from a button). note (optional): a short line from the screen shown above the box ("Want to change anything?"), client only.
  */
-export default function ChatPanel({ project, onChanged, returnTo, prefill = null, note = null }) {
+export default function ChatPanel({ project, onChanged, returnTo, prefill = null, note = null, reloadKey = 0 }) {
   const projectId = project?.id;
   const [messages, setMessages] = useState([]);
   const [usage, setUsage] = useState(null);
@@ -90,9 +92,10 @@ export default function ChatPanel({ project, onChanged, returnTo, prefill = null
     }
   }, [projectId]);
 
+  // reloadKey: the screen saw something finish (a script rewrite) that put a line in the chat.
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, reloadKey]);
 
   // Coming back to the tab reads the chat again, so cards pressed elsewhere show their state.
   useEffect(() => {
@@ -180,7 +183,7 @@ export default function ChatPanel({ project, onChanged, returnTo, prefill = null
             <li key={m.id} className={m.role === 'user' ? styles.mine : styles.theirs} data-role={m.role}>
               <p className={styles.bubble}>{m.text}</p>
               {(m.confirms || []).map((c, i) => (
-                <ConfirmCard key={`${m.id}-${i}`} projectId={projectId} item={c} returnTo={returnTo} onDone={() => onChanged?.([c.confirm?.action === 'cast-regen' ? 'cast' : 'shots'])} onStale={() => { load(); onChanged?.(); }} />
+                <ConfirmCard key={`${m.id}-${i}`} projectId={projectId} item={c} returnTo={returnTo} onDone={() => onChanged?.([c.confirm?.action === 'cast-regen' ? 'cast' : c.confirm?.action === 'mode' ? 'script' : 'shots'])} onStale={() => { load(); onChanged?.(); }} />
               ))}
             </li>
           ))}

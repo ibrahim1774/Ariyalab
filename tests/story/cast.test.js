@@ -1577,8 +1577,8 @@ describe('prices on the row and held credits (L1 to L7)', () => {
     let liveKept = null;
     const spy = vi.spyOn(db, 'select').mockImplementation(async (table, match, opts) => {
       const out = await real(table, match, opts);
-      if (table === 'story_jobs' && (reads += 1) === 2) {
-        // While the reset reads the jobs, the slow request queues its last job and tries to mark the round queued.
+      if (table === 'story_jobs' && (reads += 1) === 3) {
+        // (The first read is the start's check for a mode rewrite, the second a stale-start recovery.) While the reset reads the jobs, the slow request queues its last job and tries to mark the round queued.
         const late = await enqueue({
           projectId: project.id, kind: 'cast_image', holdId, costCredits: 1,
           payload: { stage: 'candidate', castId: id, round: 2, slot: 2, note: 'older', aspect: '3:4', prompt: 'p' },

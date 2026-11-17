@@ -11,7 +11,12 @@ import { setPricingDb, _resetPricingCache, getPricing } from '../../lib/pricing.
 import { registerMock } from '../../lib/providers/mock.js';
 import { ProviderError } from '../../lib/providers/errors.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
-import { runWorkerJob, sweep } from '../../lib/story/runner.js';
+import { runWorkerJob, sweep, enqueue as realEnqueue } from '../../lib/story/runner.js';
+import { assertNotDrafting } from '../../lib/story/drafting.js';
+import { buildShotList } from '../../lib/story/storyboard.js';
+import { startGeneration, rerollShot } from '../../lib/story/shots.js';
+import { generateCast } from '../../lib/story/cast.js';
+import { startRender } from '../../lib/story/render.js';
 import { getProjectStatus } from '../../lib/story/status.js';
 import { ModerationError, MODERATION_UNAVAILABLE } from '../../lib/moderation.js';
 import { LimitError } from '../../lib/story/errors.js';
@@ -25,6 +30,11 @@ import { runConfirm } from '../../lib/story/chatTools.js';
 import { generateStills, sceneSig } from '../../lib/story/storyboard.js';
 import { quoteGeneration } from '../../lib/story/shots.js';
 
+vi.mock('../../lib/story/runner.js', async (importOriginal) => {
+  const real = await importOriginal();
+  globalThis.__enqueueSpy = vi.fn(real.enqueue);
+  return { ...real, enqueue: (...args) => globalThis.__enqueueSpy(...args) };
+});
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getUserFromRequest: vi.fn(async () => globalThis.__chatTestSession ?? null),
@@ -34,6 +44,7 @@ useRegexOnlyModeration();
 const accounts = useTestAccounts();
 
 let raw;
+const enqueueSpy = { mockImplementationOnce: (fn) => globalThis.__enqueueSpy.mockImplementationOnce(fn) };
 let llmCalls = 0;
 beforeAll(async () => {
   raw = await createTestDb();
@@ -1058,7 +1069,7 @@ describe('simple maker tools', () => {
       expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
       expect((await scriptOf(ctx.project.id)).version).toBe(1);
       expect(await revisesCounted(ctx.userId)).toBe(base + 0);
-      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('open');
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.findLast((m) => m.confirms?.length).confirms[0].state).toBe('open');
       const again = await confirmVia({ projectId: ctx.project.id, confirmId: card.id });
       expect(again.statusCode).toBe(200);
       expect(await revisesCounted(ctx.userId)).toBe(base + 1);
@@ -1098,7 +1109,128 @@ describe('simple maker tools', () => {
       expect(await revisesCounted(ctx.userId)).toBe(base + 0);
       const [job] = await scriptJobs(ctx.project.id);
       expect(job.result.error.code).toBe('shots_busy');
-      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).confirms[0].state).toBe('open');
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.findLast((m) => m.confirms?.length).confirms[0].state).toBe('open');
+    });
+
+    it('I1: while the rewrite runs, stills, clips, plan builds, cast work and renders are refused before any claim, hold or count; then they start for the new script', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { pressed } = await press(ctx);
+      await pressed();
+      const refused = { status: 409, code: 'drafting_busy', message: 'Your script is being rewritten. This will carry on when it is done.' };
+      const before = await ledgerCount(ctx.userId);
+      const who = { userId: ctx.userId, projectId: ctx.project.id, user: ctx.user };
+      await expect(generateStills({ ...who })).rejects.toMatchObject(refused);
+      await expect(buildShotList({ ...who })).rejects.toMatchObject(refused);
+      await expect(startGeneration({ ...who, confirmTotal: 1 })).rejects.toMatchObject(refused);
+      await expect(rerollShot({ ...who, shotId: ctx.shots[0].id })).rejects.toMatchObject(refused);
+      await expect(generateCast({ ...who })).rejects.toMatchObject(refused);
+      await expect(startRender({ ...who })).rejects.toMatchObject(refused);
+      expect(await ledgerCount(ctx.userId)).toBe(before);
+      expect((await projectRow(ctx.project.id)).gen_claim_id).toBeNull();
+      await runWorkerJob('script', {});
+      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+      const after = await generateStills({ ...who }).then(() => null, (e) => e);
+      expect(after?.code).not.toBe('drafting_busy');
+    });
+
+    it('a scene edit is refused while a script job runs, so a stale screen never copies old lines over the rewrite', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { pressed } = await press(ctx);
+      await pressed();
+      const script = await scriptOf(ctx.project.id);
+      const out = await run(ctx, 'update_scene', { scene_id: script.scenes[0].id, patch: { title: 'New title' } });
+      expect(out).toMatchObject({ ok: false, error: 'drafting_busy', message: 'Your script is being rewritten. This will carry on when it is done.' });
+      await runWorkerJob('script', {});
+      expect(await run(ctx, 'update_scene', { scene_id: script.scenes[0].id, patch: { title: 'New title' } })).toMatchObject({ ok: true });
+    });
+
+    it('M1: the busy message says what is running', async () => {
+      const ctx = await genProject({ n: 1 });
+      const say = async (task) => {
+        await raw.query(`update story_jobs set status = 'failed', applied_at = now() where project_id = $1 and kind = 'script'`, [ctx.project.id]);
+        await storyDb().insert('story_jobs', { project_id: ctx.project.id, user_id: ctx.userId, kind: 'script', status: 'running', payload: { task } });
+        return assertNotDrafting(ctx.project.id).then(() => null, (e) => e.message);
+      };
+      expect(await say('write')).toBe('Your script is being written. This will carry on when it is done.');
+      expect(await say('revise')).toBe('Your script is being rewritten. This will carry on when it is done.');
+      expect(await say('cast')).toBe('Your characters are being drafted. This will carry on when it is done.');
+      expect(await say('shots')).toBe('Your scenes are being planned. This will carry on when it is done.');
+    });
+
+    it('I2: the chat gets one plain line when the job ends, and on failure it says nothing changed', async () => {
+      const ctx = await genProject({ n: 2 });
+      const lastLine = async () => (await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.at(-1).text;
+      const { pressed } = await press(ctx);
+      await pressed();
+      await runWorkerJob('script', {});
+      expect(await lastLine()).toBe('Done. The characters now speak their lines.');
+      const back = await press(ctx, 'narrated');
+      await back.pressed();
+      await runWorkerJob('script', {});
+      expect(await lastLine()).toBe('Done. A narrator now tells the story.');
+      // A failed one.
+      const again = await press(ctx, 'talking');
+      await again.pressed();
+      const [job] = (await scriptJobs(ctx.project.id)).filter((j) => j.status === 'queued');
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await raw.query(`update story_jobs set status = 'running', attempts = $2, started_at = now() - interval '1 hour', run_after = null where id = $1`, [job.id, attempt]);
+        await sweep({ now: new Date(Date.now() + 60_000 * attempt) });
+      }
+      expect(await lastLine()).toBe('That did not work, so nothing changed. Try again.');
+    });
+
+    it('M3: a queue call that inserted the job and then threw is treated as queued (no release, the card stays used)', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { card, pressed, base } = await press(ctx);
+      enqueueSpy.mockImplementationOnce(async (args) => { await realEnqueue(args); throw new Error('connection dropped'); });
+      const res = await pressed();
+      expect(res.statusCode).toBe(200);
+      expect(res.body).toMatchObject({ queued: true });
+      expect(await scriptJobs(ctx.project.id)).toHaveLength(1);
+      expect(await revisesCounted(ctx.userId)).toBe(base + 1);
+      expect(card.confirm.action).toBe('mode');
+    });
+
+    it('M4: pressing a card for the mode the project already has does nothing and says so; a job whose mode already matches ends with the count back', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { card, base } = await press(ctx);
+      await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'talking' });
+      const res = await runConfirm({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id, confirm: card.confirm });
+      expect(res).toMatchObject({ queued: false, message: 'It was already set that way.' });
+      expect(await scriptJobs(ctx.project.id)).toHaveLength(0);
+      expect(await revisesCounted(ctx.userId)).toBe(base);
+      // A job queued, then the mode changed by something else: it ends as a success with no second rewrite and no count.
+      await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'narrated' });
+      const second = await press(ctx, 'talking');
+      await second.pressed();
+      await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'talking' });
+      await runWorkerJob('script', {});
+      expect((await scriptOf(ctx.project.id)).version).toBe(1);
+      expect(await revisesCounted(ctx.userId)).toBe(second.base);
+    });
+
+    it('M4: a job killed after it saved the script and set the mode is a success: the count stays and the card stays used', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { pressed, base } = await press(ctx);
+      await pressed();
+      const [job] = await scriptJobs(ctx.project.id);
+      const script = await scriptOf(ctx.project.id);
+      await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: script.scenes, source: 'revision', instruction: 'x', draft_job_id: job.id });
+      await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'talking' });
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await raw.query(`update story_jobs set status = 'running', attempts = $2, started_at = now() - interval '1 hour', run_after = null where id = $1`, [job.id, attempt]);
+        await sweep({ now: new Date(Date.now() + 60_000 * attempt) });
+      }
+      expect(await revisesCounted(ctx.userId)).toBe(base + 1);
+      expect((await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id })).messages.find((m) => m.confirms?.length).confirms[0].state).toBe('used');
+    });
+
+    it('N7: set_mode before any script exists makes no card and no job', async () => {
+      const ctx = await newProject();
+      await storyDb().remove('story_scripts', { project_id: ctx.project.id });
+      const out = await run(ctx, 'set_mode', { mode: 'talking' });
+      expect(out).toMatchObject({ ok: false, message: 'Write the script first, then I can switch this.' });
+      expect(await scriptJobs(ctx.project.id)).toHaveLength(0);
     });
 
     it('with clips already made the card also counts the clips that will need making again, and pressing it marks them', async () => {

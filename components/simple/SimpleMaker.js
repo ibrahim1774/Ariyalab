@@ -9,6 +9,7 @@ import { signInHref } from '../maker/errors';
 import MakerLayout from '../maker/MakerLayout';
 import { PricingProvider } from '../maker/PricingContext';
 import useProject from '../maker/useProject';
+import useScriptJob from '../maker/useScriptJob';
 import CheckPlan from './CheckPlan';
 import CheckScript from './CheckScript';
 import Describe from './Describe';
@@ -53,6 +54,9 @@ function SimpleMakerInner({ id, returnTo }) {
   const [scriptRev, setScriptRev] = useState(0);
   const [prefill, setPrefill] = useState(null);
   const [openChat, setOpenChat] = useState(0);
+  const [chatKey, setChatKey] = useState(0);
+  // A script job (the rewrite for a new style) is running: the script screen says so, and reads the new script when it is done.
+  const rewriting = useScriptJob(data.jobs, () => { setScriptRev((n) => n + 1); setChatKey((n) => n + 1); refresh(); });
 
   // The server moved the project forward: follow it. Going back is only a view, and ends the moment the server moves on.
   useEffect(() => {
@@ -118,6 +122,7 @@ function SimpleMakerInner({ id, returnTo }) {
     body = (
       <CheckScript
         key={scriptRev}
+        rewriting={rewriting}
         project={project}
         plan={plan}
         refresh={refresh}
@@ -147,6 +152,7 @@ function SimpleMakerInner({ id, returnTo }) {
           project={project}
           returnTo={returnTo}
           prefill={prefill}
+          reloadKey={chatKey}
           note={chatNote(screen, data, plan)}
           onChanged={(changed) => {
             refresh();

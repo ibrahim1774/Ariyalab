@@ -3,7 +3,7 @@
 // should start by itself. Everything is read from server state, so a reload or a second tab ends up in the same place.
 
 import { startable } from '../maker/StepGenerate';
-import { estimateCredits, isGenerated } from '../maker/steps';
+import { estimateCredits, isGenerated, scriptJobActive } from '../maker/steps';
 import { renderActive } from '../maker/finish';
 
 export const SCREENS = Object.freeze([
@@ -127,6 +127,8 @@ const lacksPicture = (s) => isGenerated(s) && !s.still_url;
 export function nextPlanAction(status, { confirmed = {}, now = Date.now(), quote = null } = {}) {
   const { project, shots = [], cast = [], audio = null, jobs = [] } = status || {};
   if (!project || !hasScript(project)) return { type: 'none' };
+  // A script rewrite is running: nothing starts until it is done (the server refuses starts meanwhile).
+  if (scriptJobActive(jobs)) return { type: 'wait', what: ['script'] };
   const actions = [];
   const asks = [];
   const waits = [];
@@ -312,6 +314,7 @@ export const clipsOutOfDate = (shots = []) => shots.some((s) => s.needs_rebuild 
 export function shouldAutoRender(status) {
   const { project, shots = [], jobs = [], render = null, renders = [], renderPrice = null, audio = null } = status || {};
   if (!project || project.status === 'expired') return false;
+  if (scriptJobActive(jobs)) return false;
   const gen = shots.filter(isGenerated);
   if (!gen.length || gen.some((s) => s.status !== 'ready')) return false;
   if (clipsOutOfDate(shots)) return false;

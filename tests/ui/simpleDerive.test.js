@@ -310,3 +310,14 @@ describe('guards: the plan screen always has something to press or watch', () =>
     expect(planReason(s)).toBeNull();
   });
 });
+
+describe('I1: nothing starts while a script rewrite runs', () => {
+  const running = { id: 'j1', kind: 'script', status: 'running', payload: { task: 'mode' } };
+  it('the plan waits (never an error, never a start) and the final video is not made by itself', () => {
+    const status = st({ project: project({ step: 'storyboard' }), cast: [castRow()], shots: [shot({ still_url: null })], jobs: [running] });
+    expect(nextPlanAction(status, { confirmed: { fee: 0 } })).toEqual({ type: 'wait', what: ['script'] });
+    expect(nextPlanAction({ ...status, jobs: [{ ...running, status: 'done' }] }, { confirmed: { fee: 0 } }).type).not.toBe('wait');
+    const ready = st({ project: project({ step: 'generate' }), cast: [castRow()], shots: [shot({ status: 'ready', still_url: '/s.png', clip_url: '/c.mp4' })], renderPrice: { credits: 0 }, jobs: [running] });
+    expect(shouldAutoRender(ready)).toBe(false);
+  });
+});

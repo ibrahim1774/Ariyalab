@@ -149,10 +149,15 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
     ...qualityPatch(quality),
   });
 
+  const refit = useRef(null);
+
   async function submit(e) {
     e?.preventDefault();
     if (!canWrite) return;
     setError(null);
+    // The length the script still has to be fitted to: kept until the fit has worked, so a refused fit (drafting_busy, any error)
+    // is tried again on the next press even though the new length is already saved.
+    if (scripted && (refit.current !== null || seconds !== project.seconds)) refit.current = seconds;
     try {
       let id = project?.id || created.current;
       if (!id) {
@@ -167,9 +172,10 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
       if (scripted) {
         // The length changed the words the script needs: it is rewritten once, counted as a revise. The quality does not
         // change the words (who speaks is the script's own choice), so changing it never rewrites the script.
-        if (seconds !== project.seconds) {
+        if (refit.current !== null) {
           setBusy('Fitting your script…');
-          await reviseScript(id, `Fit the script to ${seconds} seconds.`);
+          await reviseScript(id, `Fit the script to ${refit.current} seconds.`);
+          refit.current = null;
         }
         await refresh?.();
         onDone?.();
