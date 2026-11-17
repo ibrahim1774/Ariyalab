@@ -85,11 +85,14 @@ Checks on the real database after applying (they cannot be tested in the in-memo
 
 The script moves this app's legacy credit balances (Stripe customer metadata) into the ledger.
 
-1. Dry run now, to see the numbers: `node scripts/migrate-legacy-credits.mjs --cutoff=<planned ISO time of the flip>`.
-   It writes nothing. Read the printed rows and totals (`--include-dormant` to also list customers with no plan).
+Owner decision (2026-11-16): dormant balances (customers with no active plan) ARE moved, so every run below uses
+`--include-dormant`.
+
+1. Dry run now, to see the numbers: `node scripts/migrate-legacy-credits.mjs --cutoff=<planned ISO time of the flip> --include-dormant`.
+   It writes nothing. Read the printed rows and totals.
 2. The real run happens right after billing v2 is turned on (step 7): dry run again with `--cutoff=<the exact ISO time
-   billing_v2 was turned on>`, then
-   `node scripts/migrate-legacy-credits.mjs --cutoff=<ISO> --apply --confirm=<rows>:<total>` with the rows and total
+   billing_v2 was turned on> --include-dormant`, then
+   `node scripts/migrate-legacy-credits.mjs --cutoff=<ISO> --include-dormant --apply --confirm=<rows>:<total>` with the rows and total
    that dry run printed (`--allow-live` is needed with a live key). Keep the JSON report it writes.
 
 After `--apply`, **billing v2 is one-way**: migrated customers live in the ledger. The admin switch refuses to turn
