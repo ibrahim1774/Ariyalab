@@ -122,6 +122,7 @@
   .setting { grid-template-columns: minmax(0, 1fr); gap: 6px; }
   .idea { font-size: 16px; }
   .dock { bottom: 4px; padding-left: 12px; }
+  .quoteLabel, .quoteMeta { display: none; }
   .dockButtons { width: 100%; justify-content: stretch; }
   .dockButtons > * { flex: 1 1 auto; justify-content: center; }
   .h { font-size: 20px; }
@@ -155,7 +156,7 @@
 .blockTitle { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-dim); text-transform: none; }
 .askCard { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 16px; padding: 12px 14px; border-radius: 14px; background: var(--accent-tint); font-size: 14px; }
 .askCard p { margin: 0; flex: 1 1 260px; }
-.castRow { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(108px, 132px)); gap: 12px; }
+.castRow { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 124px)); gap: 10px; }
 .castCard { min-width: 0; }
 .castButton { display: flex; flex-direction: column; gap: 3px; width: 100%; padding: 0; background: none; border: 0; text-align: left; cursor: pointer; font: inherit; color: inherit; border-radius: 12px; }
 .castButton:focus-visible, .shotButton:focus-visible, .pill:focus-visible, .optionPic:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -184,9 +185,9 @@
 /* ---- screen 4 */
 .stage { min-width: 0; }
 .stageBox { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; min-width: 0; }
-.clipBox { width: 100%; max-width: 360px; border-radius: 14px; overflow: hidden; background: #000; }
-.clipBox[data-aspect='16:9'] { max-width: 640px; }
-.clip { display: block; width: 100%; max-height: 60dvh; }
+.clipBox { width: fit-content; max-width: 100%; border-radius: 14px; overflow: hidden; background: #000; }
+.clip { display: block; width: auto; max-width: 100%; max-height: min(58dvh, 520px); }
+@media (max-width: 640px) { .clip { max-height: 42dvh; } }
 .working { display: flex; flex-direction: column; gap: 8px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .workBar { position: relative; height: 8px; border-radius: var(--radius-pill); background: var(--surface-2); overflow: hidden; }
 .workBar span { position: absolute; inset: 0 auto 0 0; width: 40%; border-radius: inherit; background: var(--accent); animation: slide 1.4s var(--ease) infinite; }

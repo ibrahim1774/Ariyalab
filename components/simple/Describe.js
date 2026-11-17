@@ -268,9 +268,9 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
           </span>
         </div>
 
-        <fieldset className={styles.setting} aria-label="Length">
-          <legend className={styles.settingLabel} aria-hidden="true">Length</legend>
-          <span className={styles.chips} role="presentation">
+        <div className={styles.setting} role="group" aria-label="Length">
+          <span className={styles.settingLabel} aria-hidden="true">Length</span>
+          <span className={styles.chips}>
             {costs.map(({ n, credits }) => {
               const short = available !== null && credits > available;
               return (
@@ -283,7 +283,7 @@ export default function Describe({ project, onCreate, onOpen, save, refresh, onD
               );
             })}
           </span>
-        </fieldset>
+        </div>
         {available !== null && (
           <p className={styles.balanceNote} data-testid="balance-note">
             You have {count(available)} credits.

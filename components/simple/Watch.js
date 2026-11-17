@@ -184,7 +184,10 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
     }
   }
 
-  const playing = selected ? scenes.find((s) => s.id === selected) : null;
+  // The stage plays the scene the customer picked; before the final video exists it shows the first ready scene.
+  const playing = selected
+    ? scenes.find((s) => s.id === selected)
+    : !latestDone && !active && !allReady ? scenes.find((s) => s.readyShots.length > 0) || null : null;
   const doneNow = Boolean(latestDone) && allReady && !active;
   let statusText = 'Making your video…';
   if (active) statusText = 'Putting it together…';
@@ -251,7 +254,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
         {playing && playing.readyShots.length > 0 ? (
           <div className={styles.stageBox}>
             <ScenePlayer scene={playing} aspect={project.aspect} />
-            <Button variant="ghost" size="sm" arrow={false} onClick={() => setSelected(null)}>{latestDone ? 'Back to the full video' : 'Close'}</Button>
+            {selected && <Button variant="ghost" size="sm" arrow={false} onClick={() => setSelected(null)}>{latestDone ? 'Back to the full video' : 'Close'}</Button>}
           </div>
         ) : latestDone ? (
           <div className={styles.stageBox}>
@@ -267,7 +270,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat })
           </div>
         ) : (
           <div className={styles.working}>
-            <Skeleton status={`Making scene ${makingNumber}`} line="You can play each scene as soon as it is ready." ratio="16 / 7" />
+            <Skeleton status={`Making scene ${makingNumber}`} line="You can play each scene as soon as it is ready." ratio="16 / 4" />
           </div>
         )}
       </div>
