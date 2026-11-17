@@ -72,6 +72,7 @@ Apply in this exact order. Every migration is additive (new `credit_` / `story_`
 | 18 | `20261116000300_story_assets.sql` | Before asset DELETE works. |
 | 19 | `20261116000400_billing_v2.sql` | Yearly subscriptions, yearly periods and priced plan lines (plan changes credited by money), their functions, and the closed-hold guard (replaces `credit_charge_closed_hold`, same signature). Before deploying the v2 billing code. |
 | 20 | `20261116000500_story_cleanup.sql` | Stale-hold sweeper and retention functions. Before the `story-holds` and `story-cleanup` crons run. |
+| 21 | `20261116000600_story_render_charge.sql` | `story_renders.hold_id` and `cost_credits` (paid re-renders). Before deploying the render-charge code: `startRender` writes both columns. |
 
 Checks on the real database after applying (they cannot be tested in the in-memory database):
 

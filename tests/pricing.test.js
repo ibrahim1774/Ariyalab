@@ -57,7 +57,7 @@ describe('getPricing', () => {
     const p = await getPricing();
     expect(p.perSecond).toEqual({ economy: 8, standard: 11, pro_narrated: 14, pro_talking: 21 });
     expect(p.projectFee).toBe(90);
-    expect(p.included).toEqual({ castRegenPerCharacter: 2, narration: 3, music: 3, chat: 150 });
+    expect(p.included).toEqual({ castRegenPerCharacter: 2, narration: 3, music: 3, chat: 150, render: 1 });
   });
   it('merges rows over defaults: scalars replace, objects shallow-merge, unknown keys ignored', async () => {
     setPricingDb(fakeDb([

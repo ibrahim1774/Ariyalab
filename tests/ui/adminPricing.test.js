@@ -26,6 +26,7 @@ describe('admin pricing editor', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('plans');
     expect(document.querySelector('[data-offer="studio"]')).toHaveTextContent('$0.0319');
     expect(document.querySelector('[data-quality="pro_talking"]')).toBeInTheDocument();
+    expect(screen.getByTestId('render-price')).toHaveTextContent('the first 1 of each project free, then 5 credits each');
   });
 
   it('turns billing v2 on only after a confirm, sending confirm: billing_v2', async () => {

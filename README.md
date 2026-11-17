@@ -25,7 +25,7 @@ The older single-purpose tools (face swap, image to video and others) are still 
 
 ## Credits and plans
 
-Everything is paid in credits. A video costs a one-time project fee (charged when the cast is started) plus the clips, priced per second by quality. The price is always shown first, and the customer confirms the exact number before anything is charged; credits are held while work runs and settled when it finishes. The first still of each shot, the first few narration and music makes and the render are included.
+Everything is paid in credits. A video costs a one-time project fee (charged when the cast is started) plus the clips, priced per second by quality. The price is always shown first, and the customer confirms the exact number before anything is charged; credits are held while work runs and settled when it finishes. The first still of each shot, the first few narration and music makes and the first finished render of each video are included; each render after that costs 5 credits (a render that fails is never charged).
 
 Plans (Starter, Creator, Studio; monthly or yearly) grant credits each period, and top-up packs add more. Plan data is in `lib/pricingConstants.js`; prices can be changed at runtime from the admin page, which writes the `pricing_config` table.
 

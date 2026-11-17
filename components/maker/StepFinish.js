@@ -67,9 +67,18 @@ function Warnings({ render }) {
   );
 }
 
+/** " (free)" / " (5 credits)" after the make-video button, from /status renderPrice; nothing while it is unknown. */
+export function renderPriceLabel(price) {
+  const credits = Number(price?.credits);
+  if (!Number.isInteger(credits) || credits < 0) return '';
+  return credits === 0 ? ' (free)' : ` (${credits} ${credits === 1 ? 'credit' : 'credits'})`;
+}
+
 /**
  * Step 12: make the video, watch it, download it. Props: { project, status, refresh }. `status` is the /status
- * payload ({ render, renders }); the screen holds no render state of its own beyond which version is on screen.
+ * payload ({ render, renders, renderPrice }); the screen holds no render state of its own beyond which version is on
+ * screen. The button shows the next render's price and sends it as expected_credits; a 409 (quote_changed among
+ * them) refreshes, so the new price shows.
  */
 export default function StepFinish({ project, status, refresh }) {
   const [busy, setBusy] = useState(false);
@@ -89,7 +98,9 @@ export default function StepFinish({ project, status, refresh }) {
     setBusy(true);
     setError(null);
     try {
-      await startRender(project.id);
+      const credits = status?.renderPrice?.credits;
+      if (Number.isInteger(credits)) await startRender(project.id, credits);
+      else await startRender(project.id);
       setPicked(null);
       // Stay busy until the new render shows up in /status, so the button never flashes back to "Make it again".
       await refresh?.();
@@ -115,6 +126,7 @@ export default function StepFinish({ project, status, refresh }) {
     }
   };
 
+  const price = renderPriceLabel(status?.renderPrice);
   const errorLine = error ? <p className={styles.error} role="alert">{error.server || error.message || error.title}</p> : null;
 
   if (expired) {
@@ -134,9 +146,9 @@ export default function StepFinish({ project, status, refresh }) {
   const inSide = Boolean(shown) && !active && !busy && latest?.status !== 'failed';
   const primary = (() => {
     if (active || busy) return <Button disabled>{busy && !active ? 'Starting…' : 'Making your video…'}</Button>;
-    if (latest?.status === 'failed') return <Button onClick={start}>Try again</Button>;
-    if (shown) return <Button variant="ghost" onClick={start}>Make it again</Button>;
-    return <Button onClick={start}>Make my video</Button>;
+    if (latest?.status === 'failed') return <Button onClick={start}>{`Try again${price}`}</Button>;
+    if (shown) return <Button variant="ghost" onClick={start}>{`Make it again${price}`}</Button>;
+    return <Button onClick={start}>{`Make my video${price}`}</Button>;
   })();
 
   return (
@@ -171,7 +183,7 @@ export default function StepFinish({ project, status, refresh }) {
               <a className={`${buttonStyles.btn} ${buttonStyles.primary}`} data-variant="primary" href={downloadHref(shown.url)} download={downloadFilename(project?.title)}>
                 <span>Download video</span>
               </a>
-              {inSide && <Button variant="ghost" arrow={false} onClick={start}>Make it again</Button>}
+              {inSide && <Button variant="ghost" arrow={false} onClick={start}>{`Make it again${price}`}</Button>}
             </div>
             {doneRenders.length > 1 && (
               <div className={styles.versions} role="group" aria-label="Versions">
@@ -193,7 +205,7 @@ export default function StepFinish({ project, status, refresh }) {
           <span className={styles.failedIcon} data-tile="finish"><Icon name="film" /></span>
           <div>
             <h3>Ready when you are</h3>
-            <p>We join your clips, narration, music and captions into one video. It takes a minute or two, costs no credits, and you can leave the page while it works.</p>
+            <p>We join your clips, narration, music and captions into one video. It takes a minute or two, your first finished video is included, and you can leave the page while it works.</p>
           </div>
         </Card>
       )}

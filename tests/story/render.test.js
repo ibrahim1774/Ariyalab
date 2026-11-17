@@ -11,7 +11,7 @@ import { createTestDb } from '../helpers/db.js';
 import { useRegexOnlyModeration, useTestAccounts } from '../helpers/storyEnv.js';
 import { makeReq, makeRes } from '../helpers/apiMock.js';
 import { setStoryDb, storyDb } from '../../lib/story/db.js';
-import { setCreditsDb, grantCredits } from '../../lib/credits.js';
+import { setCreditsDb, grantCredits, getBalance } from '../../lib/credits.js';
 import { setPricingDb, _resetPricingCache } from '../../lib/pricing.js';
 import { putObject, localPathFor, mockStoragePath } from '../../lib/providers/storage.js';
 import { transcribe } from '../../lib/providers/stt.js';
@@ -293,24 +293,30 @@ describe('render', () => {
     expect(row.warnings).toEqual([]);
   }, 240_000);
 
-  it('a re-render after a caption-style change creates version 2 and no ledger rows', async () => {
+  it('a re-render after a caption-style change creates version 2: the first is included, the second spends exactly 5', async () => {
     const ctx = await newProject();
     await grantCredits({ userId: ctx.userId, currency: 'video', amount: 500, bucket: 'topup', reason: 'test', ref: randomUUID() });
     const before = await ledgerRows(ctx.userId);
     const v1 = await renderOnce(ctx);
+    expect(await ledgerRows(ctx.userId)).toBe(before);
+    expect((await getBalance(ctx.userId, 'video')).available).toBe(500);
     await setAudioPlan({ userId: ctx.userId, projectId: ctx.project.id, plan: { captions: { on: true, style: 'bold_pop' } } });
     const v2 = await renderOnce(ctx);
     expect(v1).toMatchObject({ version: 1, status: 'done' });
     expect(v2).toMatchObject({ version: 2, status: 'done' });
     expect(v2.settings.captions.style).toBe('bold_pop');
     expect(v2.storage_key).not.toBe(v1.storage_key);
-    expect(await ledgerRows(ctx.userId)).toBe(before);
+    // Owner decision 2026-11-16: the second render was held at start and settled when it was stored.
+    const after = await getBalance(ctx.userId, 'video');
+    expect(after.available).toBe(495);
+    expect(after.held).toBe(0);
     const rows = await renders(ctx.project.id);
     expect(rows.map((r) => r.version)).toEqual([1, 2]);
-    // No render job carries a hold or a cost.
-    const jobs = await storyDb().select('story_jobs', { project_id: ctx.project.id, kind: 'render' });
+    expect(rows.map((r) => r.cost_credits)).toEqual([0, 5]);
+    const jobs = await storyDb().select('story_jobs', { project_id: ctx.project.id, kind: 'render' }, { order: 'created_at' });
     expect(jobs).toHaveLength(2);
-    for (const j of jobs) expect([j.hold_id, j.cost_credits]).toEqual([null, null]);
+    expect([jobs[0].hold_id, jobs[0].cost_credits]).toEqual([null, null]);
+    expect([jobs[1].hold_id, jobs[1].cost_credits]).toEqual([rows[1].hold_id, 5]);
   }, 300_000);
 
   it('never runs two renders of one project at once: a second start is 409 render_busy', async () => {
@@ -458,7 +464,11 @@ describe('final review I5: per-project render cap (rolling 24 h)', () => {
       );
     }
   }
-  const refusal = (ctx) => startRender({ userId: ctx.userId, projectId: ctx.project.id }).then(() => null, (e) => e);
+  // Past renders that finished make the next one paid (owner decision 2026-11-16): the account has credits for it.
+  const refusal = async (ctx) => {
+    await grantCredits({ userId: ctx.userId, currency: 'video', amount: 50, bucket: 'topup', reason: 'test', ref: randomUUID() });
+    return startRender({ userId: ctx.userId, projectId: ctx.project.id }).then(() => null, (e) => e);
+  };
 
   it('refuses the 11th render of a project inside 24 hours with a clear 429 message', async () => {
     const ctx = await newProject();

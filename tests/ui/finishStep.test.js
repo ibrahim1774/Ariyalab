@@ -206,3 +206,36 @@ describe('round 1', () => {
     expect(renderFilename('The line outside the barbershop', 2)).toBe('the-line-outside-the-barbershop-v2.mp4');
   });
 });
+
+describe('render charge (owner decision 2026-11-16)', () => {
+  it('the button shows (free) for the included render and (5 credits) after, and sends that price', async () => {
+    client.startRender.mockResolvedValue({ id: 'r1', version: 1, status: 'queued' });
+    const { rerender } = render(<StepFinish project={project} status={{ render: null, renders: [], renderPrice: { credits: 0 } }} refresh={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Make my video (free)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /make my video/i }));
+    await waitFor(() => expect(client.startRender).toHaveBeenCalledWith('p1', 0));
+    const r = done();
+    rerender(<StepFinish project={project} status={{ render: r, renders: [r], renderPrice: { credits: 5 } }} refresh={vi.fn()} />);
+    expect(screen.getByRole('button', { name: 'Make it again (5 credits)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /make it again/i }));
+    await waitFor(() => expect(client.startRender).toHaveBeenLastCalledWith('p1', 5));
+  });
+
+  it('a 409 quote_changed refreshes, so the new price shows', async () => {
+    client.startRender.mockRejectedValue(Object.assign(new Error('x'), { status: 409, code: 'quote_changed', serverMessage: 'The price changed. Check the new price and try again.' }));
+    const refresh = vi.fn();
+    const r = done();
+    render(<StepFinish project={project} status={{ render: r, renders: [r], renderPrice: { credits: 0 } }} refresh={refresh} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Make it again (free)' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('The price changed.');
+    expect(refresh).toHaveBeenCalled();
+  });
+
+  it('without a price (an older /status) the labels stay plain', async () => {
+    const { renderPriceLabel } = await import('../../components/maker/StepFinish');
+    expect(renderPriceLabel(null)).toBe('');
+    expect(renderPriceLabel({ credits: 1 })).toBe(' (1 credit)');
+    render(<StepFinish project={project} status={{ render: null, renders: [] }} />);
+    expect(screen.getByRole('button', { name: 'Make my video' })).toBeInTheDocument();
+  });
+});

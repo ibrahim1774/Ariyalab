@@ -133,6 +133,12 @@ export default function PricingEditor() {
         </tbody>
       </table>
       <p style={{ fontSize: 12 }}>Yearly discount: {pct(readout.yearlyDiscount)}.</p>
+      {readout.render && (
+        <p style={{ fontSize: 12 }} data-testid="render-price">
+          Renders: the first {readout.render.included} of each project free, then {readout.render.credits} credits each
+          (included.render, renderRegen).
+        </p>
+      )}
 
       <h4 style={{ margin: '14px 0 6px', fontSize: 14 }}>Margin per quality (one generated second)</h4>
       <table style={{ fontSize: 13, borderCollapse: 'collapse' }}>

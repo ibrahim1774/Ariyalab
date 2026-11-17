@@ -7,13 +7,13 @@ import { renderActive } from './finish';
 export const POLL_ACTIVE_MS = 3000;
 export const POLL_IDLE_MS = 15000;
 
-const EMPTY = { project: null, shots: [], cast: [], jobs: [], balance: null, render: null, renders: [], rerolls: null };
+const EMPTY = { project: null, shots: [], cast: [], jobs: [], balance: null, render: null, renders: [], rerolls: null, renderPrice: null };
 
 /**
  * Loads a project and keeps it fresh.
  *
  * Expects GET /projects/[id]/status -> { project, shots, cast, jobs, balance, render, renders }
- * (`render` is the latest public render row, `renders` up to 10, newest first; optional: `rerolls: { included, used, credits }`). Until that route exists a 404 falls back to
+ * (`render` is the latest public render row, `renders` up to 10, newest first; optional: `rerolls: { included, used, credits }`, `renderPrice: { credits }` the next render's price). Until that route exists a 404 falls back to
  * GET /projects/[id], so `degraded` is true and shots, cast and jobs are empty.
  *
  * Polls every 3 s while any job is queued or running, every 15 s otherwise, pauses while the tab is
@@ -74,6 +74,7 @@ export default function useProject(id) {
           render: data.render ?? null,
           renders: Array.isArray(data.renders) ? data.renders : [],
           rerolls: data.rerolls ?? null,
+          renderPrice: data.renderPrice ?? null,
           loading: false,
           error: null,
           degraded,
