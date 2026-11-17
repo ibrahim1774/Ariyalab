@@ -63,10 +63,10 @@ describe('admin pricing editor', () => {
     const res = await call(ADMIN, { method: 'GET' });
     expect(res.statusCode).toBe(200);
     expect(res.body.billingV2).toBe(false);
-    expect(res.body.readout.plans.studio.usdPerCredit).toBeCloseTo(99 / 5400, 8);
+    expect(res.body.readout.plans.studio.usdPerCredit).toBeCloseTo(99 / 3100, 8);
     const m = res.body.readout.margins.standard;
     expect(m.providerUsdPerSecond).toBe(PROVIDER_COSTS_USD.perSecond.standard);
-    expect(m.marginLow).toBeCloseTo(1 - 0.0755 / (11 * (99 / 5400)), 6);
+    expect(m.marginLow).toBeCloseTo(1 - 0.0755 / (11 * (99 / 3100)), 6);
     expect(res.body.readout.drift).toEqual([]);
   });
 
