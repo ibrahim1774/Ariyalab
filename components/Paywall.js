@@ -4,6 +4,7 @@ import styles from './Paywall.module.css';
 import TopupRow from './TopupRow';
 import useV2Offers from './useV2Offers';
 import { META_PRODUCT } from './MetaPixel';
+import { CHECKOUT_FAILED, failPayment, paymentErrorText } from '../lib/paymentErrors';
 
 // Cosmetic credit-display multiplier for image-credit surfaces.
 const IMAGE_DISPLAY_MULTIPLIER = 10;
@@ -413,10 +414,8 @@ export default function Paywall({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ plan, returnTo, surface }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.url) {
-        throw new Error(data.error || 'Could not start checkout.');
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) failPayment(res, data, CHECKOUT_FAILED);
       firePixel(data.meta, {
         content_id: `plan-${plan}`,
         content_name: `${plan} subscription`,
@@ -428,8 +427,9 @@ export default function Paywall({
       }
       window.location.href = data.url;
     } catch (err) {
-      setLocalError(err.message);
-      onError && onError(err.message);
+      const text = paymentErrorText(err, CHECKOUT_FAILED);
+      setLocalError(text);
+      onError && onError(text);
       setBusy(null);
     }
   };

@@ -1146,7 +1146,7 @@ describe('review fixes round 2, billing_v2 off', () => {
     const res = await callCheckout({ user, body: { mode: 'topup', pack: 's' } });
     auth.failProfileRead = false;
     expect(res.statusCode).toBe(503);
-    expect(res.body.error).toBe('Please try again.');
+    expect(res.body.error).toBe("We couldn't start the payment. Please try again in a moment.");
 
     newCustomer({}, 'n3@example.test'); // adoptable by email, but its links cannot be read
     const res2 = await withQueryHook(

@@ -34,7 +34,7 @@ export default async function handler(req, res) {
   const origin = returnOrigin();
   if (!origin) {
     console.error('[billing/portal] APP_URL is not set');
-    return res.status(500).json({ error: 'Billing is not configured. Please try again later.' });
+    return res.status(500).json({ error: "We couldn't open billing. Please try again in a moment." });
   }
   try {
     const customer = await customerForUser(session.user.id);
@@ -43,6 +43,6 @@ export default async function handler(req, res) {
     return res.status(200).json({ url: portal.url });
   } catch (err) {
     console.error('[billing/portal] failed', err);
-    return res.status(500).json({ error: 'Could not open billing. Please try again.' });
+    return res.status(500).json({ error: "We couldn't open billing. Please try again in a moment." });
   }
 }

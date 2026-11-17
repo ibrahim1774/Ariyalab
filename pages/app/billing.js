@@ -4,6 +4,7 @@ import Head from 'next/head';
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import styles from '../../styles/AppPages.module.css';
+import { CHECKOUT_FAILED, PORTAL_FAILED, failPayment, paymentErrorText } from '../../lib/paymentErrors';
 
 const REASON_LABELS = {
   plan_renewal: 'Monthly credits',
@@ -76,10 +77,10 @@ export default function BillingPage() {
     try {
       const res = await fetch('/api/billing/portal', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.url) throw new Error(data.error || 'Could not open billing.');
+      if (!res.ok || !data.url) failPayment(res, data, PORTAL_FAILED);
       window.location.href = data.url;
     } catch (err) {
-      setError(err.message);
+      setError(paymentErrorText(err, PORTAL_FAILED));
       setBusy(null);
     }
   }, [busy]);
@@ -95,10 +96,10 @@ export default function BillingPage() {
         body: JSON.stringify({ ...body, returnTo: '/app/billing' }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.url) throw new Error(data.error || 'Could not start checkout.');
+      if (!res.ok || !data.url) failPayment(res, data, CHECKOUT_FAILED);
       window.location.href = data.url;
     } catch (err) {
-      setError(err.message);
+      setError(paymentErrorText(err, CHECKOUT_FAILED));
       setBusy(null);
     }
   }, [busy]);

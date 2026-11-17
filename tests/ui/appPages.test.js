@@ -142,7 +142,42 @@ describe('/app/billing', () => {
     }));
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: /choose plan/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('Could not start checkout.');
+    expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't start the payment. Please try again in a moment.");
     expect(calls[0]).toMatchObject({ plan: 'monthly', returnTo: '/app/billing' });
+  });
+
+  const v2Billing = { v2: true, balance: { plan: 0, topup: 30, held: 0, available: 30 }, history: [] };
+  const v2Pricing = { plans: PLANS_V2, topups: TOPUPS_V2 };
+  const stubBilling = (api) => vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+    if (url === '/api/story/billing') return { ok: true, status: 200, json: async () => v2Billing };
+    if (url === '/api/story/pricing') return { ok: true, status: 200, json: async () => v2Pricing };
+    return api(url, init);
+  }));
+
+  it('a server error when buying credits shows the plain payment line, never the raw text', async () => {
+    stubBilling(async () => ({ ok: false, status: 500, json: async () => ({ error: 'No such price: price_123 (stripe)' }) }));
+    render(<BillingPage />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /buy credits/i }))[0]);
+    expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't start the payment. Please try again in a moment.");
+    expect(screen.queryByText(/price_123/)).toBeNull();
+  });
+
+  it('a network failure when buying credits shows the same line', async () => {
+    stubBilling(async () => { throw new TypeError('Failed to fetch'); });
+    render(<BillingPage />);
+    fireEvent.click((await screen.findAllByRole('button', { name: /buy credits/i }))[0]);
+    expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't start the payment. Please try again in a moment.");
+  });
+
+  it('when billing cannot open, the portal line is shown; a clear 4xx reason is kept', async () => {
+    stubBilling(async () => ({ ok: false, status: 500, json: async () => ({ error: 'Could not open billing. Please try again.' }) }));
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /manage billing/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't open billing. Please try again in a moment.");
+    cleanup();
+    stubBilling(async () => ({ ok: false, status: 404, json: async () => ({ error: 'There is no billing account yet. Choose a plan first.' }) }));
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /manage billing/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('There is no billing account yet. Choose a plan first.');
   });
 });

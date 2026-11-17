@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 
 import paywallStyles from './Paywall.module.css';
 import { META_PRODUCT } from './MetaPixel';
+import { CHECKOUT_FAILED, failPayment, paymentErrorText } from '../lib/paymentErrors';
 
 /*
  * Top-up packs (one-time credit purchases). Two clearly-labeled groups:
@@ -115,19 +116,18 @@ export default function TopupRow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ mode: 'topup', pack, returnTo, ...(v2Topups ? { catalog: 'v2' } : {}) }),
       });
-      const data = await res.json();
-      if (!res.ok || !data.url) {
-        throw new Error(data.error || 'Could not start checkout.');
-      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data.url) failPayment(res, data, CHECKOUT_FAILED);
       firePixel(data.meta, {
         content_id: `topup-${pack}`,
         content_name: `topup ${pack}`,
       });
       window.location.href = data.url;
     } catch (err) {
-      setLocalError(err.message);
-      onError && onError(err.message);
-      onLocalError && onLocalError(err.message);
+      const text = paymentErrorText(err, CHECKOUT_FAILED);
+      setLocalError(text);
+      onError && onError(text);
+      onLocalError && onLocalError(text);
       setBusy(null);
     }
   };

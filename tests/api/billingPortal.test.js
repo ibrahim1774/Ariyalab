@@ -64,6 +64,7 @@ describe('/api/billing/portal', () => {
     res = makeRes();
     await portal(makeReq({ method: 'POST', headers: { host: 'evil.example' } }), res);
     expect(res.statusCode).toBe(500);
+    expect(res.body.error).toBe("We couldn't open billing. Please try again in a moment.");
     expect(S.created).toHaveLength(0);
     vi.stubEnv('NODE_ENV', 'test');
     res = makeRes();

@@ -255,7 +255,7 @@ export default async function handler(req, res) {
     if (v2) offers = v2Offers(await getPricing());
   } catch (flagErr) {
     console.error('[checkout] billing flag unavailable', flagErr?.message);
-    return res.status(503).json({ error: 'Please try again.' });
+    return res.status(503).json({ error: "We couldn't start the payment. Please try again in a moment." });
   }
 
   const origin = buyerOrigin(req);
@@ -500,11 +500,11 @@ export default async function handler(req, res) {
   } catch (err) {
     if (err instanceof CustomerLookupUnavailableError) {
       console.error('[checkout]', err.message, err.cause?.message);
-      return res.status(503).json({ error: 'Please try again.' });
+      return res.status(503).json({ error: "We couldn't start the payment. Please try again in a moment." });
     }
     // Never send the raw error to the browser (it can name env vars or carry
     // Stripe's message); the details go to the log.
     console.error('[checkout] failed', err);
-    return res.status(500).json({ error: 'Something went wrong. Please try again.' });
+    return res.status(500).json({ error: "We couldn't start the payment. Please try again in a moment." });
   }
 }
