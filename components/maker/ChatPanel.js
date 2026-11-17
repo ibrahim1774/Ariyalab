@@ -58,8 +58,10 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
  * The chat helper in the maker's side column (a bottom sheet on phones). The customer asks for changes in plain words;
  * the server's model makes them with the project tools (lib/story/chatTools.js). Anything priced comes back as a
  * confirm card. `onChanged` reloads the project after a change.
+ * prefill ({ text, nonce }, optional): puts text in the message box (a new nonce each time, so "Change scene 2: " can be sent
+ * from a button). note (optional): a short line from the screen shown above the box ("Want to change anything?"), client only.
  */
-export default function ChatPanel({ project, onChanged, returnTo }) {
+export default function ChatPanel({ project, onChanged, returnTo, prefill = null, note = null }) {
   const projectId = project?.id;
   const [messages, setMessages] = useState([]);
   const [usage, setUsage] = useState(null);
@@ -68,6 +70,13 @@ export default function ChatPanel({ project, onChanged, returnTo }) {
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(null); // the text being sent
   const listRef = useRef(null);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if (!prefill?.text) return;
+    setDraft(prefill.text);
+    inputRef.current?.focus?.();
+  }, [prefill?.nonce, prefill?.text]);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -188,6 +197,8 @@ export default function ChatPanel({ project, onChanged, returnTo }) {
         </ol>
       )}
 
+      {note && <p className={styles.screenNote} data-testid="chat-note">{note}</p>}
+
       {sendError && <ErrorNotice error={sendError} returnTo={returnTo} onRefresh={() => onChanged?.()} />}
 
       {used ? (
@@ -201,6 +212,7 @@ export default function ChatPanel({ project, onChanged, returnTo }) {
           }}
         >
           <textarea
+            ref={inputRef}
             className={styles.input}
             rows={2}
             maxLength={1000}

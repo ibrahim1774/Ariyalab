@@ -9,7 +9,7 @@ import styles from './MakerLayout.module.css';
  * side slot for the chat panel that becomes a bottom sheet under 900 px.
  * `steps` = [{ id, label, stale?, locked? }]; `chat` = the chat panel (the slot is shown when there is none, e.g. before a project exists)
  */
-export default function MakerLayout({ title, steps, currentId, onSelect, quote, chat, children, notice }) {
+export default function MakerLayout({ title, steps, currentId, onSelect, quote, chat, children, notice, extra = null, stepsLabel = 'Steps' }) {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [stepsOpen, setStepsOpen] = useState(false);
   const summaryRef = useRef(null);
@@ -39,6 +39,7 @@ export default function MakerLayout({ title, steps, currentId, onSelect, quote, 
       <header className={styles.top}>
         <div className={styles.titleRow}>
           <h1 className={styles.title} title={title || 'New video'}>{title || 'New video'}</h1>
+          {extra && <span className={styles.extra}>{extra}</span>}
           <button
             ref={chatToggleRef}
             type="button"
@@ -50,7 +51,7 @@ export default function MakerLayout({ title, steps, currentId, onSelect, quote, 
             Chat helper
           </button>
         </div>
-        <nav className={styles.steps} aria-label="Steps">
+        <nav className={styles.steps} aria-label={stepsLabel}>
           <Stepper steps={steps} currentId={currentId} onSelect={onSelect} fit />
         </nav>
         <button ref={summaryRef} type="button" className={styles.stepSummary} aria-expanded={stepsOpen} onClick={() => setStepsOpen((v) => !v)}>

@@ -3,6 +3,9 @@
 .top { position: relative; margin: 0 0 10px; min-width: 0; }
 .titleRow { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
 .title { font-size: 22px; line-height: 1.2; min-width: 0; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
+.extra { margin-left: auto; flex-shrink: 0; font-size: 13px; }
+.extra a { color: var(--text-dim); text-decoration: underline; text-underline-offset: 3px; }
+.extra a:hover { color: var(--accent-deep); }
 .steps { min-width: 0; max-width: 100%; overflow-x: auto; }
 
 .body { display: grid; grid-template-columns: minmax(0, 1fr) clamp(300px, 24vw, 440px); gap: 20px; align-items: start; }
