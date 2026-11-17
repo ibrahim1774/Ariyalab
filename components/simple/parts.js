@@ -1,5 +1,6 @@
 import Link from 'next/link';
 
+import { GET_CREDITS } from '../maker/errors';
 import styles from './Simple.module.css';
 
 export const count = (n) => Number(n || 0).toLocaleString();
@@ -35,7 +36,7 @@ export function ScreenHead({ title, sub, status, done = false }) {
  * The bar at the bottom of every screen: what it costs on the left, the one main button (and at most one smaller one) on the right.
  * `children` are the buttons. Never empty: a screen with nothing to press says why in `hint`.
  */
-export function Dock({ label, total, meta, hint, children }) {
+export function Dock({ label, total, meta, hint, needs = null, children }) {
   return (
     <div className={styles.dock} data-testid="dock">
       <div className={styles.quote}>
@@ -45,6 +46,7 @@ export function Dock({ label, total, meta, hint, children }) {
         {hint && <span className={styles.dockHint}>{hint}</span>}
       </div>
       <div className={styles.dockButtons}>{children}</div>
+      {needs}
     </div>
   );
 }
@@ -54,4 +56,6 @@ export function Announce({ children }) {
   return <p className={styles.srOnly} role="status" aria-live="polite">{children}</p>;
 }
 
-export const BillingLink = ({ children = 'Top up credits' }) => <Link href="/app/billing" className={styles.link}>{children}</Link>;
+export const BillingLink = ({ children = GET_CREDITS }) => <Link href="/app/billing" className={styles.link}>{children}</Link>;
+
+export { NeedCredits } from '../maker/NeedCredits';

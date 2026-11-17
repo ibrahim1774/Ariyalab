@@ -4,6 +4,7 @@ import Button from '../ui/Button';
 import Card from '../ui/Card';
 import { pickCast, regenCast, retryCast, setCastImage, startCast } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { NeedCredits } from './NeedCredits';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
 import { projectFeeFor } from '../../lib/pricingConstants';
@@ -70,6 +71,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             <Button size="sm" disabled={Boolean(busy)} onClick={() => run('redraw', async () => { await regenCast(projectId, cast.id, '', regenCost); })}>
               {busy === 'redraw' ? 'Drawing…' : regenCost > 0 ? `Draw again in the new style (${regenCost} credits)` : 'Draw again in the new style (included)'}
             </Button>
+            <NeedCredits items={[{ price: regenCost }]} />
           </>
         )}
       </div>
@@ -97,9 +99,12 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             {cast.status === 'blocked' ? (
               <Button variant="ghost" size="sm" onClick={() => setChange(true)}>Describe a change</Button>
             ) : (
-              <Button variant="ghost" size="sm" onClick={retry} disabled={busy === 'retry'}>
-                {retryCost > 0 ? `Try again (${retryCost} credits)` : 'Try again'}
-              </Button>
+              <>
+                <Button variant="ghost" size="sm" onClick={retry} disabled={busy === 'retry'}>
+                  {retryCost > 0 ? `Try again (${retryCost} credits)` : 'Try again'}
+                </Button>
+                <NeedCredits items={[{ price: retryCost }]} />
+              </>
             )}
           </Tile>
         </div>
@@ -152,6 +157,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             <Button type="submit" variant="ghost" size="sm" disabled={busy === 'regen' || !note.trim()}>
               {busy === 'regen' ? 'Making new pictures…' : regenCost > 0 ? `Regenerate (${regenCost} credits)` : 'Regenerate'}
             </Button>
+            <NeedCredits items={[{ price: regenCost }]} />
             <AssetPicker
               kinds={['image', 'mascot', 'product', 'logo']}
               uploadKind="image"

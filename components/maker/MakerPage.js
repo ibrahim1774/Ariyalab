@@ -7,6 +7,7 @@ import ErrorNotice from './ErrorNotice';
 import { signInHref } from './errors';
 import MakerLayout from './MakerLayout';
 import { MakerNavProvider } from './MakerNav';
+import { BalanceProvider } from './BalanceContext';
 import { PricingProvider } from './PricingContext';
 import QuoteBar from './QuoteBar';
 import StepAudio from './StepAudio';
@@ -64,6 +65,7 @@ function MakerPageInner({ id, returnTo }) {
   if (!project) {
     return (
       <MakerNavProvider value={{ goTo }}>
+      <BalanceProvider balance={null}>
       <MakerLayout title="Your video" steps={stepsFor(null).map((s) => ({ id: s.id, label: s.label, locked: true }))} currentId="start">
         {loading ? (
           <p className={styles.muted} role="status">Loading your video…</p>
@@ -74,6 +76,7 @@ function MakerPageInner({ id, returnTo }) {
           </>
         )}
       </MakerLayout>
+      </BalanceProvider>
       </MakerNavProvider>
     );
   }
@@ -104,6 +107,7 @@ function MakerPageInner({ id, returnTo }) {
 
   return (
     <MakerNavProvider value={{ goTo }}>
+    <BalanceProvider balance={data.balance}>
     <MakerLayout
       title={project.title}
       steps={steps}
@@ -126,6 +130,7 @@ function MakerPageInner({ id, returnTo }) {
     >
       {body}
     </MakerLayout>
+    </BalanceProvider>
     </MakerNavProvider>
   );
 }

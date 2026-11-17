@@ -3,6 +3,7 @@ import { useState } from 'react';
 import Button from '../ui/Button';
 import { rerollShot } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { NeedCredits } from './NeedCredits';
 import { usePricing } from './PricingContext';
 import StepFooter from './StepFooter';
 import FilesNote from './FilesNote';
@@ -42,6 +43,7 @@ function ClipActions({ shot, project, status, refresh, returnTo }) {
           <Button variant="ghost" size="sm" arrow={false} onClick={reroll} disabled={busy || inFlight}>
             {busy ? 'Making it again…' : price ? `Make it again (${price} credits)` : 'Make it again'}
           </Button>
+          {price ? <NeedCredits items={[{ price }]} /> : null}
           <span className={styles.hint} data-testid="reroll-info">{info.text}</span>
           {shot.error && <span className={styles.hint} role="status" data-testid="reroll-error">{shot.error}</span>}
         </>

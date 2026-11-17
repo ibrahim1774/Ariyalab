@@ -150,7 +150,7 @@ describe('generate', () => {
     fireEvent.click(screen.getByTestId('generate-all'));
     const dialog = await screen.findByRole('dialog');
     expect(await within(dialog).findByText(/You need 277 more credits/)).toBeInTheDocument();
-    expect(within(dialog).getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
+    expect(within(dialog).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
     expect(within(dialog).getByRole('button', { name: /Generate for 777/ })).toBeDisabled();
   });
 
@@ -206,7 +206,7 @@ describe('quote bar', () => {
     expect(screen.getByTestId('quote-total')).toHaveTextContent('810 credits');
     expect(screen.getByText(`${QUALITY_LABELS.pro_narrated}, 45 seconds`)).toBeInTheDocument();
     expect(await screen.findByTestId('quote-short')).toHaveTextContent('You need 310 more credits');
-    expect(screen.getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
+    expect(screen.getAllByRole('link', { name: 'Get credits' })[0]).toHaveAttribute('href', '/app/billing');
     expect(screen.getByTestId('quote-balance')).toHaveTextContent('500 credits');
   });
 
@@ -679,7 +679,7 @@ describe('cast step', () => {
     render(<StepCast {...props([])} />);
     fireEvent.click(screen.getByRole('button', { name: 'Make my cast' }));
     expect(await screen.findByText(/You need 200 more credits/)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
+    expect(screen.getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
   });
 
   it('shows three candidates, picks one, and regenerates with a note', async () => {
@@ -772,7 +772,7 @@ describe('errors', () => {
   it('402 insufficient_credits shows the shortfall and a top up link', () => {
     render1(new StoryApiError({ status: 402, code: 'insufficient_credits', needed: 720, available: 500 }));
     expect(screen.getByText('You need 220 more credits. This takes 720 and you have 500.')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
+    expect(screen.getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
   });
 
   it('402 plan_required says the step needs a plan and links to billing', () => {

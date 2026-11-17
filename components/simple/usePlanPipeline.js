@@ -4,6 +4,8 @@ import { buildShots, getPlanQuote, makeMusic, makeNarration, makeStills, pickCas
 import { FREE_STARTS, actionKey, clipsStarted, confirmedFrom, nextPlanAction } from './derive';
 
 const COOL_MS = 4000;
+// The confirmed amount (usePlanPipeline `confirmed`) each kind of start spends.
+const CONFIRM_FIELD = { cast: 'fee', stills: 'pictures', redraw: 'redraw', narration: 'voice', music: 'music' };
 // A wait older than this gets a message and a next step instead of a spinner.
 export const STALLED_MS = 5 * 60_000;
 const LOCK_RETRY_MS = 5000;
@@ -66,7 +68,7 @@ export function stageText(action) {
  *  - a 409 quote_changed drops the confirmation and shows the new price; any other 409 is another tab's start: refresh and wait;
  *  - any other error (402 included) stops the pipeline and is shown, until the customer asks again.
  *
- * Returns { quote, quoteError, action, busy, armed, error, note, design, confirm, retry, reloadQuote }.
+ * Returns { quote, quoteError, action, busy, armed, working, error, note, design, confirm, retry, reloadQuote }.
  */
 export default function usePlanPipeline({ status, screen, refresh, quoteKey = '' }) {
   const project = status?.project || null;
@@ -125,6 +127,25 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
   const free = FREE_STARTS.includes(action.type);
   const enabled = screen === 'plan' || armed ? (free ? (armed || marker) && lockHeld : true) : false;
   const actionSig = JSON.stringify(action);
+  const actionNow = actionKey(action);
+
+  // A start that was sent, and a price that was confirmed, belong to that one start. Once the project has moved on (the
+  // action is no longer that start: it is waiting, blocked, or something else), forget both. Otherwise the same start
+  // coming back later (a failed picture whose description was edited) would be skipped as "already sent" and be treated as
+  // already confirmed, and the page would show "drawing" forever with nothing running and no button.
+  useEffect(() => {
+    const gone = [...sent.current].filter((k) => k !== actionNow);
+    if (!gone.length) return;
+    gone.forEach((k) => sent.current.delete(k));
+    const fields = gone.map((k) => CONFIRM_FIELD[k.split(':')[0]]).filter(Boolean);
+    if (fields.length) {
+      setConfirmed((c) => {
+        const next = { ...c };
+        fields.forEach((f) => delete next[f]);
+        return next;
+      });
+    }
+  }, [actionNow]);
   const manual = screen === 'plan' && free && !armed && !marker;
   const otherTab = screen === 'plan' && free && marker && !lockHeld;
 
@@ -197,7 +218,12 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
           else if (err.code === 'cast_needed') setNote('Your characters need to be made first.');
           cool.current.set(key, Date.now() + COOL_MS);
         } else if (alive.current) {
+          // Refused or failed (402 included): nothing started, so nothing is "being designed". Show the error and give the
+          // button back; the next press confirms the price again.
           setError(err);
+          setArmed(false);
+          const field = CONFIRM_FIELD[action.type];
+          if (field) setConfirmed((c) => { const next = { ...c }; delete next[field]; return next; });
         }
       } finally {
         await Promise.resolve(refresh?.()).catch(() => {});
@@ -269,5 +295,9 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
     setTick((n) => n + 1);
   }, []);
 
-  return { quote, quoteError, action, busy, armed, error, note, stalled, manual, otherTab, design, carryOn, confirm, retry, reloadQuote };
+  // Something is really being started or made: a start is in flight, or the customer pressed the button and the next step is
+  // a start or a wait. A refusal, a question or a failure is not "working", so no spinner stays behind it.
+  const working = busy || (armed && !error && (actionNow !== '' || action.type === 'wait'));
+
+  return { quote, quoteError, action, busy, armed, working, error, note, stalled, manual, otherTab, design, carryOn, confirm, retry, reloadQuote };
 }

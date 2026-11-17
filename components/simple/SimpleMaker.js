@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/router';
 
 import { createProject } from '../../lib/story/client';
+import { BalanceProvider } from '../maker/BalanceContext';
 import ChatPanel from '../maker/ChatPanel';
 import ErrorNotice from '../maker/ErrorNotice';
 import { signInHref } from '../maker/errors';
@@ -138,6 +139,7 @@ function SimpleMakerInner({ id, returnTo }) {
   }
 
   return (
+    <BalanceProvider balance={data.balance}>
     <MakerLayout
       title={project?.title || 'New video'}
       steps={steps}
@@ -163,6 +165,7 @@ function SimpleMakerInner({ id, returnTo }) {
     >
       <div data-script-rev={scriptRev}>{body}</div>
     </MakerLayout>
+    </BalanceProvider>
   );
 }
 

@@ -10,7 +10,7 @@ import StepAudio from '../maker/StepAudio';
 import { Icon, Skeleton, Tile } from '../maker/Tiles';
 import { allStillsReady, isGenerated } from '../maker/steps';
 import { needsRedraw, planReason, scenesOf, startableIds } from './derive';
-import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
+import { Announce, Dock, NeedCredits, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
 import useStartQuote from './useStartQuote';
 import ShotWarnings from '../maker/ShotWarnings';
@@ -49,9 +49,12 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
       {failed && (
         <Tile tone="error" icon={cast.status === 'blocked' ? 'block' : 'alert'} title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'} text="Describe a change below, or try again.">
           {cast.status === 'failed' && (
-            <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('retry', () => retryCast(projectId, cast.id, retry))}>
-              {withPrice('Try again', retry)}
-            </Button>
+            <>
+              <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('retry', () => retryCast(projectId, cast.id, retry))}>
+                {withPrice('Try again', retry)}
+              </Button>
+              <NeedCredits items={[{ price: retry }]} />
+            </>
           )}
         </Tile>
       )}
@@ -92,6 +95,7 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
           <Button type="submit" variant="ghost" size="sm" arrow={false} disabled={busy === 'regen' || !note.trim()}>
             {busy === 'regen' ? 'Making new pictures…' : withPrice('Make new pictures', regen)}
           </Button>
+          <NeedCredits items={[{ price: regen }]} />
         </form>
       )}
       <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
@@ -161,7 +165,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
 
   const action = plan.action;
   const progressText = stageText(action);
-  const pipelineBusy = action.type === 'wait' || plan.busy || (plan.armed && action.type !== 'done');
+  const pipelineBusy = action.type === 'wait' || plan.working;
   const noCast = project.consistent_cast === false;
   const model = audio?.narration;
   // A narrator reads the narrator lines in either mode; a talking script with none has only the characters' voices.
@@ -217,11 +221,13 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
               <p>{Number.isInteger(action.credits) ? 'Nothing is charged until you press the button.' : plan.quoteError ? 'We could not get the price.' : 'Working out the price…'}</p>
               {!Number.isInteger(action.credits) && plan.quoteError && <Button variant="ghost" arrow={false} onClick={plan.reloadQuote}>Try again</Button>}
               <Button disabled={!Number.isInteger(action.credits)} onClick={plan.confirm}>{Number.isInteger(action.credits) ? withPrice('Carry on designing', action.credits) : 'Carry on designing'}</Button>
+              <NeedCredits items={[{ price: action.credits }]} />
             </>
           ) : (
             <>
               <p>{action.what === 'pictures' ? 'The storyboard pictures now cost credits.' : action.what === 'redraw' ? 'Drawing the characters again in the new style now costs credits.' : `The ${action.what} now costs credits.`} Nothing is charged until you press the button.</p>
               <Button onClick={plan.confirm}>{withPrice(action.what === 'pictures' ? 'Make the pictures' : action.what === 'redraw' ? 'Draw the characters again' : `Make the ${action.what}`, action.credits)}</Button>
+              <NeedCredits items={[{ price: action.credits }]} />
             </>
           )}
         </div>
@@ -328,6 +334,7 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
         total={all.quote ? all.quote.total : undefined}
         meta={all.quote ? `${scenes.length} ${scenes.length === 1 ? 'scene' : 'scenes'}, ${shots.filter(isGenerated).length} shots` : undefined}
         hint={hint}
+        needs={all.quote ? <NeedCredits items={[{ price: all.quote.total, label: 'Make my video' }, ...(first.quote && scenes.length > 1 ? [{ price: first.quote.total, label: 'Try scene 1 first' }] : [])]} /> : null}
       >
         {first.quote && scenes.length > 1 && (
           <Button variant="ghost" arrow={false} disabled={Boolean(busy)} onClick={() => start(first.quote, 'first')}>

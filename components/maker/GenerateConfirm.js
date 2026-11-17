@@ -4,6 +4,7 @@ import Link from 'next/link';
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
 import { getBilling, getQuote, startGeneration } from '../../lib/story/client';
+import { GET_CREDITS } from './errors';
 import ErrorNotice from './ErrorNotice';
 import styles from './Steps.module.css';
 
@@ -97,7 +98,7 @@ export default function GenerateConfirm({ open, onClose, project, shotIds, onSta
             <p className={styles.errorNotice} role="alert">
               <strong>Not enough credits</strong>
               <span>You need {count(short)} more credits.</span>
-              <Link href="/app/billing" className={styles.errorAction}>Top up credits</Link>
+              <Link href="/app/billing" className={styles.errorAction}>{GET_CREDITS}</Link>
             </p>
           )}
         </div>

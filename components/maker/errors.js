@@ -20,6 +20,9 @@ function dailyLimitMessage(body) {
   return `You have used your ${n} ${n === 1 ? one : many} for today. Come back tomorrow, or pick a plan for more.`;
 }
 
+/** The one label every "you need credits" action uses. */
+export const GET_CREDITS = 'Get credits';
+
 const num = (n) => Number(n || 0).toLocaleString();
 
 /**
@@ -87,6 +90,15 @@ export function describeError(err, { returnTo } = {}) {
   if (status === 401) {
     return { ...out, title: 'Please sign in', message: 'Your session ended. Sign in again and you will come right back here.', action: { label: 'Sign in', href: signInHref(returnTo) }, signIn: true };
   }
+  if (status === 402 && code === 'plan_required' && err?.body?.topup_ok === true) {
+    // Credits (a top-up too) would pay for this step, so ask for credits, never for a plan.
+    const needed = Number(err?.needed);
+    const available = Number(err?.available) || 0;
+    const message = Number.isFinite(needed) && needed > 0
+      ? `You need ${num(Math.max(0, needed - available))} more credits. This takes ${num(needed)} and you have ${num(available)}.`
+      : 'You need some credits for this step. Get credits to carry on.';
+    return { ...out, title: 'Not enough credits', message, action: { label: GET_CREDITS, href: '/app/billing' } };
+  }
   if (status === 402 && code === 'plan_required') {
     return { ...out, title: 'This step needs a plan', message: server || 'Cast, pictures and video are part of a plan. Pick one to carry on.', action: { label: 'See plans', href: '/app/billing' } };
   }
@@ -97,7 +109,7 @@ export function describeError(err, { returnTo } = {}) {
     const message = known
       ? `You need ${num(Math.max(0, needed - available))} more credits. This takes ${num(needed)} and you have ${num(available)}.`
       : 'You do not have enough credits for this.';
-    return { ...out, title: 'Not enough credits', message, action: { label: 'Top up credits', href: '/app/billing' } };
+    return { ...out, title: 'Not enough credits', message, action: { label: GET_CREDITS, href: '/app/billing' } };
   }
   if (status === 403) {
     return { ...out, title: 'One more thing first', message: server || 'Please confirm your email address, then try again.' };

@@ -12,7 +12,7 @@ import { usePricing } from '../maker/PricingContext';
 import { isGenerated, rerollInfo } from '../maker/steps';
 import { Skeleton } from '../maker/Tiles';
 import { audioIssues, clipsOutOfDate, lastClipAt, nextScenes, renderOutdated, scenesOf, shouldAutoRender } from './derive';
-import { Announce, Check, Dock, ScreenHead, priceText, withPrice } from './parts';
+import { Announce, Check, Dock, NeedCredits, ScreenHead, priceText, withPrice } from './parts';
 import useStartQuote from './useStartQuote';
 import ShotWarnings from '../maker/ShotWarnings';
 import styles from './Simple.module.css';
@@ -89,6 +89,7 @@ function ChangePanel({ scene, status, project, refresh, returnTo }) {
               {busy === shot.id ? 'Making it again…' : price === null ? `Shot ${k} cannot be made again now` : withPrice(`Make shot ${k} again`, price)}
             </Button>
             <span className={styles.hint}>{rerollInfo(status, shot, pricing).text}</span>
+            {price !== null && <NeedCredits items={[{ price }]} />}
           </div>
         );
       })}
@@ -248,6 +249,8 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
   let primary = null;
   let secondary = null;
   let hint = null;
+  // The prices on the bar's buttons, so a balance that cannot cover one says so before the click.
+  const priced = [];
   const manualRender = Boolean(refused) || waitedLong;
   if (gap) {
     primary = <Button onClick={onFinishPlan}>Finish the plan</Button>;
@@ -255,6 +258,8 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
     hint = 'Update the storyboard first, then the prices for the changed scenes show here.';
   } else if (!allReady) {
     if (showNext) {
+      if (nextQ.quote) priced.push({ price: nextQ.quote.total, label: 'Make the next scene' });
+      if (waitingCount > 1 && restQ.quote) priced.push({ price: restQ.quote.total, label: 'Make the rest' });
       primary = (
         <Button disabled={!nextQ.quote || Boolean(busy)} onClick={() => startClips(nextQ.quote, 'next')}>
           {busy === 'next' ? 'Starting…' : nextQ.quote ? withPrice('Make the next scene', nextQ.quote.total) : 'Make the next scene'}
@@ -268,12 +273,14 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
         );
       }
     } else if (failedScene && failedScene.startIds.length > 0) {
+      if (failQ.quote) priced.push({ price: failQ.quote.total });
       primary = (
         <Button disabled={!failQ.quote || Boolean(busy)} onClick={() => startClips(failQ.quote, 'fail')}>
           {busy === 'fail' ? 'Starting…' : failQ.quote ? withPrice(`Try scene ${failedScene.n} again`, failQ.quote.total) : `Try scene ${failedScene.n} again`}
         </Button>
       );
     } else if (outdatedIds.length > 0 && !anyMaking) {
+      if (staleQ.quote) priced.push({ price: staleQ.quote.total });
       primary = (
         <Button disabled={!staleQ.quote || Boolean(busy)} onClick={() => startClips(staleQ.quote, 'stale')}>
           {busy === 'stale' ? 'Starting…' : staleQ.quote ? withPrice('Make the out-of-date scenes again', staleQ.quote.total) : 'Make the out-of-date scenes again'}
@@ -292,6 +299,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
     hint = 'Joining your clips, voice, music and captions.';
   } else if (failedRender || (latestDone && outdated) || (!latestDone && (price !== 0 || manualRender))) {
     const label = failedRender ? 'Try again' : latestDone ? 'Put the video together again' : 'Put the video together';
+    if (price !== null) priced.push({ price });
     primary = <Button disabled={Boolean(busy) || price === null} onClick={renderAgain}>{busy === 'render' ? 'Starting…' : price === null ? label : withPrice(label, price)}</Button>;
     if (latestDone) hint = 'Your clips changed since this video was made.';
   } else if (latestDone) {
@@ -348,6 +356,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
         <div key={i.kind} className={styles.askCard} data-testid={`watch-${i.kind}`}>
           <p>{i.kind === 'voice' ? 'The narration' : 'The music'} {i.status === 'none' ? 'is not made yet' : i.status === 'blocked' ? 'was blocked' : 'did not come out'}, so the video cannot be put together yet.</p>
           <Button disabled={Boolean(busy)} onClick={() => fixAudio(i)}>{busy === i.kind ? 'Starting…' : withPrice(`Make the ${i.kind} again`, i.credits)}</Button>
+          <NeedCredits items={[{ price: i.credits }]} />
         </div>
       ))}
       {refused && !active && (
@@ -418,6 +427,7 @@ export default function Watch({ status, project, refresh, returnTo, onAskChat, g
         label={doneNow && !outdated ? 'Your video' : makingScene ? 'Making your video' : 'Your video'}
         meta={`${scenes.filter((s) => s.state === 'ready').length} of ${scenes.length} scenes ready`}
         hint={hint}
+        needs={<NeedCredits items={priced} />}
       >
         {secondary}
         {primary}

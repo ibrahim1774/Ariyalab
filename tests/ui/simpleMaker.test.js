@@ -451,7 +451,7 @@ describe('screen 2, Check the script', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' }));
     const alert = await screen.findByRole('alert');
     expect(alert).toHaveTextContent('Not enough credits');
-    expect(within(alert).getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
+    expect(within(alert).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
     await new Promise((r) => setTimeout(r, 300));
     expect(client.startCast).toHaveBeenCalledTimes(1);
     expect(calls.filter((c) => c[0] !== 'marker')).toEqual([]);
@@ -562,7 +562,7 @@ describe('screen 3, Check the plan', () => {
     render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
     fireEvent.click(await screen.findByRole('button', { name: 'Make my video (99 credits)' }));
     const alert = await screen.findByRole('alert');
-    expect(within(alert).getByRole('link', { name: 'Top up credits' })).toHaveAttribute('href', '/app/billing');
+    expect(within(alert).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
   });
 
   it('shows progress while pictures are being made and holds the buttons until they are ready', async () => {
@@ -1162,5 +1162,93 @@ describe('fix round 3', () => {
     client.getPlanQuote.mockResolvedValue({ total: 0, castFee: 0, stills: 0, lines: [] });
     fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
     expect(await screen.findByRole('button', { name: 'Carry on designing (included)' })).toBeEnabled();
+  });
+});
+
+describe('e2e round 1: busy states and credit wording', () => {
+  beforeEach(() => { client.getScript.mockResolvedValue(SCRIPT); });
+  const poor = (available) => {
+    client.getBilling.mockResolvedValue({ v2: true, balance: { plan: 0, topup: available, held: 0, available }, history: [] });
+    return { balance: { plan: 0, topup: available, held: 0, available } };
+  };
+
+  it('a design start refused for lack of credits says how many are needed, offers Get credits (no plan), and gives the button back', async () => {
+    const { calls } = fakeServer();
+    client.startCast.mockRejectedValueOnce(new StoryApiError({ status: 402, code: 'plan_required', needed: 90, available: 0, body: { error: 'plan_required', topup_ok: true } }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Not enough credits');
+    expect(alert).toHaveTextContent('You need 90 more credits. This takes 90 and you have 0.');
+    expect(alert).not.toHaveTextContent(/plan/i);
+    expect(within(alert).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
+    // The button is usable again and nothing says it is working.
+    const button = await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' });
+    expect(button).toBeEnabled();
+    expect(screen.queryByText('Designing your video…')).toBeNull();
+    expect(screen.queryByText('Starting your characters')).toBeNull();
+    expect(calls.filter((c) => c[0] !== 'marker')).toEqual([]);
+  });
+
+  it('a plan is still asked for when the server says a plan is required (no topup_ok)', async () => {
+    fakeServer();
+    client.startCast.mockRejectedValueOnce(new StoryApiError({ status: 402, code: 'plan_required', message: 'This step needs a paid plan. Pick a plan to keep going.' }));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This step needs a plan');
+    expect(within(alert).getByRole('link', { name: 'See plans' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' })).toBeEnabled();
+  });
+
+  it('the design button shows how many credits are missing before the click, and stays pressable', async () => {
+    fakeServer(poor(20));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const button = await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' });
+    const need = await screen.findByTestId('need-credits');
+    expect(need).toHaveTextContent('You need 70 more credits.');
+    expect(within(need).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
+    expect(button).toBeEnabled();
+  });
+
+  it('shows no shortfall line when the balance covers the price', async () => {
+    fakeServer();
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('button', { name: 'Looks good, design my video (90 credits)' });
+    await flush();
+    expect(screen.queryByTestId('need-credits')).toBeNull();
+  });
+
+  it('Watch: "Make the next scene (40 credits)" with 30 credits says so before the click; the rest line names its own shortfall', async () => {
+    client.getStatus.mockResolvedValue(watchStatus(poor(30)));
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 40));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    const next = await screen.findByRole('button', { name: 'Make the next scene (40 credits)' });
+    const rest = await screen.findByRole('button', { name: 'Make the rest (80 credits)' });
+    expect(next).toBeEnabled();
+    expect(rest).toBeEnabled();
+    const need = await screen.findByTestId('need-credits');
+    expect(need).toHaveTextContent('Make the next scene: you need 10 more credits.');
+    expect(need).toHaveTextContent('Make the rest: you need 50 more credits.');
+    expect(within(need).getAllByRole('link', { name: 'Get credits' })[0]).toHaveAttribute('href', '/app/billing');
+  });
+
+  it('Watch: nothing is shown when the balance covers the button', async () => {
+    client.getStatus.mockResolvedValue(watchStatus(poor(500)));
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 40));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('button', { name: 'Make the next scene (40 credits)' });
+    await flush();
+    expect(screen.queryByTestId('need-credits')).toBeNull();
+  });
+
+  it('Check the plan: "Make my video" with too little balance shows the shortfall', async () => {
+    client.getStatus.mockResolvedValue(planStatus(poor(50)));
+    client.getQuote.mockImplementation(async (id, ids) => sceneQuote(ids, ids.length * 33));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    await screen.findByRole('button', { name: 'Make my video (99 credits)' });
+    const need = await screen.findByTestId('need-credits');
+    expect(need).toHaveTextContent('Make my video: you need 49 more credits.');
+    expect(need).toHaveTextContent('Try scene 1 first: you need 16 more credits.');
   });
 });

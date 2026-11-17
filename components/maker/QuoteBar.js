@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 
 import { getBilling, getQuote } from '../../lib/story/client';
+import { GET_CREDITS } from './errors';
 import { QUALITY_LABELS } from '../../lib/pricingConstants';
 import { usePricing } from './PricingContext';
 import { estimateCredits } from './steps';
@@ -101,12 +102,12 @@ export default function QuoteBar({ project, shots = [], reloadKey = '' }) {
           </div>
         )}
         {short > 0 && (
-          <Link href="/app/billing" className={styles.topUp}>Top up</Link>
+          <Link href="/app/billing" className={styles.topUp}>{GET_CREDITS}</Link>
         )}
       </div>
       {short > 0 && (
         <p className={styles.short} role="status" aria-live="polite" data-testid="quote-short">
-          You need {count(short)} more credits. <Link href="/app/billing">Top up credits</Link>
+          You need {count(short)} more credits. <Link href="/app/billing">{GET_CREDITS}</Link>
         </p>
       )}
       {(lines.length > 0 || short > 0) && (

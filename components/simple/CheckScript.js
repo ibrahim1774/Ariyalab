@@ -4,7 +4,7 @@ import Button from '../ui/Button';
 import { getScript, updateScene } from '../../lib/story/client';
 import { PURPOSES } from '../maker/StepPurpose';
 import ErrorNotice from '../maker/ErrorNotice';
-import { Announce, Dock, ScreenHead, priceText, withPrice } from './parts';
+import { Announce, Dock, NeedCredits, ScreenHead, priceText, withPrice } from './parts';
 import { stageText } from './usePlanPipeline';
 import styles from './Simple.module.css';
 
@@ -157,7 +157,7 @@ export default function CheckScript({ project, plan, refresh, save: saveProject,
   const violations = script?.violations || [];
   const general = violations.filter((v) => !v.sceneId);
   const q = plan.quote;
-  const working = plan.armed || plan.busy;
+  const working = plan.working;
   const stage = stageText(plan.action);
 
   return (
@@ -213,6 +213,7 @@ export default function CheckScript({ project, plan, refresh, save: saveProject,
         total={q ? q.total : undefined}
         meta={q ? (q.feeLater > 0 ? `Project fee: ${priceText(q.feeLater)}, charged when you make the video` : 'Characters, storyboard, voice and music') : undefined}
         hint={working ? stage || 'Getting started…' : !q && !plan.quoteError ? 'Working out the price…' : null}
+        needs={q ? <NeedCredits items={[{ price: q.total }]} /> : null}
       >
         <Button disabled={!q || working || rewriting || script === undefined || scenes.length === 0} onClick={plan.design}>
           {working ? 'Designing your video…' : q ? withPrice('Looks good, design my video', q.total) : 'Looks good, design my video'}

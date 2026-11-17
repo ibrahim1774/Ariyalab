@@ -391,12 +391,12 @@ describe('stale drafts', () => {
 });
 
 describe('quote strip', () => {
-  it('carries a Top up link in the main row and the full shortfall sentence under Details', async () => {
+  it('carries a Get credits link in the main row and the full shortfall sentence under Details', async () => {
     client.getBilling.mockResolvedValue({ v2: true, balance: { available: 500 }, history: [] });
     const { container } = render(<QuoteBar project={project()} shots={[]} />);
     await screen.findByTestId('quote-short');
     const row = container.querySelector('[class*="row"]');
-    expect(within(row).getByRole('link', { name: 'Top up' })).toHaveAttribute('href', '/app/billing');
+    expect(within(row).getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
     expect(container.querySelector('details')).toHaveTextContent('Short by 310 credits');
   });
 });

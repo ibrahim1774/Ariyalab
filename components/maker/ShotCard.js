@@ -6,6 +6,7 @@ import Pill from '../ui/Pill';
 import { QUALITY_LABELS } from '../../lib/pricingConstants';
 import { makeStills, retryStill, updateShot } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
+import { NeedCredits } from './NeedCredits';
 import { usePricing } from './PricingContext';
 import useMediaQuery from './useMediaQuery';
 import AssetPicker, { AssetThumb } from './AssetPicker';
@@ -103,6 +104,7 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
     media = (
       <Tile tone="error" icon={shot.status === 'blocked' ? 'block' : 'alert'} title={shot.status === 'blocked' ? 'This shot was blocked' : 'This shot did not work'} text={shot.error || 'Change the description or try again.'}>
         {retryNode}
+        {!retry && failed && shot.status !== 'blocked' && shot.retry_credits > 0 && <NeedCredits items={[{ price: shot.retry_credits }]} />}
       </Tile>
     );
   } else if (waiting) {

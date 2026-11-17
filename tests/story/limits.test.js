@@ -129,6 +129,21 @@ describe('assertAllowed', () => {
     await expect(assertAllowed({ userId: randomUUID(), action: 'cast_generate' })).resolves.toMatchObject({ counters: [] });
   });
 
+  it('says whether credits would pay for the step: yes under billing v2 (credits make an account paid), no for a plan-only world', async () => {
+    free();
+    const legacy = await assertAllowed({ userId: randomUUID(), action: 'cast_generate' }).catch((e) => e);
+    expect(legacy).toMatchObject({ status: 402, code: 'plan_required' });
+    expect(legacy.extra.topup_ok).toBe(false);
+    await setConfig('billing_v2', true);
+    const v2 = await assertAllowed({ userId: randomUUID(), action: 'cast_generate' }).catch((e) => e);
+    expect(v2).toMatchObject({ status: 402, code: 'plan_required' });
+    expect(v2.extra.topup_ok).toBe(true);
+    expect(v2.message).not.toMatch(/paid plan/i);
+    const res = makeRes();
+    sendError(res, v2);
+    expect(res.body).toMatchObject({ error: 'plan_required', topup_ok: true });
+  });
+
   it('caps chat messages per project: 30 free, the included 150 when paid', async () => {
     await setConfig('free_limits', { chatPerProject: 2 });
     await setConfig('included', { chat: 3 });
