@@ -105,5 +105,23 @@ describe('a free start that keeps coming back is not sent forever', () => {
     await act(async () => { result.current.retry(); });
     await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(3));
   });
-});
 
+  it('three different characters to pick are all sent: the cap is per start, not per type', async () => {
+    client.pickCast.mockResolvedValue({});
+    const mk = (pickedUpTo) => withScript({
+      project: project({ fee_charged: true, plan_requested: true }),
+      cast: [1, 2, 3].map((n) => ({ id: `c${n}`, name: `P${n}`, status: 'ready', chosen_index: n <= pickedUpTo ? 0 : null, image_url: null, candidates: [{ url: `/${n}.png` }] })),
+    });
+    let status = mk(0);
+    const refresh = vi.fn(async () => {});
+    const { result, rerender } = renderHook(() => usePlanPipeline({ status, screen: 'plan', refresh }));
+    for (let n = 1; n <= 3; n += 1) {
+      await waitFor(() => expect(client.pickCast).toHaveBeenCalledTimes(n));
+      expect(client.pickCast).toHaveBeenLastCalledWith('p1', `c${n}`, 0);
+      status = mk(n); rerender();
+    }
+    await new Promise((r) => setTimeout(r, 50));
+    expect(client.pickCast).toHaveBeenCalledTimes(3);
+    expect(result.current.tired).toBe(false);
+  });
+});

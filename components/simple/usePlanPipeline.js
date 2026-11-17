@@ -187,15 +187,17 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
       const timer = setTimeout(() => setTick((n) => n + 1), wait + 20);
       return () => clearTimeout(timer);
     }
-    // A free start (nothing to pay, nobody pressed for it) is sent by itself at most MAX_AUTO_SENDS times per type; then the
+    // A free start (nothing to pay, nobody pressed for it) is sent by itself at most MAX_AUTO_SENDS times per start; then the
     // customer is asked. A paid, confirmed start is the customer's own press and is not counted.
     const auto = free && !(action.expected > 0);
     if (auto) {
-      if ((autoSends.current.get(action.type) || 0) >= MAX_AUTO_SENDS) {
-        if (tired !== action.type) setTired(action.type);
+      // Counted per start (the same key `sent` uses: a pick per character, stills per shot ids), so only the same start coming
+      // back is capped. resume_cast's key is just its type and does not change between repeats.
+      if ((autoSends.current.get(key) || 0) >= MAX_AUTO_SENDS) {
+        if (tired !== key) setTired(key);
         return undefined;
       }
-      autoSends.current.set(action.type, (autoSends.current.get(action.type) || 0) + 1);
+      autoSends.current.set(key, (autoSends.current.get(key) || 0) + 1);
     }
     inflight.current = true;
     setBusy(true);
@@ -313,7 +315,7 @@ export default function usePlanPipeline({ status, screen, refresh, quoteKey = ''
 
   // Something is really being started or made: a start is in flight, or the customer pressed the button and the next step is
   // a start or a wait. A refusal, a question or a failure is not "working", so no spinner stays behind it.
-  const tiredNow = tired !== '' && tired === action.type;
+  const tiredNow = tired !== '' && tired === actionNow;
   const working = !tiredNow && (busy || (armed && !error && (actionNow !== '' || action.type === 'wait')));
 
   return { quote, quoteError, action, busy, armed, working, tired: tiredNow, error, note, stalled, manual, otherTab, design, carryOn, confirm, retry, reloadQuote };
