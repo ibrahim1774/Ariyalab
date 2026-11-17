@@ -54,6 +54,14 @@ describe('homepage', () => {
     expect(screen.getByRole('contentinfo')).toBeInTheDocument();
   });
 
+  it('shows the product demo right after the hero', () => {
+    const { container } = renderPage();
+    const demo = container.querySelector('[data-demo]');
+    expect(demo).not.toBeNull();
+    expect(container.querySelector('[data-section="hero"]').nextElementSibling).toBe(demo);
+    expect(demo.querySelector('[data-demo-step]')).toHaveAttribute('aria-hidden', 'true');
+  });
+
   it('uses the anchor ids the nav links to', () => {
     const { container } = renderPage();
     for (const id of ['how-it-works', 'pricing', 'faq']) {

@@ -2,6 +2,7 @@ import Head from 'next/head';
 
 import styles from '../styles/HomePage.module.css';
 import Hero from '../components/marketing/Hero';
+import ProductDemo from '../components/marketing/ProductDemo';
 import VideoRail from '../components/marketing/VideoRail';
 import HowItWorks from '../components/marketing/HowItWorks';
 import PricingSection from '../components/marketing/PricingSection';
@@ -20,6 +21,7 @@ export default function Home() {
       </Head>
       <main className={styles.main}>
         <Hero />
+        <ProductDemo />
         <VideoRail />
         <HowItWorks />
         <PricingSection />
