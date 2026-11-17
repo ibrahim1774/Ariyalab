@@ -10,7 +10,7 @@ Every video clip is made with the model's own sound. A finished video reads as o
 
 | key (unchanged) | card name | model (kie id) | picture | cost USD/s | credits/s |
 |---|---|---|---|---|---|
-| economy | Budget | Seedance 2 Mini (`bytedance/seedance-2-mini`) | 720p | 0.041 | 8 |
+| economy | Budget | Seedance 2 Mini (`bytedance/seedance-2-mini`) | 720p | 0.041 | 7 |
 | standard | Standard (recommended) | Gemini Omni 1.2 Flash (`google/gemini-omni-flash-1-2`) | 1080p | 0.05 | 8 |
 | pro_narrated | Pro | Kling 3.0 std, sound on | 720p | 0.1135 | 16 |
 | pro_talking | Pro Max | Kling 3.0 pro, sound on | 1080p | 0.151 | 21 |
