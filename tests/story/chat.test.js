@@ -12,7 +12,8 @@ import { registerMock } from '../../lib/providers/mock.js';
 import { ProviderError } from '../../lib/providers/errors.js';
 import { storyScriptMock } from '../../lib/story/mocks.js';
 import { runWorkerJob, sweep, enqueue as realEnqueue } from '../../lib/story/runner.js';
-import { assertNotDrafting } from '../../lib/story/drafting.js';
+import { assertNoModeRewrite, assertNotDrafting } from '../../lib/story/drafting.js';
+import { updateProject } from '../../lib/story/projects.js';
 import { buildShotList } from '../../lib/story/storyboard.js';
 import { startGeneration, rerollShot } from '../../lib/story/shots.js';
 import { generateCast } from '../../lib/story/cast.js';
@@ -1288,6 +1289,77 @@ describe('simple maker tools', () => {
       const out = await run(ctx, 'set_mode', { mode: 'talking' });
       expect(out).toMatchObject({ ok: false, message: 'Write the script first, then I can switch this.' });
       expect(await scriptJobs(ctx.project.id)).toHaveLength(0);
+    });
+
+    it('R4-1: during a rewrite a project mode, style or cast change is refused with the same 409, nothing counted', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { pressed } = await press(ctx);
+      await pressed();
+      const refused = { ok: false, error: 'drafting_busy', message: 'Your script is being rewritten. This will carry on when it is done.' };
+      expect(await run(ctx, 'set_consistent_cast', { consistent_cast: false })).toMatchObject(refused);
+      expect(await run(ctx, 'set_style', { style: 'anime' })).toMatchObject(refused);
+      await expect(updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { mode: 'talking' } })).rejects.toMatchObject({ code: 'drafting_busy' });
+      await expect(updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { style: 'clay' } })).rejects.toMatchObject({ code: 'drafting_busy' });
+      expect((await projectRow(ctx.project.id)).consistent_cast).toBe(true);
+      // The rewrite itself still lands.
+      await runWorkerJob('script', {});
+      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+    });
+
+    it('R4-2: a script job nobody claimed for 15 minutes is failed by the sweep: count back, card open, the plain failure line', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { pressed, base } = await press(ctx);
+      await pressed();
+      const [job] = await scriptJobs(ctx.project.id);
+      await sweep({ now: new Date(Date.now() + 10 * 60_000) });
+      expect((await scriptJobs(ctx.project.id))[0].status).toBe('queued');
+      await sweep({ now: new Date(Date.now() + 16 * 60_000) });
+      expect((await scriptJobs(ctx.project.id))[0]).toMatchObject({ id: job.id, status: 'failed' });
+      expect(await revisesCounted(ctx.userId)).toBe(base);
+      const out = await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id });
+      expect(out.messages.findLast((m) => m.confirms?.length).confirms[0].state).toBe('open');
+      expect(out.messages.at(-1).text).toBe('That did not work, so nothing changed. Try again.');
+      // Starts are no longer blocked.
+      await expect(assertNoModeRewrite(ctx.project.id)).resolves.toBeUndefined();
+      // A second sweep changes nothing more (the count is not given back twice).
+      await sweep({ now: new Date(Date.now() + 17 * 60_000) });
+      expect(await revisesCounted(ctx.userId)).toBe(base);
+    });
+
+    it('R4-4: a job that gave up after saving the script but before setting the mode says so, and pressing again finishes it with no rewrite and no count', async () => {
+      const ctx = await genProject({ n: 2, clips: true });
+      const { card, pressed, base } = await press(ctx);
+      await pressed();
+      const [job] = await scriptJobs(ctx.project.id);
+      const script = await scriptOf(ctx.project.id);
+      await storyDb().insert('story_scripts', { project_id: ctx.project.id, version: 2, scenes: script.scenes, source: 'revision', instruction: 'x', draft_job_id: job.id });
+      for (let attempt = 1; attempt <= 2; attempt += 1) {
+        await raw.query(`update story_jobs set status = 'running', attempts = $2, started_at = now() - interval '1 hour', run_after = null where id = $1`, [job.id, attempt]);
+        await sweep({ now: new Date(Date.now() + 60_000 * attempt) });
+      }
+      expect((await projectRow(ctx.project.id)).mode).toBe('narrated');
+      const out = await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id });
+      expect(out.messages.at(-1).text).toBe('Your script was rewritten, but the switch did not finish. Press the button again to finish it.');
+      expect(out.messages.findLast((m) => m.confirms?.length).confirms[0].state).toBe('open');
+      expect(await revisesCounted(ctx.userId)).toBe(base);
+      const again = await confirmVia({ projectId: ctx.project.id, confirmId: card.id });
+      expect(again.statusCode).toBe(200);
+      expect(again.body).toMatchObject({ queued: false });
+      expect((await projectRow(ctx.project.id)).mode).toBe('talking');
+      expect(await scriptJobs(ctx.project.id)).toHaveLength(1);
+      expect((await scriptOf(ctx.project.id)).version).toBe(2);
+      expect(await revisesCounted(ctx.userId)).toBe(base);
+      expect((await storyDb().select('story_shots', { project_id: ctx.project.id })).every((sh) => sh.stale)).toBe(true);
+    });
+
+    it('R4-4: a job that ends because the mode already matches posts the normal done line', async () => {
+      const ctx = await genProject({ n: 2 });
+      const { pressed } = await press(ctx);
+      await pressed();
+      await storyDb().update('story_projects', { id: ctx.project.id }, { mode: 'talking' });
+      await runWorkerJob('script', {});
+      const out = await listChat({ userId: ctx.userId, user: ctx.user, projectId: ctx.project.id });
+      expect(out.messages.at(-1).text).toBe('Done. The characters now speak their lines.');
     });
 
     it('with clips already made the card also counts the clips that will need making again, and pressing it marks them', async () => {

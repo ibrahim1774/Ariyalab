@@ -9,6 +9,8 @@ import { setCreditsDb, grantCredits, getBalance, InsufficientCreditsError } from
 import { setPricingDb, _resetPricingCache, getPricing, generatedSeconds } from '../../lib/pricing.js';
 import { speakerOfShot } from '../../lib/story/speakers.js';
 import { registerMock } from '../../lib/providers/mock.js';
+import { ProviderError } from '../../lib/providers/errors.js';
+import { storySettingsMock } from '../../lib/story/mocks.js';
 import { ModerationError } from '../../lib/moderation.js';
 import { FORBIDDEN_NAMES, updateScene } from '../../lib/story/script.js';
 import { STYLES } from '../../lib/story/prompts/styles.js';
@@ -1594,6 +1596,22 @@ describe('story flow: scene settings and neighbouring shots', () => {
     expect([...(await settingsOf(ctx.project.id)).s2]).toEqual([...before.s2]);
   });
 
+  it('R4-3: the settings repair makes at most one model try per project per 10 minutes, with a timeout, and a failed one never errors', async () => {
+    const ctx = await builtProject();
+    await storyDb().update('story_shots', { project_id: ctx.project.id }, { setting: null });
+    const spy = vi.fn(() => { throw new ProviderError('failed', 'down'); });
+    registerMock('story_settings', spy);
+    const run = () => buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
+    await expect(run()).resolves.toMatchObject({ shots: expect.any(Array) });
+    await expect(run()).resolves.toMatchObject({ shots: expect.any(Array) });
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy.mock.calls[0][0].timeoutMs).toBeGreaterThan(0);
+    await storyDb().update('story_projects', { id: ctx.project.id }, { settings_repair_at: new Date(Date.now() - 11 * 60_000).toISOString() });
+    await run();
+    expect(spy).toHaveBeenCalledTimes(2);
+    registerMock('story_settings', storySettingsMock);
+  });
+
   it('an old project (no setting stored) still builds stills and re-plans', async () => {
     const ctx = await builtProject();
     await storyDb().update('story_shots', { project_id: ctx.project.id }, { setting: null });
@@ -1677,6 +1695,8 @@ describe('story flow: scene settings and neighbouring shots', () => {
     // Each scene has one setting; a scene that has one is left alone.
     await storyDb().update('story_shots', { id: after[0].id }, { setting: 'Mine.' });
     await storyDb().update('story_shots', { scene_id: 's3', project_id: ctx.project.id }, { setting: null });
+    // (The repair asks the model at most once per 10 minutes: the first try above has used this turn.)
+    await storyDb().update('story_projects', { id: ctx.project.id }, { settings_repair_at: null });
     await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
     const last = await shotRows(ctx.project.id);
     expect(last[0].setting).toBe('Mine.');

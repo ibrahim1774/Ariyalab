@@ -56,7 +56,7 @@ function SimpleMakerInner({ id, returnTo }) {
   const [openChat, setOpenChat] = useState(0);
   const [chatKey, setChatKey] = useState(0);
   // A script job (the rewrite for a new style) is running: the script screen says so, and reads the new script when it is done.
-  const rewriting = useScriptJob(data.jobs, () => { setScriptRev((n) => n + 1); setChatKey((n) => n + 1); refresh(); });
+  const rewriting = useScriptJob(data.jobs, () => { setScriptRev((n) => n + 1); setChatKey((n) => n + 1); refresh(); }, { ready: !loading && Boolean(project) });
 
   // The server moved the project forward: follow it. Going back is only a view, and ends the moment the server moves on.
   useEffect(() => {

@@ -87,6 +87,16 @@ describe('ChatPanel', () => {
     expect(onChanged).toHaveBeenCalledWith(['script']);
   });
 
+  it('R4-5: a card for a mode the project already has shows the server\'s message, not "Out of date"', async () => {
+    const card = { ...CONFIRM, id: 'c-mode2', tool: 'set_mode', quote: { label: 'The characters speak: This rewrites your script so the characters speak.', credits: 0 }, confirm: { action: 'mode', method: 'POST', body: { mode: 'talking' } } };
+    client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'Shall I?', [card])], usage: { used: 1, limit: 150 } });
+    client.confirmChatAction.mockResolvedValue({ queued: false, message: 'It was already set that way.' });
+    render(<ChatPanel project={project} onChanged={vi.fn()} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Start (included)' }));
+    expect(await screen.findByText('It was already set that way.')).toBeInTheDocument();
+    expect(screen.queryByText('Out of date')).toBeNull();
+  });
+
   it('shows a changed price as an error and keeps the button', async () => {
     client.getChat.mockResolvedValue({ messages: [msg('a1', 'assistant', 'That costs 5 credits.', [CONFIRM])], usage: { used: 1, limit: 150 } });
     client.confirmChatAction.mockRejectedValue(new StoryApiError({ status: 409, code: 'quote_changed', message: 'The price is now 7 credits.' }));

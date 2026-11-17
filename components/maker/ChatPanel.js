@@ -27,7 +27,8 @@ function ConfirmCard({ projectId, item, returnTo, onDone, onStale }) {
     try {
       const out = await client.confirmChatAction(projectId, item.id);
       setMessage(typeof out?.message === 'string' ? out.message : '');
-      setState(out?.queued === false ? 'outdated' : 'used');
+      // A card for something already done answers with the server's words ("It was already set that way."), not "Out of date".
+      setState(out?.queued === false && !out?.message ? 'outdated' : 'used');
       onDone?.();
     } catch (err) {
       if (err?.code === 'confirm_used') setState('used');

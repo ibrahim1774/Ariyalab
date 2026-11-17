@@ -34,7 +34,7 @@ function MakerPageInner({ id, returnTo }) {
   // Bumped when the chat changes the script, so the script step (which loads its own copy) reads it again.
   const [scriptRev, setScriptRev] = useState(0);
   const [chatKey, setChatKey] = useState(0);
-  const rewriting = useScriptJob(jobs, () => { setScriptRev((n) => n + 1); setChatKey((n) => n + 1); refresh?.(); });
+  const rewriting = useScriptJob(jobs, () => { setScriptRev((n) => n + 1); setChatKey((n) => n + 1); refresh?.(); }, { ready: !loading && Boolean(project) });
   const lastFurthest = useRef(null);
 
   const list = stepsFor(project);

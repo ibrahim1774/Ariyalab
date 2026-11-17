@@ -864,6 +864,21 @@ describe('round 1: sources, slicing failures, attention, blocked', () => {
 
 // ---------------------------------------------------------------- view
 
+describe('a mode rewrite is running', () => {
+  const rewriting = (projectId, userId) => storyDb().insert('story_jobs', { project_id: projectId, user_id: userId, kind: 'script', status: 'queued', payload: { task: 'mode', mode: 'talking' } });
+
+  it('narration is refused with the same plain 409 before any hold or count (the narrator lines are about to change); music is not', async () => {
+    const ctx = await newProject();
+    await rewriting(ctx.project.id, ctx.userId);
+    const before = await balance(ctx.userId);
+    await expect(start(ctx, 'narration')).rejects.toMatchObject({ status: 409, code: 'drafting_busy', message: 'Your script is being rewritten. This will carry on when it is done.' });
+    expect(await jobs(ctx.project.id, 'narration')).toHaveLength(0);
+    expect(await balance(ctx.userId)).toEqual(before);
+    expect((await reload(ctx.project.id)).narrations_used).toBe(0);
+    await expect(start(ctx, 'music')).resolves.toBeTruthy();
+  });
+});
+
 describe('getAudio', () => {
   it('shows an empty project with the plan, the voices and the prices', async () => {
     const ctx = await newProject();
