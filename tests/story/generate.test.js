@@ -1354,3 +1354,123 @@ describe('story flow in clip prompts', () => {
     expect(prompts.get(ctx.shots[2].id)).toContain('Just before this: Shot number 2 of the shop.');
   });
 });
+
+describe('a clip is current again only if everything it was made from is unchanged', () => {
+  const patchProject = async (ctx, patch, expectedCredits) => {
+    const { updateProject } = await import('../../lib/story/projects.js');
+    return updateProject({ userId: ctx.userId, id: ctx.project.id, patch, expectedCredits });
+  };
+  const redoTotal = async (ctx, quality) => {
+    const { qualityRedo } = await import('../../lib/story/styleRedo.js');
+    return qualityRedo(await projectRow(ctx.project.id), quality);
+  };
+  // Quality away and back, each step confirmed at the total the customer is shown.
+  const confirmed = async (ctx, patch) => {
+    const asked = await patchProject(ctx, patch).catch((e) => e);
+    return asked?.status === 409 ? patchProject(ctx, patch, asked.extra.credits) : asked;
+  };
+  const roundTrip = async (ctx, away, back) => {
+    await confirmed(ctx, { quality: away });
+    return confirmed(ctx, { quality: back });
+  };
+  const castShot = async (ctx, castName = 'Sam') => {
+    const [c] = await storyDb().insert('story_cast', [
+      { project_id: ctx.project.id, ord: 0, name: castName, description: 'A barber.', status: 'ready', image_url: '/p.png', image_key: 'p', sheet: { url: '/s.png', key: 's', from_key: 'p' } },
+    ]);
+    await storyDb().update('story_shots', { id: ctx.shots[0].id }, { cast_ids: [c.id] });
+    return c;
+  };
+  const madeClips = async (opts = {}) => {
+    const ctx = await newProject({ n: 2, ...opts });
+    if (opts.cast) ctx.cast = await castShot(ctx);
+    await generateAll(ctx);
+    await finishJobs(ctx.project.id);
+    return ctx;
+  };
+
+  it('narrated -> talking, then quality away and back: clips stay out of date and the total counts them, Generate charges it', async () => {
+    const ctx = await madeClips();
+    await patchProject(ctx, { mode: 'talking' });
+    expect((await shotRows(ctx.project.id)).every((s) => s.stale && s.clip_mismatch)).toBe(true);
+    await roundTrip(ctx, 'standard', 'pro_narrated');
+    expect((await shotRows(ctx.project.id)).every((s) => s.stale && s.clip_mismatch)).toBe(true);
+    const back = await redoTotal(ctx, 'pro_narrated');
+    expect(back.count).toBe(2);
+    expect(back.total).toBeGreaterThan(0);
+    // The price shown is the price charged: at the other quality the clips are remade at the full price.
+    await confirmed(ctx, { quality: 'standard' });
+    const redo = await redoTotal(ctx, 'standard');
+    expect(redo.count).toBe(2);
+    expect(redo.total).toBeGreaterThan(0);
+    const before = (await balance(ctx.userId)).available;
+    const { q } = await generateAll(ctx);
+    expect(q.total).toBe(redo.total);
+    expect(before - (await balance(ctx.userId)).available).toBe(redo.total);
+  });
+
+  it('quality and mode changed in ONE update: clips out of date and the total counts them', async () => {
+    const ctx = await madeClips();
+    // Away to standard, then back to the quality the clips were made at together with a mode change, in one update.
+    await confirmed(ctx, { quality: 'standard' });
+    const asked = await patchProject(ctx, { quality: 'pro_narrated', mode: 'talking' }).catch((e) => e);
+    expect(asked).toMatchObject({ status: 409, code: 'quote_changed' });
+    expect(asked.extra.credits).toBeGreaterThan(0);
+    await patchProject(ctx, { quality: 'pro_narrated', mode: 'talking' }, asked.extra.credits);
+    expect((await shotRows(ctx.project.id)).every((s) => s.stale && s.clip_mismatch)).toBe(true);
+    expect((await redoTotal(ctx, 'pro_narrated')).count).toBe(2);
+  });
+
+  it('a character picture changed, then the quality round trip: that shot stays out of date, the others are current again', async () => {
+    const ctx = await madeClips({ cast: true });
+    await storyDb().update('story_cast', { id: ctx.cast.id }, { image_url: '/p2.png', image_key: 'p2', sheet: { url: '/s2.png', key: 's2', from_key: 'p2' } });
+    const { markCastShotsStale } = await import('../../lib/story/cast.js');
+    await markCastShotsStale(ctx.project.id, ctx.cast.id);
+    await roundTrip(ctx, 'standard', 'pro_narrated');
+    const [a, b] = await shotRows(ctx.project.id);
+    expect(a).toMatchObject({ stale: true, clip_mismatch: true });
+    expect(b).toMatchObject({ stale: false, clip_mismatch: false });
+    expect((await redoTotal(ctx, 'pro_narrated')).count).toBe(1);
+  });
+
+  it('the same-characters setting flipped, then the round trip: clips stay out of date', async () => {
+    const ctx = await madeClips({ cast: true });
+    await storyDb().update('story_projects', { id: ctx.project.id }, { consistent_cast: false });
+    const { markCastShotsStale } = await import('../../lib/story/cast.js');
+    await markCastShotsStale(ctx.project.id);
+    await roundTrip(ctx, 'standard', 'pro_narrated');
+    expect((await shotRows(ctx.project.id)).every((s) => s.stale && s.clip_mismatch)).toBe(true);
+    expect((await redoTotal(ctx, 'pro_narrated')).count).toBe(2);
+  });
+
+  it('a pure quality round trip with nothing else changed: current again, total 0, no confirm', async () => {
+    const ctx = await madeClips({ cast: true });
+    await roundTrip(ctx, 'standard', 'pro_narrated');
+    expect((await shotRows(ctx.project.id)).every((s) => !s.stale && !s.clip_mismatch)).toBe(true);
+    expect((await redoTotal(ctx, 'pro_narrated')).total).toBe(0);
+  });
+
+  it('a clip job with no record of its mode, characters and line does not match', async () => {
+    const ctx = await madeClips();
+    const jobs = await storyDb().select('story_jobs', { project_id: ctx.project.id, kind: 'clip', status: 'done' });
+    for (const j of jobs) {
+      const { madeFrom, mode, ...rest } = j.payload;
+      await storyDb().update('story_jobs', { id: j.id }, { payload: rest });
+    }
+    const { clipMatchesAgain } = await import('../../lib/story/storyboard.js');
+    expect(await clipMatchesAgain(ctx.project.id, await shotRow(ctx.shots[0].id), 'pro_narrated')).toBeNull();
+  });
+
+  it('the signature is the same at start time and compare time for an unchanged shot, and the job records the mode', async () => {
+    const ctx = await madeClips({ cast: true });
+    const [job] = (await clipJobs(ctx.project.id)).filter((j) => j.shot_id === ctx.shots[0].id);
+    expect(job.payload.mode).toBe('narrated');
+    expect(typeof job.payload.madeFrom).toBe('string');
+    const { clipMadeFromSignature } = await import('../../lib/story/clipSignature.js');
+    const castRows = await storyDb().select('story_cast', { project_id: ctx.project.id });
+    const allShots = await shotRows(ctx.project.id);
+    const sig = clipMadeFromSignature({ project: await projectRow(ctx.project.id), shot: await shotRow(ctx.shots[0].id), castRows, scenes: [SCENE], allShots });
+    expect(sig).toBe(job.payload.madeFrom);
+    const { clipMatchesAgain } = await import('../../lib/story/storyboard.js');
+    expect(await clipMatchesAgain(ctx.project.id, await shotRow(ctx.shots[0].id), 'pro_narrated')).toEqual({ stale: false });
+  });
+});

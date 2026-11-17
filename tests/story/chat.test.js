@@ -1098,8 +1098,11 @@ describe('simple maker tools', () => {
       const { updateProject } = await import('../../lib/story/projects.js');
       // The clips were "made" at standard by a done clip job each (what clipMatchesAgain reads).
       const shots = await storyDb().select('story_shots', { project_id: ctx.project.id });
+      const { clipMadeFromSignature } = await import('../../lib/story/clipSignature.js');
+      const [now] = await storyDb().select('story_projects', { id: ctx.project.id });
       for (const sh of shots) {
-        await storyDb().insert('story_jobs', { project_id: ctx.project.id, user_id: ctx.userId, kind: 'clip', shot_id: sh.id, status: 'done', payload: { quality: 'standard', description: sh.description, stillKey: sh.still_key, seconds: 3 }, result: { key: sh.clip_key } });
+        const madeFrom = clipMadeFromSignature({ project: now, shot: sh, castRows: [], scenes: [], allShots: shots });
+        await storyDb().insert('story_jobs', { project_id: ctx.project.id, user_id: ctx.userId, kind: 'clip', shot_id: sh.id, status: 'done', payload: { quality: 'standard', description: sh.description, stillKey: sh.still_key, seconds: 3, mode: now.mode ?? null, madeFrom }, result: { key: sh.clip_key } });
       }
       const away = await updateProject({ userId: ctx.userId, id: ctx.project.id, patch: { quality: 'economy' } }).catch((e) => e);
       expect(away).toMatchObject({ status: 409, code: 'quote_changed' });
