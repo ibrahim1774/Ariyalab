@@ -58,7 +58,10 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
   const offLength = shots.length > 0 && target > 0 && (totalSeconds < Math.ceil(target * 0.9) || totalSeconds > Math.floor(target * 1.1));
   const making = shots.some((s) => s.status === 'still_pending');
   // Blocked shots need a new description first, so the batch leaves them out.
-  const needPictures = shots.filter((s) => (s.source || 'generated') !== 'footage' && !s.still_url && s.status !== 'still_pending' && s.status !== 'blocked');
+  // A shot whose character sheet is still being drawn waits (the server does not start it): left out of the price and the start.
+  const wantPictures = shots.filter((s) => (s.source || 'generated') !== 'footage' && !s.still_url && s.status !== 'still_pending' && s.status !== 'blocked');
+  const needPictures = wantPictures.filter((s) => !s.waiting_for_characters);
+  const waitingForCharacters = wantPictures.length - needPictures.length;
   // Pictures are free the first time; a shot that already had one (or replaces one) costs a re-roll. The server says which.
   const picturesCost = needPictures.reduce((n, s) => n + (Number(s.still_credits) || 0), 0);
   // The server's price for every shot, so it can be sent as the price the customer saw.
@@ -95,6 +98,11 @@ export default function StepStoryboard({ project, shots = [], refresh, onNext, r
             )}
             <p className={styles.srOnly} role="status" aria-live="polite">{making ? 'Pictures are being made' : ''}</p>
             {making && <span className={styles.hint}>Pictures are being made. This page updates by itself.</span>}
+            {waitingForCharacters > 0 && (
+              <span className={styles.hint} data-testid="waiting-for-characters">
+                {waitingForCharacters} shot{waitingForCharacters === 1 ? ' is' : 's are'} waiting for your characters to finish. Make pictures again in a moment.
+              </span>
+            )}
           </div>
           {offLength && (
             <p className={styles.hint} data-testid="length-note">

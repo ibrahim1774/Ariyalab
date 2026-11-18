@@ -734,6 +734,20 @@ describe('storyboard step', () => {
     expect(screen.getByRole('button', { name: /Continue to voice and sound/ })).toBeDisabled();
   });
 
+  it('a shot waiting for its character sheet is left out of the pictures price and the start, and says so (no quote_changed loop)', async () => {
+    client.makeStills.mockResolvedValue({});
+    const shots = [
+      shot(1, { status: 'draft', still_url: null, still_credits: DEFAULTS.stillReroll, waiting_for_characters: true }),
+      shot(2, { status: 'draft', still_url: null, still_credits: DEFAULTS.stillReroll }),
+    ];
+    render(<StepStoryboard project={project()} shots={shots} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`Make pictures for 1 shot, ${DEFAULTS.stillReroll} credits`) }));
+    await waitFor(() => expect(client.makeStills).toHaveBeenCalledWith('p1', ['s2'], DEFAULTS.stillReroll));
+    expect(screen.getAllByText(/waiting for your characters/i).length).toBeGreaterThan(0);
+    // The waiting shot's own "Make it again" is off while the characters are drawn.
+    expect(screen.getAllByRole('button', { name: /Make it again/ })[0]).toBeDisabled();
+  });
+
   it('makes a still again and edits a description', async () => {
     client.makeStills.mockResolvedValue({});
     client.updateShot.mockResolvedValue({});

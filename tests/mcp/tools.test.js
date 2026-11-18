@@ -862,6 +862,38 @@ describe('round 1: money', () => {
     expect((await getBalance(user.id)).held).toBe(price);
   });
 
+  it('generate_storyboard leaves shots that wait for a character sheet out of the price and the start, and tells the agent', async () => {
+    const user = newUser();
+    await fund(user.id, 1000);
+    const [project] = await storyDb().insert('story_projects', {
+      user_id: user.id, title: 'Waiting', style: '3d_family', step: 'storyboard', seconds: 15, quality: 'standard', mode: 'narrated', fee_charged: true,
+    });
+    await storyDb().insert('story_scripts', { project_id: project.id, version: 1, scenes: [SCENE], source: 'brief' });
+    const [maya] = await storyDb().insert('story_cast', [{
+      project_id: project.id, ord: 0, name: 'Maya', description: 'F.', status: 'ready', image_url: '/pick.png', image_key: 'pick-Maya', sheet: {},
+    }]);
+    await storyDb().insert('story_jobs', { project_id: project.id, user_id: user.id, kind: 'cast_image', status: 'running', payload: { stage: 'sheet', castId: maya.id, round: 1, fromKey: 'pick-Maya', refs: ['/pick.png'], prompt: 'p' } });
+    await storyDb().insert('story_shots', [0, 1].map((i) => ({
+      project_id: project.id, ord: i, scene_id: 's1', scene_sig: sceneSig(SCENE), description: `Shot ${i + 1} of the shop.`,
+      seconds: 5, quality: 'standard', status: 'draft', still_delivered: true, cast_ids: i === 0 ? [maya.id] : [],
+    })));
+    const one = (await getPricing()).stillReroll;
+    const client = await connect(await tokenFor(user));
+    const quote = await use(client, 'generate_storyboard', { project_id: project.id });
+    expect(quote.data).toMatchObject({ needs_confirmation: true, quote: { total: one } });
+    const ok = await use(client, 'generate_storyboard', { project_id: project.id, confirm_total: one });
+    expect(ok.isError, ok.text).toBe(false);
+    expect(ok.data).toMatchObject({ credits: one, started: 1 });
+    expect(ok.data.waiting_for_characters).toHaveLength(1);
+    expect(ok.data.status_text).toMatch(/waiting for the characters/i);
+    expect(ok.data.status_text).toMatch(/generate_storyboard again/i);
+    // Only the waiting shot is left: no price, no start, a plain wait.
+    const wait = await use(client, 'generate_storyboard', { project_id: project.id });
+    expect(wait.isError, wait.text).toBe(false);
+    expect(wait.data.status_text).toMatch(/waiting for the characters/i);
+    expect(wait.data.quote).toBeUndefined();
+  });
+
   it('Om5: generate_video confirmed twice with the same total charges once', async () => {
     const user = newUser();
     await fund(user.id, 1000);

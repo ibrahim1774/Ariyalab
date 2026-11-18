@@ -1758,6 +1758,7 @@ describe('consistency fixes (sound task 4)', () => {
     expect(await stillJobs(project.id)).toHaveLength(0);
   });
 
+  const shotsViewOf = async (projectId) => (await import('../../lib/story/storyboard.js')).shotsView(projectId);
   describe('scene pictures wait for the character sheets (same characters on)', () => {
     /** Maya's pick is saved and her sheet is `state`: making (a queued sheet job), failed (a failed one), none (no job). */
     async function mayaSheet(project, state) {
@@ -1778,7 +1779,7 @@ describe('consistency fixes (sound task 4)', () => {
       const target = withMaya(shots, maya)[0];
       const before = await balance(userId);
       await expect(generateStills({ userId, projectId: project.id, shotIds: [target.id] }))
-        .rejects.toMatchObject({ status: 409, code: 'cast_sheets_pending' });
+        .rejects.toMatchObject({ status: 409, code: 'cast_sheets_pending', message: 'These pictures are waiting for your characters to finish. Try again in a moment.' });
       expect(await balance(userId)).toEqual(before);
       expect(await stillJobs(project.id)).toHaveLength(0);
     });
@@ -1794,6 +1795,19 @@ describe('consistency fixes (sound task 4)', () => {
       expect((await states()).Maya).toBe('failed');
       await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { sheet: { url: '/sheet/Maya.png', key: 'k', from_key: 'pick-Maya' } });
       expect((await states()).Maya).toBe('ready');
+    });
+
+    it('the shot view carries one flag, waiting_for_characters, computed with the rule the start enforces', async () => {
+      const { project, shots } = await builtProject();
+      const { listShots: list } = await import('../../lib/story/storyboard.js');
+      const flags = async () => Object.fromEntries((await shotsViewOf(project.id)).map((s) => [s.id, s.waiting_for_characters]));
+      expect(Object.values(await flags()).every((v) => v === false)).toBe(true);
+      const maya = await mayaSheet(project, 'making');
+      const f = await flags();
+      for (const s of shots) expect(f[s.id], s.id).toBe((s.cast_ids || []).includes(maya.id));
+      await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+      expect(Object.values(await flags()).every((v) => v === false)).toBe(true);
+      expect(list).toBeTypeOf('function');
     });
 
     it('shots with ready characters start while the others wait, and the price checked is the price of the ones that start', async () => {

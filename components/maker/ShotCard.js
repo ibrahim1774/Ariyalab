@@ -206,11 +206,12 @@ export default function ShotCard({ shot, project, onChanged, returnTo, editable 
           <div className={`${styles.actions} ${more ? styles.actionsOpen : ''}`}>
             {!isFootage && (
               <>
-              <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} title="Make a new picture for this shot"
+              <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked || shot.waiting_for_characters === true} title={shot.waiting_for_characters ? 'Waiting for your characters to finish' : 'Make a new picture for this shot'}
                 onClick={() => run('still', () => makeStills(project.id, [shot.id], ...(Number.isInteger(shot.still_credits) ? [shot.still_credits] : [])))}>
                 {busy === 'still' ? 'Making…' : remakeCost > 0 ? `Make it again, ${remakeCost} credits` : 'Make it again'}
               </Button>
-              {remakeCost > 0 && <NeedCredits items={[{ price: remakeCost }]} />}
+              {shot.waiting_for_characters === true && <span className={styles.hint}>Waiting for your characters to finish.</span>}
+              {remakeCost > 0 && shot.waiting_for_characters !== true && <NeedCredits items={[{ price: remakeCost }]} />}
               </>
             )}
             <Button variant="ghost" size="sm" arrow={false} className={styles.mini} disabled={locked} onClick={() => setEditing(true)}>Edit description</Button>

@@ -653,6 +653,17 @@ describe('round 2', () => {
     expect(await jobCount(draft.project.id)).toBe(0);
   });
 
+  it('D2b: make_picture does not offer a card for a shot whose character sheet is still being drawn', async () => {
+    const { userId, user, project, shots } = await genProject();
+    const [maya] = await storyDb().insert('story_cast', { project_id: project.id, ord: 0, name: 'Maya', description: 'F.', status: 'ready', image_url: '/p.png', image_key: 'pick-m', sheet: {} });
+    await storyDb().insert('story_jobs', { project_id: project.id, user_id: userId, kind: 'cast_image', status: 'running', payload: { stage: 'sheet', castId: maya.id, round: 1, fromKey: 'pick-m', refs: ['/p.png'], prompt: 'p' } });
+    await storyDb().update('story_shots', { id: shots[0].id }, { cast_ids: [maya.id] });
+    const out = await runTool({ userId, user, chatProjectId: project.id, name: 'make_picture', input: { shot_id: shots[0].id } });
+    expect(out).toMatchObject({ ok: false });
+    expect(out.needsConfirm).toBeUndefined();
+    expect(JSON.stringify(out)).toContain('waiting for your characters');
+  });
+
   it('D3: once the action has run, a later failure keeps the card used, so a second press cannot charge again', async () => {
     const { userId, user, project, cast } = await newProject({ cast: { regens_used: 2 } });
     signIn(user);
