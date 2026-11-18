@@ -2,6 +2,7 @@ import { getUserFromRequest, getSupabaseAdmin } from '../../../lib/supabaseServe
 import { getEntitlement } from '../../../lib/entitlement.js';
 import { getBalance } from '../../../lib/credits.js';
 import { isBillingV2 } from '../../../lib/billingFlags.js';
+import { currentPlanFor } from '../../../lib/currentPlan.js';
 import { PLANS, TOPUPS } from '../../../lib/stripe.js';
 
 const HISTORY_LIMIT = 50;
@@ -21,10 +22,10 @@ function legacyOffers() {
 }
 
 /*
- * GET /api/story/billing -> { v2, balance, history }
+ * GET /api/story/billing -> { v2, balance, history, plan }
  *
  * v2 on: balance split from the credit ledger, plus the caller's last 50
- * ledger rows. Zero-delta rows (partial releases and other bookkeeping) are
+ * ledger rows, and `plan` ({ plan, interval, status, renewsAt, endsAt } or null; lib/currentPlan.js, cached). Zero-delta rows (partial releases and other bookkeeping) are
  * left out. v2 off: one number, taken from the existing entitlement.
  */
 export default async function handler(req, res) {
@@ -48,6 +49,7 @@ export default async function handler(req, res) {
     }
 
     const balance = await getBalance(userId, 'video');
+    const plan = await currentPlanFor(userId);
     const { data, error } = await getSupabaseAdmin()
       .from('credit_ledger')
       .select('id, created_at, delta, reason, balance_after')
@@ -60,7 +62,7 @@ export default async function handler(req, res) {
       .order('id', { ascending: false })
       .limit(HISTORY_LIMIT);
     if (error) throw error;
-    return res.status(200).json({ v2: true, balance, history: data || [] });
+    return res.status(200).json({ v2: true, balance, history: data || [], plan });
   } catch (err) {
     console.error('[api/story/billing]', err);
     return res.status(500).json({ error: 'Could not load billing.' });

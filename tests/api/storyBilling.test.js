@@ -36,6 +36,8 @@ vi.mock('../../lib/supabaseServer.js', () => ({
 }));
 vi.mock('../../lib/billingFlags.js', () => ({ isBillingV2: async () => v2 }));
 vi.mock('../../lib/credits.js', () => ({ getBalance: async () => ({ plan: 100, topup: 40, held: 10, available: 130 }) }));
+let plan = null;
+vi.mock('../../lib/currentPlan.js', () => ({ currentPlanFor: async () => plan }));
 vi.mock('../../lib/entitlement.js', () => ({ getEntitlement: async () => ({ creditsRemaining: 7 }) }));
 
 import { PLANS, TOPUPS } from '../../lib/stripe.js';
@@ -46,6 +48,7 @@ const row = (over) => ({ user_id: 'u1', currency: 'video', delta: 5, reason: 'to
 beforeEach(() => {
   signedIn = true;
   v2 = true;
+  plan = null;
   ledgerCalls.length = 0;
   rows = [];
 });
@@ -119,5 +122,23 @@ describe('GET /api/story/billing', () => {
       expect(res.body.offers.topups[k]).toEqual({ usd: t.amountCents / 100, credits: t.credits });
     }
     expect(Object.keys(res.body.offers.topups).sort()).toEqual(['l', 'm', 's']);
+  });
+
+  it('v2 on: carries the current plan, null when there is none', async () => {
+    let res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(res.body.plan).toBeNull();
+    plan = { plan: 'creator', interval: 'year', status: 'active', renewsAt: '2027-01-01T00:00:00.000Z', endsAt: null };
+    res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(res.body.plan).toEqual(plan);
+  });
+
+  it('v2 off: no plan field is looked up', async () => {
+    v2 = false;
+    plan = { plan: 'creator', interval: 'month' };
+    const res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(res.body.plan).toBeUndefined();
   });
 });

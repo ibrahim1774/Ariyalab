@@ -1,6 +1,9 @@
 import { stripe } from '../../../lib/stripe';
 import { getUserFromRequest } from '../../../lib/supabaseServer';
 import { customerForUser } from '../../../lib/grants';
+import { isBillingV2Strict } from '../../../lib/billingFlags';
+import { getPricing } from '../../../lib/pricing';
+import { getOrCreatePortalConfiguration } from '../../../lib/stripePortal';
 
 /*
  * POST /api/billing/portal -> { url }
@@ -10,10 +13,12 @@ import { customerForUser } from '../../../lib/grants';
  * changes, cancel, card and invoices. The customer id never comes from the
  * request. 401 signed out, 404 when the account has no Stripe customer yet.
  *
- * The portal's configuration (which plans can be switched to, proration,
- * downgrades at period end) is set in the Stripe dashboard and is
- * account-wide: the Stripe account is shared with haelabs.live (see
- * docs/go-live.md).
+ * Billing v2 on: the session names this app's OWN portal configuration
+ * (lib/stripePortal.js: only the Ariya v2 plan prices, upgrades invoiced at
+ * once, downgrades at period end). Without one Stripe would use the account
+ * default, which belongs to another product on the shared Stripe account, so
+ * when the configuration cannot be made this answers the plain failure line and
+ * never opens the portal. Billing v2 off: no configuration, as before.
  */
 // Where Stripe sends the customer back. Never from the request's Host header
 // (a forged Host would turn the portal into an open redirect): APP_URL, or in
@@ -39,7 +44,13 @@ export default async function handler(req, res) {
   try {
     const customer = await customerForUser(session.user.id);
     if (!customer) return res.status(404).json({ error: 'There is no billing account yet. Choose a plan first.', code: 'NO_CUSTOMER' });
-    const portal = await stripe().billingPortal.sessions.create({ customer, return_url: `${origin}/app/billing` });
+    const client = stripe();
+    const configuration = (await isBillingV2Strict()) ? await getOrCreatePortalConfiguration(client, await getPricing()) : null;
+    const portal = await client.billingPortal.sessions.create({
+      customer,
+      return_url: `${origin}/app/billing`,
+      ...(configuration ? { configuration } : {}),
+    });
     return res.status(200).json({ url: portal.url });
   } catch (err) {
     console.error('[billing/portal] failed', err);

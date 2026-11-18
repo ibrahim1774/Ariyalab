@@ -32,6 +32,7 @@ function formatDate(value) {
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+const planName = (key) => `${String(key).charAt(0).toUpperCase()}${String(key).slice(1)}`;
 const money = (usd) => `$${usd}`;
 const count = (n) => Number(n || 0).toLocaleString();
 
@@ -53,6 +54,8 @@ export default function BillingPage() {
       } catch {}
       if (!alive) return;
       setBilling(data);
+      // Open on the period the buyer is on, so their plan's card is the one in front of them.
+      if (data.v2 && data.plan?.interval === 'year') setYearly(true);
       if (data.v2) {
         try {
           const r = await fetch('/api/story/pricing');
@@ -105,6 +108,7 @@ export default function BillingPage() {
   }, [busy]);
 
   const balance = billing?.balance;
+  const current = billing?.v2 ? billing.plan : null;
 
   return (
     <>
@@ -158,6 +162,15 @@ export default function BillingPage() {
           </p>
         )}
 
+        {current && (
+          <p className={styles.note} data-testid="current-plan">
+            Your plan: <strong>{planName(current.plan)}</strong>, billed {current.interval === 'year' ? 'yearly' : 'monthly'}.{' '}
+            {current.endsAt
+              ? `Ends on ${formatDate(current.endsAt)}.`
+              : current.renewsAt ? `Renews on ${formatDate(current.renewsAt)}.` : ''}
+          </p>
+        )}
+
         {error && <p className={styles.error} role="alert">{error}</p>}
 
         {offers && (
@@ -174,6 +187,7 @@ export default function BillingPage() {
                 {Object.entries(offers.plans).map(([key, p]) => {
                   const isYear = offers.v2 ? yearly : p.interval === 'year';
                   const usd = offers.v2 && yearly ? (p.yearlyUsd ?? p.usd * 12) : p.usd;
+                  const isCurrent = !!current && offers.v2 && current.plan === key && current.interval === (yearly ? 'year' : 'month');
                   return (
                   <Card key={key} className={styles.offer}>
                     <span className={styles.offerName}>{key}</span>
@@ -181,9 +195,18 @@ export default function BillingPage() {
                     <span className={styles.offerCredits}>
                       {count(p.credits)} credits every {offers.v2 || !isYear ? 'month' : 'year'}{offers.v2 && yearly ? ', billed yearly' : ''}
                     </span>
-                    <Button onClick={() => checkout(`plan-${key}`, offers.v2 ? { plan: key, interval: yearly ? 'year' : 'month' } : { plan: key })} disabled={busy !== null}>
-                      {busy === `plan-${key}` ? 'Redirecting…' : 'Choose plan'}
-                    </Button>
+                    {isCurrent ? (
+                      <Button disabled>Your plan</Button>
+                    ) : current && offers.v2 ? (
+                      // Already on a plan: a second purchase is refused, so a change goes through the billing portal.
+                      <Button onClick={manage} disabled={busy !== null}>
+                        {busy === 'portal' ? 'Opening…' : `Switch to ${planName(key)}`}
+                      </Button>
+                    ) : (
+                      <Button onClick={() => checkout(`plan-${key}`, offers.v2 ? { plan: key, interval: yearly ? 'year' : 'month' } : { plan: key })} disabled={busy !== null}>
+                        {busy === `plan-${key}` ? 'Redirecting…' : 'Choose plan'}
+                      </Button>
+                    )}
                   </Card>
                   );
                 })}

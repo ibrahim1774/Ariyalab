@@ -128,6 +128,9 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   pricing editor becomes a new Stripe price; subscribers keep the price and credits they bought.
 - Plan changes go through the Stripe customer portal: /app/billing has a **Manage billing** button
   (`/api/billing/portal`, a portal session for the signed-in buyer's own customer; the return URL is always `APP_URL`).
+  /app/billing shows the current plan (name, monthly or yearly, renewal date, or "Ends on <date>" when cancellation at
+  period end is pending); the current plan's button reads "Your plan" and the others "Switch to <name>" and open the
+  portal (the plan is read from the buyer's own Stripe customer, cached for a minute: `lib/currentPlan.js`).
   A signed-in buyer who already has a plan (also past_due) is refused at checkout (409). The anonymous pay-first
   funnels can buy a v2 plan; when that purchase is claimed by an account that already has a plan, the new
   subscription is cancelled and its first invoice refunded through Stripe, the new customer is not linked and the
@@ -136,14 +139,38 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   customer with no plan is refused the same way: "Buy the plan while signed in so it joins your account." The same
   check runs on `/api/checkout/confirm` (a second plan bought in another tab). Check one such refund in test mode
   (only mocked so far).
-- Configure the portal in the Stripe dashboard: the v2 Starter, Creator and Studio prices (monthly and yearly) as the
-  products customers may switch between, **upgrades invoiced immediately** (proration "always invoice") and
-  **downgrades at the end of the period**: in the portal's subscription-update settings, schedule both
-  `decreasing_item_amount` and `shortening_interval` changes at the period end. This is defence in depth only: the
-  code credits every plan change by the money it moves (below), however the portal is set. **The portal configuration
-  is account-wide: the Stripe account is shared with haelabs.live**, so check that its settings suit haelabs too (or
-  create a separate portal configuration and pass it), and that haelabs' promotion codes are restricted to haelabs'
-  products before `allow_promotion_codes` checkouts go live here.
+- **The portal is configured by the code, not in the Stripe dashboard** (`lib/stripePortal.js`). With billing v2 on, every
+  portal session names a billing-portal configuration owned by this app. Without one Stripe uses the ACCOUNT default,
+  and the account is shared with other products (its default portal is "Manage your Prime Barber plan", with that
+  product's prices and downgrades applied at once). The first "Manage billing" click creates ours when it is missing,
+  found afterwards by metadata `app=ariyalab` plus a short hash of the settings and plan price ids (so a pricing change
+  makes a new one; the id is cached in memory for 5 minutes). The code only lists and creates configurations: it never
+  updates the account default or any configuration without our metadata. An old one of ours is left active and harmless;
+  deactivate it in the dashboard if you like. Its settings:
+  - headline "Manage your Ariya Lab plan"; payment method update and invoice history on; customer details off;
+  - **cancel** allowed, **at the end of the period** (no proration);
+  - **plan changes** (`subscription_update`, price only, quantity fixed at 1) among ONLY the v2 Starter, Creator and
+    Studio prices, monthly and yearly (the prices are created first when missing);
+  - proration **`always_invoice`**: an upgrade is billed at once, because `lib/grants.js` credits an upgrade only from a
+    paid proration invoice;
+  - **downgrades and shorter intervals at the end of the period** (`schedule_at_period_end` conditions
+    `decreasing_item_amount` and `shortening_interval`: a cheaper plan, or yearly to monthly, starts at the next renewal,
+    nothing is refunded or clawed back mid-period). A longer interval (monthly to yearly) and a dearer plan apply at once.
+  These fields exist on the pinned API version (2024-06-20, `lib/stripe.js`) and on the installed stripe 22.x types; the
+  account's own default API version (2022-08-01) is not used for these calls. Checked in test mode: Stripe accepts and
+  returns all of them.
+  - Billing v2 off: no configuration is passed (today's behaviour, the account default).
+  - If the configuration cannot be made (Stripe error, flag unreadable) the buyer sees "We couldn't open billing. Please
+    try again in a moment." and the cause is logged (`[billing/portal] failed`); the portal is never opened without ours.
+  - Credits are unchanged by this: the code credits every plan change by the money it moves (below), however the portal
+    is set. haelabs' promotion codes must still be restricted to haelabs' products before `allow_promotion_codes`
+    checkouts go live here (the account is shared).
+- **Owner checks and decisions (Stripe account level, not code):**
+  - Stripe Checkout and the portal pages show the Stripe ACCOUNT's name ("Prime Hub" in test), not "Ariya Lab". That can
+    only be changed in Stripe account settings (public business name) or by using a separate Stripe account for Ariya
+    Lab. Owner decision; check it before going live.
+  - Plan credits stay spendable after a subscription ends (cancelled or expired): this task changes nothing there.
+    Owner decision; behaviour as before.
 - How subscription invoices are credited (`lib/grants.js grantForInvoice`; first, renewal and plan-change invoices,
   read line by line):
   - A **period line** (not a proration) gives the plan's allotment for the plan that line paid for: a monthly plan its
@@ -218,7 +245,7 @@ confirm one webhook arrives and is accepted (the runner also polls, so a missing
 
 ## 6. Deploy
 
-Only after steps 1-5 (every migration applied, Stripe webhook and portal configured, kie secret set). billing v2 stays
+Only after steps 1-5 (every migration applied, Stripe webhook configured, portal checked in test mode, kie secret set). billing v2 stays
 off. Then check on the deployed app:
 
 - In the function bundles, ffmpeg is traced into the story worker, analyze, assets and render routes, and `sharp` only

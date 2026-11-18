@@ -3,7 +3,7 @@ import { createTestDb } from '../helpers/db.js';
 import { makeReq, makeRes } from '../helpers/apiMock';
 
 // /api/billing/portal: a portal session for the signed-in buyer's own Stripe customer. Stripe is a stub.
-const S = vi.hoisted(() => ({ user: null, created: [] }));
+const S = vi.hoisted(() => ({ user: null, created: [], v2: false, v2Throws: false, configFails: false, configCalls: 0 }));
 vi.mock('../../lib/stripe', async (importOriginal) => ({
   ...(await importOriginal()),
   stripe: () => ({
@@ -16,6 +16,20 @@ vi.mock('../../lib/stripe', async (importOriginal) => ({
       },
     },
   }),
+}));
+vi.mock('../../lib/billingFlags', () => ({
+  isBillingV2Strict: async () => {
+    if (S.v2Throws) throw new Error('pricing config unreadable');
+    return S.v2;
+  },
+}));
+vi.mock('../../lib/pricing', () => ({ getPricing: async () => ({}) }));
+vi.mock('../../lib/stripePortal', () => ({
+  getOrCreatePortalConfiguration: async () => {
+    S.configCalls += 1;
+    if (S.configFails) throw new Error('stripe is down');
+    return 'bpc_ariya';
+  },
 }));
 vi.mock('../../lib/supabaseServer', () => ({
   getUserFromRequest: async () => (S.user ? { user: S.user, supabase: {} } : null),
@@ -40,6 +54,10 @@ afterAll(async () => {
 beforeEach(() => {
   S.user = null;
   S.created.length = 0;
+  S.v2 = false;
+  S.v2Throws = false;
+  S.configFails = false;
+  S.configCalls = 0;
   vi.stubEnv('APP_URL', 'https://ariyalab.test');
 });
 
@@ -85,5 +103,53 @@ describe('/api/billing/portal', () => {
     await portal(makeReq({ method: 'GET' }), res);
     expect(res.statusCode).toBe(405);
     expect(S.created).toHaveLength(0);
+  });
+
+  describe('billing v2', () => {
+    const buyer = { id: '00000000-0000-4000-8000-0000000000a1', email: 'a@example.test' };
+
+    it('the portal session carries our configuration', async () => {
+      S.v2 = true;
+      S.user = buyer;
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing', configuration: 'bpc_ariya' }]);
+    });
+
+    it('v2 off: no configuration is made or passed (today\'s behaviour)', async () => {
+      S.user = buyer;
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(S.configCalls).toBe(0);
+      expect(S.created[0]).not.toHaveProperty('configuration');
+    });
+
+    it('when the configuration cannot be made the plain line is answered and no portal opens (never the account default)', async () => {
+      S.v2 = true;
+      S.configFails = true;
+      S.user = buyer;
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(500);
+      expect(res.body.error).toBe("We couldn't open billing. Please try again in a moment.");
+      expect(S.created).toHaveLength(0);
+      expect(err).toHaveBeenCalled();
+      err.mockRestore();
+    });
+
+    it('when the billing flag cannot be read the plain line is answered and no portal opens', async () => {
+      S.v2Throws = true;
+      S.user = buyer;
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(500);
+      expect(res.body.error).toBe("We couldn't open billing. Please try again in a moment.");
+      expect(S.created).toHaveLength(0);
+      err.mockRestore();
+    });
   });
 });
