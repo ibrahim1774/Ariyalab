@@ -3,21 +3,11 @@ import { getEntitlement } from '../../../lib/entitlement.js';
 import { getBalance } from '../../../lib/credits.js';
 import { isBillingV2 } from '../../../lib/billingFlags.js';
 import { currentPlanFor } from '../../../lib/currentPlan.js';
+import { planWithin } from '../../../lib/planWait.js';
 import { PLANS, TOPUPS } from '../../../lib/stripe.js';
 
 const HISTORY_LIMIT = 50;
 const PLAN_WAIT_MS = 3000;
-
-// The plan line is cosmetic: never let a slow or failing Stripe hold the balance and history back.
-function planWithin(promise, ms) {
-  return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve({ unknown: true }), ms);
-    promise.then(
-      (plan) => { clearTimeout(timer); resolve({ plan }); },
-      () => { clearTimeout(timer); resolve({ unknown: true }); }
-    );
-  });
-}
 
 // What the existing /api/checkout actually sells today (lib/stripe.js), for the
 // page to show while billing v2 is off.

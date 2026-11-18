@@ -4,6 +4,8 @@ import { customerForUser } from '../../../lib/grants';
 import { isBillingV2Strict } from '../../../lib/billingFlags';
 import { getPricing } from '../../../lib/pricing';
 import { getOrCreatePortalConfiguration } from '../../../lib/stripePortal';
+import { currentPlanFor } from '../../../lib/currentPlan';
+import { planWithin } from '../../../lib/planWait';
 
 /*
  * POST /api/billing/portal -> { url }
@@ -14,7 +16,7 @@ import { getOrCreatePortalConfiguration } from '../../../lib/stripePortal';
  * request. 401 signed out, 404 when the account has no Stripe customer yet.
  *
  * Billing v2 on: the session names this app's OWN portal configuration
- * (lib/stripePortal.js: only the Ariya v2 plan prices, upgrades invoiced at
+ * (lib/stripePortal.js, one of two variants by the customer's plan interval: only the Ariya v2 plan prices, upgrades invoiced at
  * once, downgrades at period end). Without one Stripe would use the account
  * default, which belongs to another product on the shared Stripe account, so
  * when the configuration cannot be made this answers the plain failure line and
@@ -45,7 +47,14 @@ export default async function handler(req, res) {
     const customer = await customerForUser(session.user.id);
     if (!customer) return res.status(404).json({ error: 'There is no billing account yet. Choose a plan first.', code: 'NO_CUSTOMER' });
     const client = stripe();
-    const configuration = (await isBillingV2Strict()) ? await getOrCreatePortalConfiguration(client, await getPricing()) : null;
+    let configuration = null;
+    if (await isBillingV2Strict()) {
+      // A customer who is POSITIVELY known to be on a yearly Ariya plan gets the yearly-only configuration, so a shorter
+      // interval cannot be chosen. Anything else (monthly, no plan, legacy, lookup failed or slow) gets the full one.
+      const looked = await planWithin(currentPlanFor(session.user.id, { fresh: true }), 3000);
+      const yearly = !looked.unknown && looked.plan && !looked.plan.legacy && looked.plan.interval === 'year';
+      configuration = await getOrCreatePortalConfiguration(client, await getPricing(), { variant: yearly ? 'yearly' : 'all' });
+    }
     const portal = await client.billingPortal.sessions.create({
       customer,
       // The marker makes /app/billing read the plan fresh (the buyer may just have changed or cancelled it here).

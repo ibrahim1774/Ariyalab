@@ -169,15 +169,21 @@ describe('/app/billing', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't start the payment. Please try again in a moment.");
   });
 
-  it('when billing cannot open, the portal line is shown; a clear 4xx reason is kept', async () => {
+  it('when billing cannot open, the portal line is shown; a clear 4xx reason is kept; no billing account is plain information', async () => {
     stubBilling(async () => ({ ok: false, status: 500, json: async () => ({ error: 'Could not open billing. Please try again.' }) }));
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: /manage billing/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't open billing. Please try again in a moment.");
     cleanup();
-    stubBilling(async () => ({ ok: false, status: 404, json: async () => ({ error: 'There is no billing account yet. Choose a plan first.' }) }));
+    stubBilling(async () => ({ ok: false, status: 404, json: async () => ({ error: 'There is no billing account yet. Choose a plan first.', code: 'NO_CUSTOMER' }) }));
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: /manage billing/i }));
-    expect(await screen.findByRole('alert')).toHaveTextContent('There is no billing account yet. Choose a plan first.');
+    expect(await screen.findByTestId('billing-info')).toHaveTextContent('There is no billing account yet. Choose a plan first.');
+    expect(screen.queryByRole('alert')).toBeNull();
+    cleanup();
+    stubBilling(async () => ({ ok: false, status: 404, json: async () => ({ error: 'Some other clear reason.' }) }));
+    render(<BillingPage />);
+    fireEvent.click(await screen.findByRole('button', { name: /manage billing/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('Some other clear reason.');
   });
 });

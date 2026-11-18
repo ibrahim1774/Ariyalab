@@ -1,10 +1,17 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 // lib/currentPlan.js: the buyer's current v2 plan from their own Stripe customer, cached. Stripe is a stub.
-const S = vi.hoisted(() => ({ customer: 'cus_1', subs: [], lists: 0, fail: false }));
+const S = vi.hoisted(() => ({ customer: 'cus_1', subs: [], lists: 0, fail: false, schedules: {}, scheduleReads: [], scheduleFail: false }));
 vi.mock('../lib/stripe.js', async (importOriginal) => ({
   ...(await importOriginal()),
   stripe: () => ({
+    subscriptionSchedules: {
+      retrieve: async (id, params) => {
+        S.scheduleReads.push([id, params]);
+        if (S.scheduleFail) throw new Error('schedule read failed');
+        return S.schedules[id];
+      },
+    },
     subscriptions: {
       list: async () => {
         S.lists += 1;
@@ -34,6 +41,9 @@ beforeEach(() => {
   S.subs = [];
   S.lists = 0;
   S.fail = false;
+  S.schedules = {};
+  S.scheduleReads = [];
+  S.scheduleFail = false;
   _resetPlanCache();
 });
 
@@ -48,7 +58,7 @@ describe('currentPlanFor', () => {
   it('a monthly plan: name, interval, renewal date, no end date', async () => {
     S.subs = [sub()];
     expect(await currentPlanFor('u1')).toEqual({
-      plan: 'creator', interval: 'month', legacy: false, status: 'active', renewsAt: new Date(1795000000 * 1000).toISOString(), endsAt: null,
+      plan: 'creator', interval: 'month', legacy: false, status: 'active', renewsAt: new Date(1795000000 * 1000).toISOString(), endsAt: null, pending: null,
     });
   });
 
@@ -151,5 +161,72 @@ describe('currentPlanFor', () => {
     S.fail = false;
     S.subs = [sub()];
     expect(await currentPlanFor('u1')).toMatchObject({ plan: 'creator' });
+  });
+
+  describe('a change scheduled for the period end', () => {
+    const key = (plan, interval, cents, credits) => v2PlanLookupKey({ plan, interval, amountCents: cents, credits });
+    const schedule = (nextLookup, over = {}) => ({
+      id: 'sub_sched_1',
+      status: 'active',
+      current_phase: { start_date: 1790000000, end_date: 1795000000 },
+      phases: [
+        { start_date: 1790000000, end_date: 1795000000, items: [{ price: { id: 'price_1', lookup_key: key('creator', 'month', 4900, 1500) } }] },
+        { start_date: 1795000000, end_date: 1797600000, items: [{ price: { id: 'price_2', lookup_key: nextLookup } }] },
+      ],
+      ...over,
+    });
+
+    it('a subscription without a schedule makes no schedule call and has no pending change', async () => {
+      S.subs = [sub()];
+      const p = await currentPlanFor('u1');
+      expect(S.scheduleReads).toHaveLength(0);
+      expect(p.pending).toBeNull();
+    });
+
+    it('a downgrade at period end is pending: plan, interval and start date', async () => {
+      S.subs = [sub({ schedule: 'sub_sched_1' })];
+      S.schedules.sub_sched_1 = schedule(key('starter', 'month', 2900, 900));
+      const p = await currentPlanFor('u1');
+      expect(p.pending).toEqual({ plan: 'starter', interval: 'month', startsAt: new Date(1795000000 * 1000).toISOString() });
+      expect(S.scheduleReads[0][0]).toBe('sub_sched_1');
+      expect(S.scheduleReads[0][1].expand).toContain('phases.items.price');
+    });
+
+    it('a scheduled interval change on the same plan is pending too', async () => {
+      S.subs = [sub({ schedule: 'sub_sched_1' })];
+      S.schedules.sub_sched_1 = schedule(key('creator', 'year', 49980, 1500));
+      expect((await currentPlanFor('u1')).pending).toMatchObject({ plan: 'creator', interval: 'year' });
+    });
+
+    it('a released or cancelled schedule, or one that changes nothing, is not pending', async () => {
+      S.subs = [sub({ schedule: 'sub_sched_1' })];
+      S.schedules.sub_sched_1 = schedule(key('starter', 'month', 2900, 900), { status: 'released' });
+      expect((await currentPlanFor('u1')).pending).toBeNull();
+      _resetPlanCache();
+      S.schedules.sub_sched_1 = schedule(key('creator', 'month', 4900, 1500));
+      expect((await currentPlanFor('u1')).pending).toBeNull();
+    });
+
+    it('a pending cancellation wins: nothing else is pending', async () => {
+      S.subs = [sub({ schedule: 'sub_sched_1', cancel_at_period_end: true })];
+      S.schedules.sub_sched_1 = schedule(key('starter', 'month', 2900, 900));
+      expect((await currentPlanFor('u1')).pending).toBeNull();
+    });
+
+    it('the schedule read is cached with the plan', async () => {
+      S.subs = [sub({ schedule: 'sub_sched_1' })];
+      S.schedules.sub_sched_1 = schedule(key('starter', 'month', 2900, 900));
+      await currentPlanFor('u1');
+      await currentPlanFor('u1');
+      expect(S.scheduleReads).toHaveLength(1);
+    });
+
+    it('a schedule that cannot be read makes the lookup fail (the page says the plan is unknown), not a wrong "renews as it is"', async () => {
+      S.subs = [sub({ schedule: 'sub_sched_1' })];
+      S.scheduleFail = true;
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await expect(currentPlanFor('u1')).rejects.toThrow('schedule read failed');
+      err.mockRestore();
+    });
   });
 });

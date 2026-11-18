@@ -158,8 +158,27 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   - proration **`always_invoice`**: an upgrade is billed at once, because `lib/grants.js` credits an upgrade only from a
     paid proration invoice;
   - **downgrades and shorter intervals at the end of the period** (`schedule_at_period_end` conditions
-    `decreasing_item_amount` and `shortening_interval`: a cheaper plan, or yearly to monthly, starts at the next renewal,
-    nothing is refunded or clawed back mid-period). A longer interval (monthly to yearly) and a dearer plan apply at once.
+    `decreasing_item_amount` and `shortening_interval`: a cheaper plan starts at the next renewal, nothing is refunded or
+    clawed back mid-period). A dearer plan applies at once.
+  - **Two configurations of ours, chosen per portal session** from the customer's plan interval (`lib/stripePortal.js`
+    variants, metadata `variant`): a customer POSITIVELY known to be on a yearly Ariya plan gets the **yearly-only**
+    configuration (only yearly prices, so no shorter interval can be chosen at all); everyone else (monthly, no plan,
+    legacy plan, or the plan lookup failed or took over 3 seconds) gets the full one with monthly and yearly prices.
+    Reason: in a live test `shortening_interval` did NOT hold back a yearly -> monthly change (Studio yearly to Studio
+    monthly was applied at once and the unused year, $910.80, went to the customer's Stripe balance) although the
+    configuration reads back correctly. The cause was not found (nothing in the Stripe documentation searched explains
+    it; the likely reason is that the monthly price costs more per day than the discounted yearly one, which Stripe may
+    not treat as a "shortening" to schedule). So it is made impossible instead of relied on. A yearly subscriber who wants
+    monthly billing cancels in Manage billing and buys a monthly plan when the year ends (/app/billing says so).
+  - **Observed in test mode, not verified at period end:** a monthly -> yearly change on the SAME plan (Creator monthly to
+    Creator yearly) was scheduled for the period end rather than billed at once (the discounted yearly price is cheaper
+    per day, so Stripe applies the `decreasing_item_amount` rule). Left as it is. What happens at that renewal (the
+    yearly month-0 grant on the renewal invoice) is covered by `lib/grants.js` tests only; no real scheduled change has
+    taken effect yet because test mode here has no test clock. Check one on the first real renewal.
+  - **Undoing a cancellation drops a scheduled downgrade** (Stripe behaviour: cancelling releases the schedule, and "Don't
+    cancel" does not bring it back): the subscription then renews on the CURRENT plan. /app/billing shows
+    "Changes to <Plan> on <date>" (and the plan's card reads "Starts <date>") only while a schedule is really pending, so
+    after such an undo it shows nothing of the kind.
   These fields exist on the pinned API version (2024-06-20, `lib/stripe.js`) and on the installed stripe 22.x types; the
   account's own default API version (2022-08-01) is not used for these calls. Checked in test mode: Stripe accepts and
   returns all of them.

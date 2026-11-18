@@ -3,7 +3,7 @@ import { createTestDb } from '../helpers/db.js';
 import { makeReq, makeRes } from '../helpers/apiMock';
 
 // /api/billing/portal: a portal session for the signed-in buyer's own Stripe customer. Stripe is a stub.
-const S = vi.hoisted(() => ({ user: null, created: [], v2: false, v2Throws: false, configFails: false, configCalls: 0 }));
+const S = vi.hoisted(() => ({ user: null, created: [], v2: false, v2Throws: false, configFails: false, configCalls: 0, variants: [], plan: null, planImpl: null, planCalls: [] }));
 vi.mock('../../lib/stripe', async (importOriginal) => ({
   ...(await importOriginal()),
   stripe: () => ({
@@ -24,9 +24,16 @@ vi.mock('../../lib/billingFlags', () => ({
   },
 }));
 vi.mock('../../lib/pricing', () => ({ getPricing: async () => ({}) }));
+vi.mock('../../lib/currentPlan', () => ({
+  currentPlanFor: (userId, opts) => {
+    S.planCalls.push(opts || {});
+    return S.planImpl ? S.planImpl() : Promise.resolve(S.plan);
+  },
+}));
 vi.mock('../../lib/stripePortal', () => ({
-  getOrCreatePortalConfiguration: async () => {
+  getOrCreatePortalConfiguration: async (_client, _pricing, opts) => {
     S.configCalls += 1;
+    S.variants.push(opts?.variant);
     if (S.configFails) throw new Error('stripe is down');
     return 'bpc_ariya';
   },
@@ -58,6 +65,10 @@ beforeEach(() => {
   S.v2Throws = false;
   S.configFails = false;
   S.configCalls = 0;
+  S.variants = [];
+  S.plan = null;
+  S.planImpl = null;
+  S.planCalls = [];
   vi.stubEnv('APP_URL', 'https://ariyalab.test');
 });
 
@@ -117,12 +128,58 @@ describe('/api/billing/portal', () => {
       expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing?from=portal', configuration: 'bpc_ariya' }]);
     });
 
-    it('v2 off: no configuration is made or passed (today\'s behaviour)', async () => {
+    const planOf = (over) => ({ plan: 'studio', interval: 'month', legacy: false, status: 'active', renewsAt: null, endsAt: null, ...over });
+
+    it('a customer on a yearly Ariya plan gets the yearly-only configuration', async () => {
+      S.v2 = true;
+      S.user = buyer;
+      S.plan = planOf({ interval: 'year' });
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(S.variants).toEqual(['yearly']);
+      expect(S.planCalls).toEqual([{ fresh: true }]);
+    });
+
+    it.each([
+      ['a monthly plan', () => { S.plan = planOf(); }],
+      ['no plan', () => { S.plan = null; }],
+      ['a legacy plan, even a yearly one', () => { S.plan = planOf({ plan: 'yearly', interval: 'year', legacy: true }); }],
+      ['a lookup that fails', () => { S.planImpl = () => Promise.reject(new Error('stripe is down')); }],
+    ])('%s gets the monthly-and-yearly configuration', async (_name, setup) => {
+      S.v2 = true;
+      S.user = buyer;
+      setup();
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(S.variants).toEqual(['all']);
+    });
+
+    it('a lookup that never answers is cut at 3 seconds and the monthly-and-yearly configuration is used', async () => {
+      vi.useFakeTimers();
+      try {
+        S.v2 = true;
+        S.user = buyer;
+        S.planImpl = () => new Promise(() => {});
+        const res = makeRes();
+        const done = portal(makeReq({ method: 'POST' }), res);
+        await vi.advanceTimersByTimeAsync(3100);
+        await done;
+        expect(res.statusCode).toBe(200);
+        expect(S.variants).toEqual(['all']);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('v2 off: no configuration is made or passed (today\'s behaviour), no plan lookup', async () => {
       S.user = buyer;
       const res = makeRes();
       await portal(makeReq({ method: 'POST' }), res);
       expect(res.statusCode).toBe(200);
       expect(S.configCalls).toBe(0);
+      expect(S.planCalls).toHaveLength(0);
       expect(S.created[0]).not.toHaveProperty('configuration');
     });
 

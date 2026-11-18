@@ -33,7 +33,12 @@ function formatDate(value) {
 }
 
 const planName = (key) => `${String(key).charAt(0).toUpperCase()}${String(key).slice(1)}`;
-const money = (usd) => `$${usd}`;
+// Money with two decimals and thousands separators; a whole number of dollars stays whole ("$29", "$1,009.80").
+const money = (usd) => {
+  const n = Number(usd);
+  const whole = Number.isInteger(n);
+  return `$${n.toLocaleString('en-US', { minimumFractionDigits: whole ? 0 : 2, maximumFractionDigits: 2 })}`;
+};
 const count = (n) => Number(n || 0).toLocaleString();
 
 export default function BillingPage() {
@@ -41,6 +46,7 @@ export default function BillingPage() {
   const [offers, setOffers] = useState(null);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [yearly, setYearly] = useState(false);
 
   useEffect(() => {
@@ -89,9 +95,16 @@ export default function BillingPage() {
     if (busy) return;
     setBusy('portal');
     setError('');
+    setInfo('');
     try {
       const res = await fetch('/api/billing/portal', { method: 'POST' });
       const data = await res.json().catch(() => ({}));
+      if (!res.ok && res.status === 404 && data.code === 'NO_CUSTOMER' && typeof data.error === 'string') {
+        // Nothing to manage yet: information, not a failure.
+        setInfo(data.error);
+        setBusy(null);
+        return;
+      }
       if (!res.ok || !data.url) failPayment(res, data, PORTAL_FAILED);
       window.location.href = data.url;
     } catch (err) {
@@ -124,6 +137,9 @@ export default function BillingPage() {
   // The plan could not be read just now: never offer "Choose plan" (they may already have one); the portal decides.
   const planUnknown = !!(billing?.v2 && billing.planUnknown);
   const legacyPlan = !!current?.legacy;
+  // A yearly subscriber cannot move to monthly in the portal (its yearly-only configuration offers no monthly price).
+  const yearlySub = !!current && !legacyPlan && current.interval === 'year';
+  const pending = current?.pending || null;
 
   return (
     <>
@@ -188,12 +204,25 @@ export default function BillingPage() {
                 : current.renewsAt ? `Renews on ${formatDate(current.renewsAt)}.` : ''}
           </p>
         )}
+        {pending && (
+          <p className={styles.note} data-testid="pending-change">
+            Changes to <strong>{planName(pending.plan)}</strong>
+            {pending.interval !== current.interval ? ` (${pending.interval === 'year' ? 'yearly' : 'monthly'})` : ''} on {formatDate(pending.startsAt)}.
+          </p>
+        )}
+        {yearlySub && offers?.v2 && !yearly && (
+          <p className={styles.note} data-testid="yearly-note">
+            To move to monthly billing, cancel in Manage billing and choose a monthly plan when your current year ends.
+          </p>
+        )}
         {legacyPlan && (
           <p className={styles.note} data-testid="legacy-note">
             To move to a new plan, cancel your current plan in Manage billing, then choose a new one here.
           </p>
         )}
         {planUnknown && <p className={styles.note} data-testid="plan-unknown">We couldn&apos;t load your plan just now.</p>}
+
+        {info && <p className={styles.note} data-testid="billing-info">{info}</p>}
 
         {error && <p className={styles.error} role="alert">{error}</p>}
 
@@ -211,6 +240,7 @@ export default function BillingPage() {
                 {Object.entries(offers.plans).map(([key, p]) => {
                   const isYear = offers.v2 ? yearly : p.interval === 'year';
                   const usd = offers.v2 && yearly ? (p.yearlyUsd ?? p.usd * 12) : p.usd;
+                  const isPending = !!pending && offers.v2 && pending.plan === key && pending.interval === (yearly ? 'year' : 'month');
                   const isCurrent = !!current && offers.v2 && current.plan === key && current.interval === (yearly ? 'year' : 'month');
                   return (
                   <Card key={key} className={styles.offer}>
@@ -225,7 +255,9 @@ export default function BillingPage() {
                       </Button>
                     ) : isCurrent ? (
                       <Button disabled>Your plan</Button>
-                    ) : current && offers.v2 ? (
+                    ) : isPending ? (
+                      <Button disabled>Starts {formatDate(pending.startsAt)}</Button>
+                    ) : yearlySub && offers.v2 && !yearly ? null : current && offers.v2 ? (
                       // Already on a plan: a second purchase is refused, so a change goes through the billing portal.
                       <Button onClick={manage} disabled={busy !== null}>
                         {busy === 'portal' ? 'Opening…' : `Switch to ${planName(key)}`}
