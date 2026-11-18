@@ -44,7 +44,10 @@ afterAll(async () => {
   _resetPricingCache();
   await raw?.close();
 });
-beforeEach(() => {
+beforeEach(async () => {
+  // These tests check the money mechanics (hold, split over 3 pictures, settle, release) with a small round price, so the
+  // 2/2/1 split stays readable. The real default (38 credits, derived from the picture cost) is tested in tests/pricing.test.js.
+  await raw.query(`insert into pricing_config (key, value) values ('castRegen', '5'::jsonb) on conflict (key) do update set value = excluded.value`);
   _resetPricingCache();
 });
 afterEach(() => {
