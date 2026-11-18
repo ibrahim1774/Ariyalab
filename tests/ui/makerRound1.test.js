@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { DEFAULTS } from '../../lib/pricingConstants';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -207,7 +208,7 @@ describe('cast retry rules (round 1)', () => {
   });
   it('Try again shows the price after a paid round, and nothing after a free one', () => {
     const { rerender } = render(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], regens_used: 3 }])} />);
-    expect(screen.getByRole('button', { name: 'Try again (5 credits)' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: `Try again (${DEFAULTS.castRegen} credits)` })).toBeInTheDocument();
     rerender(<StepCast {...props([{ id: 'c1', name: 'Maya', status: 'failed', candidates: [], regens_used: 2 }])} />);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
   });

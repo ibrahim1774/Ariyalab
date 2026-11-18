@@ -289,7 +289,7 @@ describe('round 1', () => {
 
     const first = await confirmVia({ projectId: project.id, confirmId: card.id });
     expect(first.statusCode).toBe(200);
-    expect(first.body.charged).toBe(5);
+    expect(first.body.charged).toBe((await getPricing()).castRegen);
     const ledger = await ledgerCount(userId);
     const balance = await getBalance(userId);
     expect((await storyDb().select('story_cast', { id: cast.id }))[0].regens_used).toBe(3);

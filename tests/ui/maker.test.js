@@ -17,7 +17,7 @@ vi.mock('next/router', () => ({ useRouter: () => routerMock }));
 
 const client = await import('../../lib/story/client');
 const { StoryApiError } = client;
-const { creditsForVideo, QUALITY_LABELS } = await import('../../lib/pricingConstants');
+const { creditsForVideo, QUALITY_LABELS, DEFAULTS } = await import('../../lib/pricingConstants');
 const { estimateCredits } = await import('../../components/maker/steps');
 const { describeError } = await import('../../components/maker/errors');
 const { default: ErrorNotice } = await import('../../components/maker/ErrorNotice');
@@ -692,7 +692,7 @@ describe('cast step', () => {
     fireEvent.change(screen.getByLabelText('Describe a change'), { target: { value: 'Round glasses' } });
     fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
     await waitFor(() => expect(client.regenCast).toHaveBeenCalledWith('p1', 'c1', 'Round glasses'));
-    expect(screen.getByText(/2 regenerations included for Maya, then 5 credits each/)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`2 regenerations included for Maya, then ${DEFAULTS.castRegen} credits each`))).toBeInTheDocument();
   });
 
   it('marks the picked option and offers the own image control (the asset picker)', () => {
@@ -738,7 +738,7 @@ describe('storyboard step', () => {
     client.makeStills.mockResolvedValue({});
     client.updateShot.mockResolvedValue({});
     render(<StepStoryboard project={project()} shots={[shot(1)]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
-    fireEvent.click(screen.getByRole('button', { name: /Make it again, 2 credits/ }));
+    fireEvent.click(screen.getByRole('button', { name: new RegExp(`Make it again, ${DEFAULTS.stillReroll} credits`) }));
     await waitFor(() => expect(client.makeStills).toHaveBeenCalledWith('p1', ['s1']));
     fireEvent.click(screen.getByRole('button', { name: 'Edit description' }));
     fireEvent.change(screen.getByLabelText('Description of shot 1'), { target: { value: 'A new idea' } });
