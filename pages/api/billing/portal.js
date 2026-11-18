@@ -50,9 +50,13 @@ export default async function handler(req, res) {
     let configuration = null;
     if (await isBillingV2Strict()) {
       // A customer who is POSITIVELY known to be on a yearly Ariya plan gets the yearly-only configuration, so a shorter
-      // interval cannot be chosen. Anything else (monthly, no plan, legacy, lookup failed or slow) gets the full one.
-      const looked = await planWithin(currentPlanFor(session.user.id, { fresh: true }), 3000);
-      const yearly = !looked.unknown && looked.plan && !looked.plan.legacy && looked.plan.interval === 'year';
+      // interval cannot be chosen. A customer positively known to have no plan, a monthly plan or a legacy plan gets the
+      // full one. An UNKNOWN plan (lookup failed or took over 3 seconds) is retried once; still unknown, no portal opens
+      // at all: the full configuration would let a yearly subscriber switch to monthly at once.
+      let looked = await planWithin(currentPlanFor(session.user.id, { fresh: true }), 3000);
+      if (looked.unknown) looked = await planWithin(currentPlanFor(session.user.id, { fresh: true }), 3000);
+      if (looked.unknown) throw new Error('could not read the customer\'s plan; not opening the portal');
+      const yearly = !!looked.plan && !looked.plan.legacy && looked.plan.interval === 'year';
       configuration = await getOrCreatePortalConfiguration(client, await getPricing(), { variant: yearly ? 'yearly' : 'all' });
     }
     const portal = await client.billingPortal.sessions.create({

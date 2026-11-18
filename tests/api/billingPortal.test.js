@@ -145,7 +145,6 @@ describe('/api/billing/portal', () => {
       ['a monthly plan', () => { S.plan = planOf(); }],
       ['no plan', () => { S.plan = null; }],
       ['a legacy plan, even a yearly one', () => { S.plan = planOf({ plan: 'yearly', interval: 'year', legacy: true }); }],
-      ['a lookup that fails', () => { S.planImpl = () => Promise.reject(new Error('stripe is down')); }],
     ])('%s gets the monthly-and-yearly configuration', async (_name, setup) => {
       S.v2 = true;
       S.user = buyer;
@@ -156,19 +155,62 @@ describe('/api/billing/portal', () => {
       expect(S.variants).toEqual(['all']);
     });
 
-    it('a lookup that never answers is cut at 3 seconds and the monthly-and-yearly configuration is used', async () => {
+    it('an unknown plan is retried once: fails once, then a yearly plan -> the yearly-only configuration', async () => {
+      S.v2 = true;
+      S.user = buyer;
+      let n = 0;
+      S.planImpl = () => (++n === 1 ? Promise.reject(new Error('stripe is down')) : Promise.resolve(planOf({ interval: 'year' })));
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(S.planCalls).toEqual([{ fresh: true }, { fresh: true }]);
+      expect(S.variants).toEqual(['yearly']);
+    });
+
+    it('fails once, then a monthly plan -> the full configuration', async () => {
+      S.v2 = true;
+      S.user = buyer;
+      let n = 0;
+      S.planImpl = () => (++n === 1 ? Promise.reject(new Error('stripe is down')) : Promise.resolve(planOf()));
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(200);
+      expect(S.variants).toEqual(['all']);
+    });
+
+    it('the plan stays unknown after the retry: no portal session at all (never the full configuration), the plain line, the cause logged', async () => {
+      S.v2 = true;
+      S.user = buyer;
+      S.planImpl = () => Promise.reject(new Error('stripe is down'));
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const res = makeRes();
+      await portal(makeReq({ method: 'POST' }), res);
+      expect(res.statusCode).toBe(500);
+      expect(res.body.error).toBe("We couldn't open billing. Please try again in a moment.");
+      expect(S.created).toHaveLength(0);
+      expect(S.configCalls).toBe(0);
+      expect(S.planCalls).toHaveLength(2);
+      expect(err).toHaveBeenCalled();
+      err.mockRestore();
+    });
+
+    it('a lookup that never answers is cut at 3 seconds, retried once, then the plain line and no session', async () => {
       vi.useFakeTimers();
+      const err = vi.spyOn(console, 'error').mockImplementation(() => {});
       try {
         S.v2 = true;
         S.user = buyer;
         S.planImpl = () => new Promise(() => {});
         const res = makeRes();
         const done = portal(makeReq({ method: 'POST' }), res);
-        await vi.advanceTimersByTimeAsync(3100);
+        await vi.advanceTimersByTimeAsync(6200);
         await done;
-        expect(res.statusCode).toBe(200);
-        expect(S.variants).toEqual(['all']);
+        expect(res.statusCode).toBe(500);
+        expect(res.body.error).toBe("We couldn't open billing. Please try again in a moment.");
+        expect(S.created).toHaveLength(0);
+        expect(S.planCalls).toHaveLength(2);
       } finally {
+        err.mockRestore();
         vi.useRealTimers();
       }
     });

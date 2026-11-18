@@ -202,6 +202,14 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   3 seconds the page shows balance and history at once, says "We couldn't load your plan just now." and its plan buttons
   read "Manage billing" instead of "Choose plan" (the checkout's 409 still guards a second plan).
 - **Owner checks and decisions (Stripe account level, not code):**
+  - **Cancel applies to every subscription on the Stripe customer (owner decision):** Stripe's portal lists ALL
+    subscriptions of the shared Stripe customer, and our configuration allows cancel. A person who also subscribes to
+    another product of the owner on the same Stripe customer could cancel that product from the Ariya portal (this was
+    equally true under the account default). Options: accept it, or use a separate Stripe account or separate customers
+    for Ariya Lab.
+  - If the plan of a customer cannot be read (Stripe slow or failing), Manage billing is retried once and then answers
+    "We couldn't open billing. Please try again in a moment." instead of opening a portal (a yearly subscriber must never
+    get the monthly-and-yearly configuration by accident).
   - Stripe Checkout and the portal pages show the Stripe ACCOUNT's name ("Prime Hub" in test), not "Ariya Lab". That can
     only be changed in Stripe account settings (public business name) or by using a separate Stripe account for Ariya
     Lab. Owner decision; check it before going live.

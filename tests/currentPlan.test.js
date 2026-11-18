@@ -221,11 +221,13 @@ describe('currentPlanFor', () => {
       expect(S.scheduleReads).toHaveLength(1);
     });
 
-    it('a schedule that cannot be read makes the lookup fail (the page says the plan is unknown), not a wrong "renews as it is"', async () => {
+    it('a schedule that cannot be read leaves the plan known with pending null, and logs once', async () => {
       S.subs = [sub({ schedule: 'sub_sched_1' })];
       S.scheduleFail = true;
       const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await expect(currentPlanFor('u1')).rejects.toThrow('schedule read failed');
+      const p = await currentPlanFor('u1');
+      expect(p).toMatchObject({ plan: 'creator', interval: 'month', pending: null });
+      expect(err).toHaveBeenCalledTimes(1);
       err.mockRestore();
     });
   });
