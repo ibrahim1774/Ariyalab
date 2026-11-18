@@ -21,6 +21,10 @@ import {
   _setStoryboardDeps, FREE_FIRST_TRIES, STALE_CLAIM_MS, PENDING_PLAN_MS, sceneSig, _clearSettledStale,
 } from '../../lib/story/storyboard.js';
 import { holdCredits } from '../../lib/credits.js';
+import { DEFAULTS } from '../../lib/pricingConstants.js';
+
+// The paid picture redo price (lib/pricingConstants.js derives it from the picture cost: 10 credits).
+const REROLL = DEFAULTS.stillReroll;
 import { updateProject } from '../../lib/story/projects.js';
 import { readFileSync } from 'node:fs';
 import { enqueue } from '../../lib/story/runner.js';
@@ -706,15 +710,15 @@ describe('generateStills', () => {
     const { userId, project, shots } = await stilledProject();
     const before = await balance(userId);
     const out = await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
-    expect(out.charged).toBe(2);
+    expect(out.charged).toBe(REROLL);
     const job = (await stillJobs(project.id)).at(-1);
-    expect(job.cost_credits).toBe(2);
+    expect(job.cost_credits).toBe(REROLL);
     expect(job.hold_id).toBeTruthy();
-    expect((await balance(userId)).held).toBe(2);
+    expect((await balance(userId)).held).toBe(REROLL);
     await finishJobs(project.id);
     const after = await balance(userId);
     expect(after.held).toBe(0);
-    expect(before.available - after.available).toBe(2);
+    expect(before.available - after.available).toBe(REROLL);
   });
 
   it('reads the re-roll price from pricing', async () => {
@@ -746,7 +750,7 @@ describe('generateStills', () => {
     ]);
     expect(results.filter((r) => r.status === 'fulfilled' && r.value.queued.length === 1)).toHaveLength(1);
     expect((await stillJobs(project.id)).filter((j) => j.shot_id === shots[0].id)).toHaveLength(2);
-    expect((await balance(userId)).held).toBe(2);
+    expect((await balance(userId)).held).toBe(REROLL);
   });
 
   it('is a 409 for a shot whose still is still being made', async () => {
@@ -805,7 +809,7 @@ describe('retry', () => {
     await finishJobs(project.id);
     expect((await shotRow(shots[0].id)).status).toBe('still_ready');
     const out = await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id] });
-    expect(out.charged).toBe(2);
+    expect(out.charged).toBe(REROLL);
   });
 
   it('a paid re-roll that fails is refunded, and its retry holds the same price again (a retry never charges twice)', async () => {
@@ -817,15 +821,15 @@ describe('retry', () => {
     expect(bal.available).toBe(1000);
     expect(bal.held).toBe(0);
     const views = (await listShots({ userId, projectId: project.id })).shots;
-    expect(views.find((s) => s.id === shots[0].id).retry_credits).toBe(2);
+    expect(views.find((s) => s.id === shots[0].id).retry_credits).toBe(REROLL);
 
     const out = await generateStills({ userId, projectId: project.id, shotIds: [shots[0].id], retry: true });
-    expect(out.charged).toBe(2);
+    expect(out.charged).toBe(REROLL);
     const job = (await stillJobs(project.id)).at(-1);
     expect(job.payload.kind).toBe('retry');
-    expect(job.cost_credits).toBe(2);
+    expect(job.cost_credits).toBe(REROLL);
     bal = await balance(userId);
-    expect(bal.held).toBe(2);
+    expect(bal.held).toBe(REROLL);
   });
 
   it('is refused when the last attempt did not fail, is pending, was blocked, or never happened', async () => {
@@ -1087,7 +1091,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
     const ctx = await stilledProject();
     const shot = ctx.shots[0];
     const holdId = randomUUID();
-    await holdCredits({ userId: ctx.userId, currency: 'video', amount: 2, projectId: ctx.project.id, holdId });
+    await holdCredits({ userId: ctx.userId, currency: 'video', amount: REROLL, projectId: ctx.project.id, holdId });
     await storyDb().update('story_shots', { id: shot.id }, {
       status: 'still_pending', still_round: shot.still_round + 1, still_hold_id: holdId,
       still_claimed_at: new Date().toISOString(), still_prev: { status: 'still_ready', stale: false, error: null },
@@ -1102,10 +1106,10 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
   ]) {
     it(`a claim left by a crash (hold made, no job) is released and reset by ${name}`, async () => {
       const ctx = await crashedAfterHold();
-      expect((await balance(ctx.userId)).held).toBe(2);
+      expect((await balance(ctx.userId)).held).toBe(REROLL);
       await age('story_shots', ctx.shot.id, 'still_claimed_at', STALE_CLAIM_MS + 1000);
       await run(ctx);
-      expect((await balance(ctx.userId)).held).toBe(name === 'generateStills' ? 2 : 0);
+      expect((await balance(ctx.userId)).held).toBe(name === 'generateStills' ? REROLL : 0);
       const row = await shotRow(ctx.shot.id);
       expect(row).toMatchObject({ status: 'still_ready', still_round: ctx.shot.still_round + 1, still_hold_id: null });
     });
@@ -1120,7 +1124,7 @@ describe('round 1: holds are never left behind (S1, S7)', () => {
     await age('story_shots', b.shots[0].id, 'still_claimed_at', STALE_CLAIM_MS + 1000);
     await updateShot({ userId: b.userId, projectId: b.project.id, shotId: b.shots[1].id, patch: { quality: 'standard' } });
     expect((await shotRow(b.shots[0].id)).status).toBe('still_pending');
-    expect((await balance(b.userId)).held).toBe(2);
+    expect((await balance(b.userId)).held).toBe(REROLL);
   });
 });
 
@@ -1158,16 +1162,16 @@ describe('round 1: rebuilds (S2, S10)', () => {
   it('replacement shots of a scene that already had pictures are paid; a first build is free', async () => {
     const ctx = await stilledProject();
     const first = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots;
-    expect(first.every((s) => s.still_credits === 2)).toBe(true);
+    expect(first.every((s) => s.still_credits === REROLL)).toBe(true);
     await editScene(ctx, 's2', 'Leo walks in soaked from the rain.');
     const { shots } = await buildShotList({ userId: ctx.userId, projectId: ctx.project.id });
     const s2 = shots.filter((s) => s.scene_id === 's2');
-    expect(s2.every((s) => !s.still_url && s.still_credits === 2)).toBe(true);
+    expect(s2.every((s) => !s.still_url && s.still_credits === REROLL)).toBe(true);
     await editScene(ctx, 's2', 'Leo walks in dry this time.');
     const again = (await buildShotList({ userId: ctx.userId, projectId: ctx.project.id })).shots.filter((s) => s.scene_id === 's2');
-    expect(again.every((s) => s.still_credits === 2)).toBe(true);
+    expect(again.every((s) => s.still_credits === REROLL)).toBe(true);
     const out = await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [again[0].id] });
-    expect(out.charged).toBe(2);
+    expect(out.charged).toBe(REROLL);
     const fresh = await builtProject();
     expect((await listShots({ userId: fresh.userId, projectId: fresh.project.id })).shots.every((s) => s.still_credits === 0)).toBe(true);
   });
@@ -1226,16 +1230,16 @@ describe('round 1: prices and caps (S3, S6, S8, S9, S5)', () => {
       expect((await shotRow(id)).status).toBe('failed');
     }
     const view = (await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots[0];
-    expect(view.still_credits).toBe(2);
+    expect(view.still_credits).toBe(REROLL);
     expect(view.retry_credits).toBe(0);
-    expect((await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] })).charged).toBe(2);
+    expect((await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id] })).charged).toBe(REROLL);
   });
 
   it('onDone for a shot that is gone releases the hold instead of settling', async () => {
     const ctx = await stilledProject();
     await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [ctx.shots[0].id] });
     const job = (await stillJobs(ctx.project.id)).at(-1);
-    expect((await balance(ctx.userId)).held).toBe(2);
+    expect((await balance(ctx.userId)).held).toBe(REROLL);
     await storyDb().remove('story_shots', { id: ctx.shots[0].id });
     await stillHandler.onDone(job, { url: '/x.png', key: 'x' });
     const bal = await balance(ctx.userId);
@@ -1274,8 +1278,8 @@ describe('round 1 follow-up', () => {
       expect(out.charged).toBe(0);
       await finishJobs(ctx.project.id);
     }
-    expect((await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots[0].retry_credits).toBe(2);
-    expect((await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id], retry: true })).charged).toBe(2);
+    expect((await listShots({ userId: ctx.userId, projectId: ctx.project.id })).shots[0].retry_credits).toBe(REROLL);
+    expect((await generateStills({ userId: ctx.userId, projectId: ctx.project.id, shotIds: [id], retry: true })).charged).toBe(REROLL);
   });
 
   it('stillAttemptCost: a retry of a free attempt after 3 free retries costs stillReroll; a paid retry keeps its price', () => {
@@ -1293,7 +1297,7 @@ describe('round 2', () => {
     const ctx = await stilledProject();
     const shot = ctx.shots[0];
     const holdId = randomUUID();
-    await holdCredits({ userId: ctx.userId, currency: 'video', amount: 2, projectId: ctx.project.id, holdId });
+    await holdCredits({ userId: ctx.userId, currency: 'video', amount: REROLL, projectId: ctx.project.id, holdId });
     await storyDb().update('story_shots', { id: shot.id }, {
       status: 'still_pending', still_round: shot.still_round + 1, still_hold_id: holdId,
       still_claimed_at: new Date().toISOString(), still_prev: { status: 'still_ready', stale: false, error: null },
@@ -1324,7 +1328,7 @@ describe('round 2', () => {
     expect(row.still_key).not.toContain(orphan.id);
     const bal = await balance(ctx.userId);
     expect(bal.held).toBe(0);
-    expect(bal.available).toBe(1000 - 2);
+    expect(bal.available).toBe(1000 - REROLL);
   });
 
   it('T3: a title edit re-plans the scene, keeps verbatim shots and their clips, and asks nothing about clips (T6)', async () => {
@@ -1480,7 +1484,7 @@ describe('round 3', () => {
     const ctx = await stilledProject();
     const shot = ctx.shots[0];
     const holdId = randomUUID();
-    await holdCredits({ userId: ctx.userId, currency: 'video', amount: 2, projectId: ctx.project.id, holdId });
+    await holdCredits({ userId: ctx.userId, currency: 'video', amount: REROLL, projectId: ctx.project.id, holdId });
     await releaseHold({ holdId });
     await storyDb().update('story_shots', { id: shot.id }, {
       status: 'still_pending', still_round: shot.still_round + 1, still_hold_id: holdId,
@@ -1752,6 +1756,90 @@ describe('consistency fixes (sound task 4)', () => {
     await expect(generateStills({ userId, projectId: project.id, shotIds: [withCast.id] })).rejects.toMatchObject({ status: 409, code: 'cast_needed', message: expect.stringContaining(c.name) });
     expect(await balance(userId)).toEqual(before);
     expect(await stillJobs(project.id)).toHaveLength(0);
+  });
+
+  describe('scene pictures wait for the character sheets (same characters on)', () => {
+    /** Maya's pick is saved and her sheet is `state`: making (a queued sheet job), failed (a failed one), none (no job). */
+    async function mayaSheet(project, state) {
+      const [maya] = await storyDb().select('story_cast', { project_id: project.id, name: 'Maya' });
+      await storyDb().update('story_cast', { id: maya.id }, { sheet: {} });
+      if (state !== 'none') {
+        const job = await enqueue({ projectId: project.id, kind: 'cast_image', payload: { stage: 'sheet', castId: maya.id, round: 1, fromKey: maya.image_key, refs: [maya.image_url], prompt: 'sheet' } });
+        if (state === 'failed') await storyDb().update('story_jobs', { id: job.id }, { status: 'failed', applied_at: new Date().toISOString() });
+      }
+      return maya;
+    }
+    const withMaya = (shots, maya) => shots.filter((s) => (s.cast_ids || []).includes(maya.id));
+    const withoutMaya = (shots, maya) => shots.filter((s) => !(s.cast_ids || []).includes(maya.id) && (s.cast_ids || []).length);
+
+    it('a shot whose character sheet is still being drawn does not start, costs nothing and is told to wait', async () => {
+      const { userId, project, shots } = await builtProject();
+      const maya = await mayaSheet(project, 'making');
+      const target = withMaya(shots, maya)[0];
+      const before = await balance(userId);
+      await expect(generateStills({ userId, projectId: project.id, shotIds: [target.id] }))
+        .rejects.toMatchObject({ status: 409, code: 'cast_sheets_pending' });
+      expect(await balance(userId)).toEqual(before);
+      expect(await stillJobs(project.id)).toHaveLength(0);
+    });
+
+    it('the cast view says what each sheet is doing: ready, making, failed or none', async () => {
+      const { project } = await builtProject();
+      const { castView } = await import('../../lib/story/cast.js');
+      const states = async () => Object.fromEntries((await castView(await storyDb().select('story_cast', { project_id: project.id }))).map((c) => [c.name, c.sheet_state]));
+      expect(await states()).toEqual({ Maya: 'ready', Leo: 'ready' });
+      await mayaSheet(project, 'making');
+      expect((await states()).Maya).toBe('making');
+      await storyDb().update('story_jobs', { project_id: project.id, kind: 'cast_image' }, { status: 'failed', applied_at: new Date().toISOString() });
+      expect((await states()).Maya).toBe('failed');
+      await storyDb().update('story_cast', { project_id: project.id, name: 'Maya' }, { sheet: { url: '/sheet/Maya.png', key: 'k', from_key: 'pick-Maya' } });
+      expect((await states()).Maya).toBe('ready');
+    });
+
+    it('shots with ready characters start while the others wait, and the price checked is the price of the ones that start', async () => {
+      const { userId, project, shots } = await builtProject();
+      const maya = await mayaSheet(project, 'making');
+      const waiting = withMaya(shots, maya);
+      const free = shots.filter((s) => !waiting.includes(s));
+      expect(waiting.length).toBeGreaterThan(0);
+      expect(free.length).toBeGreaterThan(0);
+      const out = await generateStills({ userId, projectId: project.id, shotIds: shots.map((s) => s.id), expectedCredits: 0 });
+      expect(new Set(out.queued)).toEqual(new Set(free.map((s) => s.id)));
+      expect(out.refused.filter((r) => r.reason === 'waiting_for_characters').map((r) => r.shotId).sort()).toEqual(waiting.map((s) => s.id).sort());
+      expect(await stillJobs(project.id)).toHaveLength(free.length);
+    });
+
+    it('when the sheet is ready the picture starts with the sheet as its reference', async () => {
+      const { userId, project, shots } = await builtProject();
+      const maya = await mayaSheet(project, 'making');
+      await storyDb().update('story_cast', { id: maya.id }, { sheet: { url: '/sheet/Maya.png', key: 'sheet-Maya', from_key: maya.image_key } });
+      await storyDb().update('story_jobs', { project_id: project.id, kind: 'cast_image' }, { status: 'done', applied_at: new Date().toISOString() });
+      const target = withMaya(shots, maya)[0];
+      await generateStills({ userId, projectId: project.id, shotIds: [target.id] });
+      expect((await stillJobs(project.id)).at(-1).payload.refs).toContain('/sheet/Maya.png');
+    });
+
+    it('a sheet that failed or never came: the picture starts as today (with the picked picture) and the shot carries a warning', async () => {
+      for (const state of ['failed', 'none']) {
+        const { userId, project, shots } = await builtProject();
+        const maya = await mayaSheet(project, state);
+        const target = withMaya(shots, maya)[0];
+        const out = await generateStills({ userId, projectId: project.id, shotIds: [target.id] });
+        expect(out.queued).toEqual([target.id]);
+        expect((await stillJobs(project.id)).at(-1).payload.refs).toContain('/pick/Maya.png');
+        const warning = out.shots.find((x) => x.id === target.id).warnings.find((w) => w.code === 'character_sheet_failed');
+        if (state === 'failed') expect(warning.message).toContain('Maya');
+        else expect(warning).toBeUndefined(); // an own picture never has a sheet: nothing to warn about
+      }
+    });
+
+    it('different people in every scene: sheets are not looked at', async () => {
+      const { userId, project, shots } = await builtProject();
+      const maya = await mayaSheet(project, 'making');
+      await storyDb().update('story_projects', { id: project.id }, { consistent_cast: false });
+      const out = await generateStills({ userId, projectId: project.id, shotIds: [withMaya(shots, maya)[0].id] });
+      expect(out.queued).toHaveLength(1);
+    });
   });
 
   it('e. the shot view says which characters are left out: no picture, over the picture limit, over the Kling limit, no sheet', async () => {

@@ -93,6 +93,28 @@ describe('what the pipeline does next', () => {
     expect(nextPlanAction(paid, { confirmed: { pictures: 2 } })).toEqual({ type: 'stills', ids: ['a'], expected: 2 });
     expect(nextPlanAction(paid, { confirmed: { pictures: 0 } }).type).toBe('ask');
   });
+  it('same characters: a shot waits for the character sheets (a wait, never stuck), the others start; a failed sheet is not waited for', () => {
+    const maya = castRow({ id: 'cm', name: 'Maya', sheet_state: 'making' });
+    const leo = castRow({ id: 'cl', name: 'Leo', sheet_state: 'ready' });
+    const base = { cast: [maya, leo], project: project({ step: 'storyboard' }) };
+    const both = [shot({ id: 'a', cast_ids: ['cm'] }), shot({ id: 'b', ord: 1, cast_ids: ['cl'] }), shot({ id: 'c', ord: 2, cast_ids: [] })];
+    // The server refuses the shot with Maya while her sheet is drawn, so the screen sends only the others.
+    expect(nextPlanAction(st({ ...base, shots: both }))).toEqual({ type: 'stills', ids: ['b', 'c'], expected: 0 });
+    // Only waiting shots left: a wait for the characters, not a start and not "blocked".
+    expect(nextPlanAction(st({ ...base, shots: [both[0]] }))).toEqual({ type: 'wait', what: ['sheets'] });
+    // The sheet is done (or failed, or never came): the picture starts.
+    for (const sheet_state of ['ready', 'failed', 'none']) {
+      const cast = [castRow({ id: 'cm', name: 'Maya', sheet_state }), leo];
+      expect(nextPlanAction(st({ ...base, cast, shots: [both[0]] }))).toEqual({ type: 'stills', ids: ['a'], expected: 0 });
+    }
+    // Different people in every scene: sheets are not looked at.
+    expect(nextPlanAction(st({ ...base, project: project({ step: 'storyboard', consistent_cast: false }), shots: [both[0]] }))).toEqual({ type: 'stills', ids: ['a'], expected: 0 });
+  });
+  it('a price asked for pictures counts only the shots that can start now', () => {
+    const maya = castRow({ id: 'cm', sheet_state: 'making' });
+    const shots = [shot({ id: 'a', cast_ids: ['cm'], still_credits: 10 }), shot({ id: 'b', ord: 1, cast_ids: [], still_credits: 10 })];
+    expect(nextPlanAction(st({ cast: [maya], project: project({ step: 'storyboard' }), shots }))).toEqual({ type: 'ask', what: 'pictures', credits: 10, ids: ['b'] });
+  });
   it('waits for pictures being made, and never auto-retries a failed picture', () => {
     const base = { cast: [castRow()], project: project({ step: 'storyboard' }) };
     expect(nextPlanAction(st({ ...base, shots: [shot({ status: 'still_pending' })] }))).toMatchObject({ type: 'wait', what: ['pictures'] });

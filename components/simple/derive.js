@@ -192,7 +192,12 @@ export function nextPlanAction(status, { confirmed = {}, now = Date.now(), quote
     } else {
       if (gen.some((s) => s.status === 'still_pending')) waits.push('pictures');
       if (gen.some((s) => lacksPicture(s) && (s.status === 'failed' || s.status === 'blocked'))) blocked.push('pictures');
-      const need = gen.filter((s) => lacksPicture(s) && (s.status === 'draft' || s.status === 'ready'));
+      const missing = gen.filter((s) => lacksPicture(s) && (s.status === 'draft' || s.status === 'ready'));
+      // Same characters: a picture does not start while a character in the shot still has its sheet drawn (the server refuses it,
+      // lib/story/storyboard.js generateStills). Those shots wait; the rest start now. A failed sheet is not waited for.
+      const sheetMaking = (s) => project.consistent_cast !== false && (s.cast_ids || []).some((id) => cast.find((c) => c.id === id)?.sheet_state === 'making');
+      const need = missing.filter((s) => !sheetMaking(s));
+      if (missing.some(sheetMaking)) waits.push('sheets');
       if (need.length) {
         const credits = need.reduce((n, s) => n + (Number(s.still_credits) || 0), 0);
         const ids = need.map((s) => s.id);

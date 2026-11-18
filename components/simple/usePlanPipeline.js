@@ -52,6 +52,7 @@ export function stageText(action) {
     const w = action.what || [];
     if (w.includes('script')) return 'Rewriting your script';
     if (w.includes('characters')) return 'Drawing your characters';
+    if (w.includes('sheets')) return 'Getting your characters ready for the pictures';
     if (w.includes('pictures')) return 'Drawing the storyboard pictures';
     if (w.includes('voice')) return 'Recording the narration';
     if (w.includes('music')) return 'Composing the music';
