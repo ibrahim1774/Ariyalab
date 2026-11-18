@@ -89,14 +89,40 @@ describe('currentPlanFor', () => {
   });
 
   it('fresh skips the cache and refreshes it (a change made in the portal shows at once)', async () => {
-    S.subs = [sub()];
-    expect((await currentPlanFor('u1')).endsAt).toBeNull();
-    S.subs = [sub({ cancel_at_period_end: true })];
-    expect((await currentPlanFor('u1')).endsAt).toBeNull(); // still the cached one
-    expect((await currentPlanFor('u1', { fresh: true })).endsAt).not.toBeNull();
-    expect(S.lists).toBe(2);
-    expect((await currentPlanFor('u1')).endsAt).not.toBeNull(); // the cache now holds the fresh read
-    expect(S.lists).toBe(2);
+    vi.useFakeTimers();
+    try {
+      S.subs = [sub()];
+      expect((await currentPlanFor('u1')).endsAt).toBeNull();
+      S.subs = [sub({ cancel_at_period_end: true })];
+      await vi.advanceTimersByTimeAsync(5000);
+      expect((await currentPlanFor('u1')).endsAt).toBeNull(); // a normal read: still the cached one
+      expect((await currentPlanFor('u1', { fresh: true })).endsAt).not.toBeNull();
+      expect(S.lists).toBe(2);
+      expect((await currentPlanFor('u1')).endsAt).not.toBeNull(); // the cache now holds the fresh read
+      expect(S.lists).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a forced fresh read is limited to one per user every 5 seconds; inside the window it is served from the cache', async () => {
+    vi.useFakeTimers();
+    try {
+      S.subs = [sub()];
+      await currentPlanFor('u1', { fresh: true });
+      expect(S.lists).toBe(1);
+      S.subs = [sub({ cancel_at_period_end: true })];
+      await vi.advanceTimersByTimeAsync(4000);
+      expect((await currentPlanFor('u1', { fresh: true })).endsAt).toBeNull();
+      expect(S.lists).toBe(1);
+      await currentPlanFor('u2', { fresh: true }); // another user is not held back
+      expect(S.lists).toBe(2);
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await currentPlanFor('u1', { fresh: true })).endsAt).not.toBeNull();
+      expect(S.lists).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('the cache is capped at 500 users, oldest dropped', async () => {

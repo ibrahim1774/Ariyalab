@@ -171,6 +171,11 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
     checkouts go live here (the account is shared).
 - **Owner check after changing plan prices:** open Manage billing as a subscriber who is still on the OLD price (test
   mode) and confirm the portal offers the switch. (Subscribers on an old price still pay it until they switch.)
+- **Older prices are offered to everyone (owner decision):** the portal offers the older active v2 plan prices to EVERY
+  subscriber, not only to those on them. After a price rise, a subscriber on another plan can therefore still switch
+  to the old, lower price of a plan, and the portal then shows two prices for one plan. When nobody should be able to
+  switch to an old plan price any more, archive that price in Stripe (subscribers already on it keep it until they
+  change plan), then open Manage billing again to check the list.
 - **/app/billing and the portal return:** the portal returns to `/app/billing?from=portal` (and a checkout started from
   that page to `?from=checkout`); that visit reads the plan fresh, bypassing the one-minute cache, and drops the marker
   from the address. A buyer on an older (legacy) plan sees it with one line: cancel it in Manage billing, then choose a
