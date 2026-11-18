@@ -7,7 +7,13 @@ vi.mock('stripe', () => ({
   default: class FakeStripe {
     constructor() {
       this.prices = {
-        list: async ({ lookup_keys: keys }) => ({ data: F.prices.filter((p) => keys.includes(p.lookup_key)) }),
+        list: async ({ lookup_keys: keys, active, type }) => {
+          let pool = F.prices;
+          if (keys) pool = pool.filter((p) => keys.includes(p.lookup_key));
+          if (active !== undefined) pool = pool.filter((p) => p.active === active);
+          if (type === 'recurring') pool = pool.filter((p) => p.recurring);
+          return { data: pool, has_more: false };
+        },
         create: async (params) => {
           const p = { id: `price_${F.prices.length + 1}`, active: true, ...params };
           F.prices.push(p);
@@ -74,7 +80,7 @@ describe('getOrCreatePortalConfiguration', () => {
   });
 
   it('offers only the v2 plan prices: every plan, monthly and yearly, nothing else', async () => {
-    F.prices.push({ id: 'price_other', active: true, lookup_key: 'prime_barber_monthly', product: 'prod_prime' });
+    F.prices.push({ id: 'price_other', active: true, lookup_key: 'prime_barber_monthly', product: 'prod_prime', recurring: { interval: 'month' } });
     await getOrCreatePortalConfiguration(stripe(), {});
     const products = F.created[0].features.subscription_update.products;
     const priceIds = products.flatMap((p) => p.prices);

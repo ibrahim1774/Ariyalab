@@ -48,10 +48,22 @@ export default function BillingPage() {
     const empty = { v2: false, balance: { available: 0 }, history: [], offers: null };
     (async () => {
       let data = empty;
+      // Back from the portal or a checkout the plan may have just changed: ask for a fresh read, then clean the address.
+      let search = '';
+      try { search = window.location?.search || ''; } catch {}
+      const params = new URLSearchParams(search);
+      const returning = ['portal', 'checkout'].includes(params.get('from'));
       try {
-        const r = await fetch('/api/story/billing');
+        const r = await fetch(returning ? '/api/story/billing?fresh=1' : '/api/story/billing');
         if (r.ok) data = await r.json();
       } catch {}
+      if (returning) {
+        try {
+          params.delete('from');
+          const rest = params.toString();
+          window.history.replaceState(null, '', `${window.location.pathname}${rest ? `?${rest}` : ''}`);
+        } catch {}
+      }
       if (!alive) return;
       setBilling(data);
       // Open on the period the buyer is on, so their plan's card is the one in front of them.
@@ -96,7 +108,7 @@ export default function BillingPage() {
       const res = await fetch('/api/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...body, returnTo: '/app/billing' }),
+        body: JSON.stringify({ ...body, returnTo: '/app/billing?from=checkout' }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok || !data.url) failPayment(res, data, CHECKOUT_FAILED);
@@ -109,6 +121,9 @@ export default function BillingPage() {
 
   const balance = billing?.balance;
   const current = billing?.v2 ? billing.plan : null;
+  // The plan could not be read just now: never offer "Choose plan" (they may already have one); the portal decides.
+  const planUnknown = !!(billing?.v2 && billing.planUnknown);
+  const legacyPlan = !!current?.legacy;
 
   return (
     <>
@@ -164,12 +179,21 @@ export default function BillingPage() {
 
         {current && (
           <p className={styles.note} data-testid="current-plan">
-            Your plan: <strong>{planName(current.plan)}</strong>, billed {current.interval === 'year' ? 'yearly' : 'monthly'}.{' '}
-            {current.endsAt
-              ? `Ends on ${formatDate(current.endsAt)}.`
-              : current.renewsAt ? `Renews on ${formatDate(current.renewsAt)}.` : ''}
+            Your plan: <strong>{planName(current.plan)}</strong>, billed {current.interval === 'year' ? 'yearly' : 'monthly'}
+            {legacyPlan ? ' (an older plan)' : ''}.{' '}
+            {current.status === 'past_due'
+              ? 'Payment problem: update your card in Manage billing.'
+              : current.endsAt
+                ? `Ends on ${formatDate(current.endsAt)}.`
+                : current.renewsAt ? `Renews on ${formatDate(current.renewsAt)}.` : ''}
           </p>
         )}
+        {legacyPlan && (
+          <p className={styles.note} data-testid="legacy-note">
+            To move to a new plan, cancel your current plan in Manage billing, then choose a new one here.
+          </p>
+        )}
+        {planUnknown && <p className={styles.note} data-testid="plan-unknown">We couldn&apos;t load your plan just now.</p>}
 
         {error && <p className={styles.error} role="alert">{error}</p>}
 
@@ -195,7 +219,11 @@ export default function BillingPage() {
                     <span className={styles.offerCredits}>
                       {count(p.credits)} credits every {offers.v2 || !isYear ? 'month' : 'year'}{offers.v2 && yearly ? ', billed yearly' : ''}
                     </span>
-                    {isCurrent ? (
+                    {legacyPlan && offers.v2 ? null : planUnknown && offers.v2 ? (
+                      <Button onClick={manage} disabled={busy !== null}>
+                        {busy === 'portal' ? 'Opening…' : 'Manage billing'}
+                      </Button>
+                    ) : isCurrent ? (
                       <Button disabled>Your plan</Button>
                     ) : current && offers.v2 ? (
                       // Already on a plan: a second purchase is refused, so a change goes through the billing portal.

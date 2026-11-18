@@ -48,7 +48,7 @@ describe('currentPlanFor', () => {
   it('a monthly plan: name, interval, renewal date, no end date', async () => {
     S.subs = [sub()];
     expect(await currentPlanFor('u1')).toEqual({
-      plan: 'creator', interval: 'month', status: 'active', renewsAt: new Date(1795000000 * 1000).toISOString(), endsAt: null,
+      plan: 'creator', interval: 'month', legacy: false, status: 'active', renewsAt: new Date(1795000000 * 1000).toISOString(), endsAt: null,
     });
   });
 
@@ -68,13 +68,45 @@ describe('currentPlanFor', () => {
     expect((await currentPlanFor('u1')).endsAt).toBe(new Date(1796000000 * 1000).toISOString());
   });
 
-  it('ignores ended subscriptions, other products\' prices and legacy plans', async () => {
-    S.subs = [
-      sub({ status: 'canceled' }),
-      sub({}, 'prime_barber_monthly'),
-      sub({}, 'ariyalab_monthly_v1'),
-    ];
+  it('ignores ended subscriptions and other products\' prices', async () => {
+    S.subs = [sub({ status: 'canceled' }), sub({}, 'prime_barber_monthly')];
     expect(await currentPlanFor('u1')).toBeNull();
+  });
+
+  it('a legacy plan is returned too, marked legacy', async () => {
+    S.subs = [sub({}, 'ariyalab_pro_v1')];
+    expect(await currentPlanFor('u1')).toMatchObject({ plan: 'pro', interval: 'month', legacy: true });
+  });
+
+  it('a v2 plan wins over a legacy one when both are live', async () => {
+    S.subs = [sub({}, 'ariyalab_pro_v1'), sub()];
+    expect(await currentPlanFor('u1')).toMatchObject({ plan: 'creator', legacy: false });
+  });
+
+  it('past_due keeps its status so the page can say the payment failed', async () => {
+    S.subs = [sub({ status: 'past_due' })];
+    expect((await currentPlanFor('u1')).status).toBe('past_due');
+  });
+
+  it('fresh skips the cache and refreshes it (a change made in the portal shows at once)', async () => {
+    S.subs = [sub()];
+    expect((await currentPlanFor('u1')).endsAt).toBeNull();
+    S.subs = [sub({ cancel_at_period_end: true })];
+    expect((await currentPlanFor('u1')).endsAt).toBeNull(); // still the cached one
+    expect((await currentPlanFor('u1', { fresh: true })).endsAt).not.toBeNull();
+    expect(S.lists).toBe(2);
+    expect((await currentPlanFor('u1')).endsAt).not.toBeNull(); // the cache now holds the fresh read
+    expect(S.lists).toBe(2);
+  });
+
+  it('the cache is capped at 500 users, oldest dropped', async () => {
+    S.subs = [sub()];
+    for (let i = 0; i < 501; i += 1) await currentPlanFor(`user-${i}`);
+    expect(S.lists).toBe(501);
+    await currentPlanFor('user-500'); // newest: still cached
+    expect(S.lists).toBe(501);
+    await currentPlanFor('user-0'); // oldest: dropped, read again
+    expect(S.lists).toBe(502);
   });
 
   it('is cached per user: the second read makes no Stripe call', async () => {
@@ -84,10 +116,10 @@ describe('currentPlanFor', () => {
     expect(S.lists).toBe(1);
   });
 
-  it('a Stripe failure answers null (the page shows no plan), logs, and is not cached', async () => {
+  it('a Stripe failure throws (the caller says the plan is unknown), logs, and is not cached', async () => {
     S.fail = true;
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
-    expect(await currentPlanFor('u1')).toBeNull();
+    await expect(currentPlanFor('u1')).rejects.toThrow('stripe is down');
     expect(err).toHaveBeenCalled();
     err.mockRestore();
     S.fail = false;

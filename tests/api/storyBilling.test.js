@@ -37,7 +37,14 @@ vi.mock('../../lib/supabaseServer.js', () => ({
 vi.mock('../../lib/billingFlags.js', () => ({ isBillingV2: async () => v2 }));
 vi.mock('../../lib/credits.js', () => ({ getBalance: async () => ({ plan: 100, topup: 40, held: 10, available: 130 }) }));
 let plan = null;
-vi.mock('../../lib/currentPlan.js', () => ({ currentPlanFor: async () => plan }));
+let planImpl = null;
+const planCalls = [];
+vi.mock('../../lib/currentPlan.js', () => ({
+  currentPlanFor: (userId, opts) => {
+    planCalls.push(opts || {});
+    return planImpl ? planImpl() : Promise.resolve(plan);
+  },
+}));
 vi.mock('../../lib/entitlement.js', () => ({ getEntitlement: async () => ({ creditsRemaining: 7 }) }));
 
 import { PLANS, TOPUPS } from '../../lib/stripe.js';
@@ -49,6 +56,8 @@ beforeEach(() => {
   signedIn = true;
   v2 = true;
   plan = null;
+  planImpl = null;
+  planCalls.length = 0;
   ledgerCalls.length = 0;
   rows = [];
 });
@@ -140,5 +149,49 @@ describe('GET /api/story/billing', () => {
     const res = makeRes();
     await handler(makeReq({ method: 'GET' }), res);
     expect(res.body.plan).toBeUndefined();
+  });
+
+  it('?fresh=1 asks for a fresh plan read; without it the cached one is fine', async () => {
+    await handler(makeReq({ method: 'GET' }), makeRes());
+    await handler(makeReq({ method: 'GET', query: { fresh: '1' } }), makeRes());
+    expect(planCalls).toEqual([{}, { fresh: true }]);
+  });
+
+  it('a plan lookup that never answers is cut at 3 seconds: balance and history come, plan is null and unknown', async () => {
+    vi.useFakeTimers();
+    try {
+      planImpl = () => new Promise(() => {});
+      rows = [row({ id: 1, delta: 5 })];
+      const res = makeRes();
+      const done = handler(makeReq({ method: 'GET' }), res);
+      await vi.advanceTimersByTimeAsync(2900);
+      expect(res.body).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(200);
+      await done;
+      expect(res.statusCode).toBe(200);
+      expect(res.body.plan).toBeNull();
+      expect(res.body.planUnknown).toBe(true);
+      expect(res.body.history).toHaveLength(1);
+      expect(res.body.balance.available).toBe(130);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a plan lookup that fails: same answer, no 500', async () => {
+    planImpl = () => Promise.reject(new Error('stripe is down'));
+    const res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body).toMatchObject({ plan: null, planUnknown: true });
+  });
+
+  it('a plan lookup that answers is not flagged unknown, and runs alongside the ledger read', async () => {
+    let started = false;
+    planImpl = () => { started = true; return Promise.resolve(null); };
+    const res = makeRes();
+    await handler(makeReq({ method: 'GET' }), res);
+    expect(started).toBe(true);
+    expect(res.body.planUnknown).toBeUndefined();
   });
 });

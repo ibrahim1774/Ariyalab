@@ -143,7 +143,7 @@ describe('/app/billing', () => {
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: /choose plan/i }));
     expect(await screen.findByRole('alert')).toHaveTextContent("We couldn't start the payment. Please try again in a moment.");
-    expect(calls[0]).toMatchObject({ plan: 'monthly', returnTo: '/app/billing' });
+    expect(calls[0]).toMatchObject({ plan: 'monthly', returnTo: '/app/billing?from=checkout' });
   });
 
   const v2Billing = { v2: true, balance: { plan: 0, topup: 30, held: 0, available: 30 }, history: [] };

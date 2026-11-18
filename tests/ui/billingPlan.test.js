@@ -8,9 +8,12 @@ import { PLANS_V2, TOPUPS_V2 } from '../../lib/pricing';
 
 vi.mock('next/router', () => ({ useRouter: () => ({ pathname: '/app/billing', asPath: '/app/billing' }) }));
 
+const realLocation = window.location;
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  Object.defineProperty(window, 'location', { value: realLocation, configurable: true, writable: true });
+  window.history.replaceState(null, '', '/');
 });
 
 const RENEWS = '2027-03-15T12:00:00.000Z';
@@ -18,7 +21,7 @@ function stub(plan, portal = async () => ({ ok: true, status: 200, json: async (
   const calls = [];
   vi.stubGlobal('fetch', vi.fn(async (url, init) => {
     calls.push(url);
-    if (url === '/api/story/billing') return { ok: true, status: 200, json: async () => ({ v2: true, balance: { plan: 5, topup: 0, held: 0, available: 5 }, history: [], plan }) };
+    if (String(url).startsWith('/api/story/billing')) return { ok: true, status: 200, json: async () => ({ v2: true, balance: { plan: 5, topup: 0, held: 0, available: 5 }, history: [], ...(plan && plan.__raw ? plan.__raw : { plan }) }) };
     if (url === '/api/story/pricing') return { ok: true, status: 200, json: async () => ({ plans: PLANS_V2, topups: TOPUPS_V2, yearlyDiscount: 0.15 }) };
     if (url === '/api/billing/portal') return portal(url, init);
     return { ok: false, status: 404, json: async () => ({}) };
@@ -73,8 +76,7 @@ describe('/app/billing plan state', () => {
 
   it('"Switch to" opens the portal, not checkout', async () => {
     const calls = stub({ plan: 'creator', interval: 'month', status: 'active', renewsAt: RENEWS, endsAt: null });
-    delete window.location;
-    window.location = { href: '' };
+    Object.defineProperty(window, 'location', { value: { href: '', search: '', pathname: '/app/billing' }, configurable: true, writable: true });
     render(<BillingPage />);
     fireEvent.click(await screen.findByRole('button', { name: 'Switch to Starter' }));
     await waitFor(() => expect(calls).toContain('/api/billing/portal'));
@@ -90,5 +92,89 @@ describe('/app/billing plan state', () => {
     render(<BillingPage />);
     expect(await screen.findByRole('button', { name: 'Choose plan' })).toBeEnabled();
     expect(screen.queryByTestId('current-plan')).toBeNull();
+  });
+
+  const live = { plan: 'creator', interval: 'month', legacy: false, status: 'active', renewsAt: RENEWS, endsAt: null };
+
+  it('back from the portal: the plan is read fresh and the marker leaves the address bar', async () => {
+    window.history.replaceState(null, '', '/app/billing?from=portal');
+    const calls = stub({ ...live, endsAt: RENEWS });
+    render(<BillingPage />);
+    expect(await screen.findByTestId('current-plan')).toHaveTextContent(/ends on/i);
+    expect(calls).toContain('/api/story/billing?fresh=1');
+    expect(calls).not.toContain('/api/story/billing');
+    await waitFor(() => expect(window.location.search).toBe(''));
+  });
+
+  it('back from checkout is read fresh too; a plain visit is not', async () => {
+    window.history.replaceState(null, '', '/app/billing?from=checkout');
+    let calls = stub(live);
+    render(<BillingPage />);
+    await screen.findByTestId('current-plan');
+    expect(calls).toContain('/api/story/billing?fresh=1');
+    cleanup();
+    window.history.replaceState(null, '', '/app/billing');
+    calls = stub(live);
+    render(<BillingPage />);
+    await screen.findByTestId('current-plan');
+    expect(calls).toContain('/api/story/billing');
+    expect(calls).not.toContain('/api/story/billing?fresh=1');
+  });
+
+  it('a legacy plan is shown with one plain line and no plan buttons; Manage billing stays', async () => {
+    stub({ plan: 'pro', interval: 'month', legacy: true, status: 'active', renewsAt: RENEWS, endsAt: null });
+    render(<BillingPage />);
+    const line = await screen.findByTestId('current-plan');
+    expect(line).toHaveTextContent('Pro');
+    expect(line).toHaveTextContent(/renews on/i);
+    expect(screen.getByTestId('legacy-note')).toHaveTextContent('To move to a new plan, cancel your current plan in Manage billing, then choose a new one here.');
+    await screen.findByText('starter');
+    expect(screen.queryByRole('button', { name: /choose plan/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /switch to/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Your plan' })).toBeNull();
+    expect(screen.getByRole('button', { name: /manage billing/i })).toBeEnabled();
+  });
+
+  it('a legacy plan with cancellation pending says when it ends', async () => {
+    stub({ plan: 'pro', interval: 'month', legacy: true, status: 'active', renewsAt: RENEWS, endsAt: RENEWS });
+    render(<BillingPage />);
+    expect(await screen.findByTestId('current-plan')).toHaveTextContent(/ends on/i);
+  });
+
+  it('plan unknown: a quiet line, balance still shown, and no button can start a second checkout', async () => {
+    const calls = stub({ __raw: { plan: null, planUnknown: true } });
+    render(<BillingPage />);
+    expect(await screen.findByTestId('plan-unknown')).toHaveTextContent("We couldn't load your plan just now.");
+    expect(screen.getByTestId('balance-available')).toHaveTextContent('5');
+    await screen.findByText('starter');
+    expect(screen.queryByRole('button', { name: /choose plan/i })).toBeNull();
+    const buttons = screen.getAllByRole('button', { name: 'Manage billing' });
+    expect(buttons.length).toBeGreaterThanOrEqual(4); // the top one and one per plan
+    Object.defineProperty(window, 'location', { value: { href: '', search: '', pathname: '/app/billing' }, configurable: true, writable: true });
+    fireEvent.click(buttons[1]);
+    await waitFor(() => expect(calls).toContain('/api/billing/portal'));
+    expect(calls).not.toContain('/api/checkout');
+  });
+
+  it('past_due: a payment problem line, not a renewal date', async () => {
+    stub({ ...live, status: 'past_due' });
+    render(<BillingPage />);
+    const line = await screen.findByTestId('current-plan');
+    expect(line).toHaveTextContent('Payment problem: update your card in Manage billing.');
+    expect(line).not.toHaveTextContent(/renews on/i);
+  });
+
+  it('a checkout started from this page returns with the fresh-read marker', async () => {
+    const bodies = [];
+    vi.stubGlobal('fetch', vi.fn(async (url, init) => {
+      if (String(url).startsWith('/api/story/billing')) return { ok: true, status: 200, json: async () => ({ v2: true, balance: { plan: 0, topup: 0, held: 0, available: 0 }, history: [], plan: null }) };
+      if (url === '/api/story/pricing') return { ok: true, status: 200, json: async () => ({ plans: PLANS_V2, topups: TOPUPS_V2, yearlyDiscount: 0.15 }) };
+      if (url === '/api/checkout') { bodies.push(JSON.parse(init.body)); return { ok: false, status: 500, json: async () => ({}) }; }
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    render(<BillingPage />);
+    fireEvent.click((await screen.findAllByRole('button', { name: 'Choose plan' }))[0]);
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].returnTo).toBe('/app/billing?from=checkout');
   });
 });

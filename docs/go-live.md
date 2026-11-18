@@ -149,8 +149,12 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   deactivate it in the dashboard if you like. Its settings:
   - headline "Manage your Ariya Lab plan"; payment method update and invoice history on; customer details off;
   - **cancel** allowed, **at the end of the period** (no proration);
-  - **plan changes** (`subscription_update`, price only, quantity fixed at 1) among ONLY the v2 Starter, Creator and
-    Studio prices, monthly and yearly (the prices are created first when missing);
+  - **plan changes** (`subscription_update`, price only, quantity fixed at 1) among ONLY this app's v2 plan prices
+    (`ariya_v2_` plan keys): the current Starter, Creator and Studio prices, monthly and yearly (created first when
+    missing), then the older ACTIVE v2 plan prices that subscribers may still be on after a pricing change, newest
+    first, so they can switch too (archived prices are never included). Stripe allows 10 products per configuration and
+    each price has its own product: the six current prices always stay and the oldest extras are left out (a warning is
+    logged once). The settings hash names the final price list, so a new price makes a new configuration;
   - proration **`always_invoice`**: an upgrade is billed at once, because `lib/grants.js` credits an upgrade only from a
     paid proration invoice;
   - **downgrades and shorter intervals at the end of the period** (`schedule_at_period_end` conditions
@@ -165,6 +169,14 @@ shared customer (this app only reads and writes `ariyalab_*` metadata keys and i
   - Credits are unchanged by this: the code credits every plan change by the money it moves (below), however the portal
     is set. haelabs' promotion codes must still be restricted to haelabs' products before `allow_promotion_codes`
     checkouts go live here (the account is shared).
+- **Owner check after changing plan prices:** open Manage billing as a subscriber who is still on the OLD price (test
+  mode) and confirm the portal offers the switch. (Subscribers on an old price still pay it until they switch.)
+- **/app/billing and the portal return:** the portal returns to `/app/billing?from=portal` (and a checkout started from
+  that page to `?from=checkout`); that visit reads the plan fresh, bypassing the one-minute cache, and drops the marker
+  from the address. A buyer on an older (legacy) plan sees it with one line: cancel it in Manage billing, then choose a
+  new plan here (the portal offers only v2 prices, so a legacy plan cannot be switched there). If Stripe cannot answer in
+  3 seconds the page shows balance and history at once, says "We couldn't load your plan just now." and its plan buttons
+  read "Manage billing" instead of "Choose plan" (the checkout's 409 still guards a second plan).
 - **Owner checks and decisions (Stripe account level, not code):**
   - Stripe Checkout and the portal pages show the Stripe ACCOUNT's name ("Prime Hub" in test), not "Ariya Lab". That can
     only be changed in Stripe account settings (public business name) or by using a separate Stripe account for Ariya

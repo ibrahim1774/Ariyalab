@@ -48,7 +48,8 @@ export default async function handler(req, res) {
     const configuration = (await isBillingV2Strict()) ? await getOrCreatePortalConfiguration(client, await getPricing()) : null;
     const portal = await client.billingPortal.sessions.create({
       customer,
-      return_url: `${origin}/app/billing`,
+      // The marker makes /app/billing read the plan fresh (the buyer may just have changed or cancelled it here).
+      return_url: `${origin}/app/billing?from=portal`,
       ...(configuration ? { configuration } : {}),
     });
     return res.status(200).json({ url: portal.url });

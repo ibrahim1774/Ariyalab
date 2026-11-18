@@ -6,6 +6,18 @@ import { currentPlanFor } from '../../../lib/currentPlan.js';
 import { PLANS, TOPUPS } from '../../../lib/stripe.js';
 
 const HISTORY_LIMIT = 50;
+const PLAN_WAIT_MS = 3000;
+
+// The plan line is cosmetic: never let a slow or failing Stripe hold the balance and history back.
+function planWithin(promise, ms) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve({ unknown: true }), ms);
+    promise.then(
+      (plan) => { clearTimeout(timer); resolve({ plan }); },
+      () => { clearTimeout(timer); resolve({ unknown: true }); }
+    );
+  });
+}
 
 // What the existing /api/checkout actually sells today (lib/stripe.js), for the
 // page to show while billing v2 is off.
@@ -48,8 +60,9 @@ export default async function handler(req, res) {
       });
     }
 
+    // Started now, in parallel with the ledger read; ?fresh=1 (back from the portal or checkout) skips the plan cache.
+    const planRead = planWithin(currentPlanFor(userId, req.query?.fresh ? { fresh: true } : {}), PLAN_WAIT_MS);
     const balance = await getBalance(userId, 'video');
-    const plan = await currentPlanFor(userId);
     const { data, error } = await getSupabaseAdmin()
       .from('credit_ledger')
       .select('id, created_at, delta, reason, balance_after')
@@ -62,7 +75,14 @@ export default async function handler(req, res) {
       .order('id', { ascending: false })
       .limit(HISTORY_LIMIT);
     if (error) throw error;
-    return res.status(200).json({ v2: true, balance, history: data || [], plan });
+    const planResult = await planRead;
+    return res.status(200).json({
+      v2: true,
+      balance,
+      history: data || [],
+      plan: planResult.unknown ? null : planResult.plan,
+      ...(planResult.unknown ? { planUnknown: true } : {}),
+    });
   } catch (err) {
     console.error('[api/story/billing]', err);
     return res.status(500).json({ error: 'Could not load billing.' });

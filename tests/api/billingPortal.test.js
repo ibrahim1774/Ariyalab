@@ -68,14 +68,14 @@ describe('/api/billing/portal', () => {
     await portal(makeReq({ method: 'POST', body: { customer: 'cus_someone_else' } }), res);
     expect(res.statusCode).toBe(200);
     expect(res.body.url).toBe('https://billing.stripe.test/cus_mine');
-    expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing' }]);
+    expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing?from=portal' }]);
   });
 
   it('R4: the return URL never comes from the Host header; production without APP_URL answers 500', async () => {
     S.user = { id: '00000000-0000-4000-8000-0000000000a1', email: 'a@example.test' };
     let res = makeRes();
     await portal(makeReq({ method: 'POST', headers: { host: 'evil.example' } }), res);
-    expect(S.created.at(-1).return_url).toBe('https://ariyalab.test/app/billing');
+    expect(S.created.at(-1).return_url).toBe('https://ariyalab.test/app/billing?from=portal');
     vi.stubEnv('APP_URL', '');
     vi.stubEnv('NODE_ENV', 'production');
     S.created.length = 0;
@@ -87,7 +87,7 @@ describe('/api/billing/portal', () => {
     vi.stubEnv('NODE_ENV', 'test');
     res = makeRes();
     await portal(makeReq({ method: 'POST', headers: { host: 'evil.example' } }), res);
-    expect(S.created.at(-1).return_url).toBe('http://localhost:3000/app/billing');
+    expect(S.created.at(-1).return_url).toBe('http://localhost:3000/app/billing?from=portal');
     vi.unstubAllEnvs();
   });
 
@@ -114,7 +114,7 @@ describe('/api/billing/portal', () => {
       const res = makeRes();
       await portal(makeReq({ method: 'POST' }), res);
       expect(res.statusCode).toBe(200);
-      expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing', configuration: 'bpc_ariya' }]);
+      expect(S.created).toEqual([{ customer: 'cus_mine', return_url: 'https://ariyalab.test/app/billing?from=portal', configuration: 'bpc_ariya' }]);
     });
 
     it('v2 off: no configuration is made or passed (today\'s behaviour)', async () => {
