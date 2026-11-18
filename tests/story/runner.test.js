@@ -405,6 +405,21 @@ describe('submit outcomes', () => {
       }
     });
 
+    it('a 5xx on submit (the existing retry) then a hiccup on the task is two submits in total, not three', async () => {
+      let submits = 0;
+      const { project, job, calls } = await setup({
+        submit: async () => {
+          submits += 1;
+          if (submits === 1) throw new ProviderError('failed', undefined, { cause: { status: 500, message: 'Internal Error' } });
+          return { provider: 'mock', taskId: `task-${submits}` };
+        },
+        poll: hiccup,
+      });
+      await run(project, 0, 800);
+      expect(calls.submit).toHaveLength(2);
+      expect(await jobRow(job.id)).toMatchObject({ status: 'failed' });
+    });
+
     it('a network error or timeout on submit (outcome unknown) is also tried once more, and no further', async () => {
       const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
       const { project, job, calls } = await setup({ submit: async () => { throw new ProviderError('failed', undefined, { cause: timeout }); } });
