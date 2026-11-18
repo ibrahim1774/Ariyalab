@@ -359,6 +359,61 @@ describe('submit outcomes', () => {
     expect(await held(project)).toBe(35);
   });
 
+  describe('one automatic retry of a provider hiccup (payload.retryTransient: character options)', () => {
+    const hiccup = async () => ({ status: 'failed', url: null, error: 'Generation failed. Please try again.', transient: true });
+    const refused = async () => ({ status: 'failed', url: null, error: 'Generation failed. Please try again.', transient: false });
+    const setup = async (handlerOpts, payload = { retryTransient: true }) => {
+      const project = await newProject();
+      const holdId = await withHold(project);
+      const { handler, calls } = fakeAsync(handlerOpts);
+      registerHandler('cast_image', handler);
+      const job = await enqueue({ projectId: project.id, kind: 'cast_image', payload, holdId, costCredits: 20 });
+      return { project, job, calls };
+    };
+    const run = async (project, from, to) => { for (let t = from; t <= to; t += 40) await tick({ projectId: project.id, now: at(t) }); };
+
+    it('a task that failed with a provider hiccup is submitted once more, then succeeds: one picture, one settle', async () => {
+      let polls = 0;
+      const { project, job, calls } = await setup({ poll: async (j) => (polls++ === 0 ? hiccup() : { status: 'done', url: MOCK_URLS.still, error: null }) });
+      await run(project, 0, 400);
+      expect(calls.submit).toHaveLength(2);
+      expect(await jobRow(job.id)).toMatchObject({ status: 'done' });
+      expect((await jobRow(job.id)).payload).toMatchObject({ retryTransient: true, retried: true });
+      expect(calls.done).toHaveLength(1);
+      expect(calls.fail).toHaveLength(0);
+    });
+
+    it('a second hiccup ends it: at most one extra try, and the hold share is given back', async () => {
+      const { project, job, calls } = await setup({ poll: hiccup });
+      await run(project, 0, 600);
+      expect(calls.submit).toHaveLength(2);
+      expect(await jobRow(job.id)).toMatchObject({ status: 'failed' });
+      expect(calls.fail).toEqual([expect.objectContaining({ final: true })]);
+      expect(await held(project)).toBe(40); // 60 held, this job's 20 released: the retry never held or charged anything more
+    });
+
+    it('a refusal, a blocked answer, a non-transient failure and a job without the flag are never retried', async () => {
+      for (const [opts, payload] of [
+        [{ poll: refused }, { retryTransient: true }],
+        [{ poll: async () => ({ status: 'blocked', url: null, error: 'Not allowed.' }) }, { retryTransient: true }],
+        [{ poll: hiccup }, {}],
+      ]) {
+        const { project, job, calls } = await setup(opts, payload);
+        await run(project, 0, 400);
+        expect(calls.submit, JSON.stringify(payload)).toHaveLength(1);
+        expect(['failed', 'blocked']).toContain((await jobRow(job.id)).status);
+      }
+    });
+
+    it('a network error or timeout on submit (outcome unknown) is also tried once more, and no further', async () => {
+      const timeout = Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      const { project, job, calls } = await setup({ submit: async () => { throw new ProviderError('failed', undefined, { cause: timeout }); } });
+      await run(project, 0, 600);
+      expect(calls.submit).toHaveLength(2);
+      expect(await jobRow(job.id)).toMatchObject({ status: 'failed' });
+    });
+  });
+
   it("a 'blocked' result marks the job blocked and calls onFail with blocked: true", async () => {
     const project = await newProject();
     const holdId = await withHold(project);

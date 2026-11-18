@@ -173,6 +173,8 @@ describe('generateCast', () => {
       const mine = jobs.filter((j) => j.payload.castId === row.id);
       expect(mine.map((j) => j.payload.slot).sort()).toEqual([0, 1, 2]);
       expect(mine.every((j) => j.payload.stage === 'candidate' && j.payload.round === 1 && j.status === 'queued')).toBe(true);
+      // Each option is tried once more by itself after a provider hiccup (runner.js retryHiccup); the sheet is not.
+      expect(mine.every((j) => j.payload.retryTransient === true)).toBe(true);
       expect(mine.every((j) => j.hold_id === null && j.cost_credits === null)).toBe(true);
     }
     expect((await projectRow(project.id)).step).toBe('cast');
