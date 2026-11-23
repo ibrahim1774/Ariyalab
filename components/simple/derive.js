@@ -40,7 +40,7 @@ export function clipsStarted({ project, shots = [], jobs = [] } = {}) {
  * wants the same characters and has no cast.
  *   cast      same characters wanted, no cast rows, and the plan had begun (shots or clips exist)
  *   redraw    a new art style cleared a character's pictures: they are drawn again
- *   pick      a character failed, was blocked, or has no look picked
+ *   pick      a character failed, was blocked, or has no picture picked yet (the server picks a single picture itself)
  *   rebuild   a shot needs the storyboard rebuilt
  *   pictures  a generated shot has no picture (and none is a clip in flight)
  */
@@ -67,7 +67,7 @@ export function planReason(status) {
   if (g.redraw) return 'The art style changed, so the characters need drawing again.';
   if (g.rebuild) return 'The storyboard needs updating to match your changes.';
   if (g.pictures) return 'Some pictures are missing and need making.';
-  if (g.pick) return 'A character needs a look before the video can go on.';
+  if (g.pick) return 'A character needs a picture before the video can go on.';
   return null;
 }
 
@@ -108,6 +108,9 @@ export const lengthCredits = (pricing, project, seconds, quality) => estimateCre
 // A character left as a draft, or pending with no picture job running, this long is restarted (cast.js generateCast does it, charging nothing).
 const STUCK_DRAFT_MS = 2 * 60_000;
 const STUCK_PENDING_MS = 5 * 60_000;
+// A character ready with one picture and no pick: the server picks it by itself (lib/story/cast.js autoPickCast) a moment after
+// the picture arrives, so the pipeline waits for that instead of showing a pick step. Past this long the pick is sent from here.
+const SERVER_PICK_MS = 30_000;
 
 const picked = (c) => c.chosen_index != null || Boolean(c.image_url);
 const lacksPicture = (s) => isGenerated(s) && !s.still_url;
@@ -121,7 +124,7 @@ const lacksPicture = (s) => isGenerated(s) && !s.still_url;
  *   { type: 'ask', what, credits, ids? }  a part now costs credits nobody confirmed: show its price, ask again
  *   { type: 'stale' }                 the script changed since the shots were made: rebuild first
  *   { type: 'redraw', items: [{ castId, name, expected }], expected }  draw cleared characters again (a regeneration each)
- *   { type: 'pick', castId }          a character is ready with no look picked: its first option
+ *   { type: 'pick', castId }          a character is ready with several options and none picked, or its one picture was not picked by the server in time: the first option
  *   { type: 'resume_cast' }           a character whose start died: start again (nothing to pay)
  *   { type: 'wait', what: [..] }      something is being made
  *   { type: 'blocked', what: [..] }   something failed or was refused; the customer fixes it on the plan screen
@@ -176,7 +179,10 @@ export function nextPlanAction(status, { confirmed = {}, now = Date.now(), quote
         if (open.length) {
           castClear = false;
           const withOptions = open.find((c) => (c.candidates || []).length > 0);
-          if (withOptions) actions.push({ type: 'pick', castId: withOptions.id, name: withOptions.name });
+          // One picture: the server takes it, so there is no "picking a look" stage unless the server's pick never came.
+          const serverPicks = withOptions && withOptions.candidates.length === 1 && !old(withOptions, SERVER_PICK_MS);
+          if (serverPicks) waits.push('characters');
+          else if (withOptions) actions.push({ type: 'pick', castId: withOptions.id, name: withOptions.name });
           else blocked.push('characters');
         }
       }

@@ -43,7 +43,7 @@ export function stageText(action) {
   if (action.type === 'cast') return 'Starting your characters';
   if (action.type === 'build') return 'Planning your shots';
   if (action.type === 'redraw') return 'Drawing your characters again';
-  if (action.type === 'pick') return `Picking a look for ${action.name || 'your character'}`;
+  if (action.type === 'pick') return `Getting ${action.name || 'your character'} ready`;
   if (action.type === 'resume_cast') return 'Getting your characters going again';
   if (action.type === 'stills') return 'Drawing the storyboard pictures';
   if (action.type === 'narration') return 'Recording the narration';

@@ -133,7 +133,8 @@ div.shimmer { aspect-ratio: 3 / 4; border-radius: 14px; }
 .pickButton:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .pickButton:disabled { opacity: 0.6; cursor: not-allowed; }
 .blocked, .failed { margin: 0; padding: 10px 14px; border-radius: 14px; background: var(--error-bg); color: var(--error); font-size: 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; }
-.regen { display: flex; flex-direction: column; gap: 8px; }
+.regen { display: flex; flex-direction: column; gap: 12px; }
+.regenForm { display: flex; flex-direction: column; gap: 8px; }
 .changeToggle { display: none; min-height: 44px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: var(--radius-pill); background: var(--surface); color: var(--text); font: inherit; font-size: 14px; cursor: pointer; }
 .changeToggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 

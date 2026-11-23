@@ -2,7 +2,7 @@ import { useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
-import { pickCast, regenCast, retryCast, setCastImage, startCast } from '../../lib/story/client';
+import { drawLikePicture, pickCast, regenCast, retryCast, setCastImage, startCast } from '../../lib/story/client';
 import ErrorNotice from './ErrorNotice';
 import { NeedCredits } from './NeedCredits';
 import StepFooter from './StepFooter';
@@ -10,15 +10,17 @@ import FilesNote from './FilesNote';
 import { projectFeeFor } from '../../lib/pricingConstants';
 import { usePricing } from './PricingContext';
 import AssetPicker from './AssetPicker';
+import LookLike from './LookLike';
 import { EmptyState, Skeleton, StyleNote, Tile } from './Tiles';
 import styles from './Steps.module.css';
 
-const CANDIDATE_SLOTS = 3;
+// A new round draws one picture (the server picks it); a round made before that holds 3 options and keeps its pick buttons.
+const CANDIDATE_SLOTS = 1;
 
-/** Why a character's pictures were blocked: the server's own message from its latest blocked job. */
+/** Why a character's picture was blocked: the server's own message from its latest blocked job. */
 function blockedReason(cast, jobs) {
   const job = [...jobs].reverse().find((j) => j.kind === 'cast_image' && j.status === 'blocked' && j.payload?.castId === cast.id);
-  return job?.error || 'These pictures could not be made. Describe a change and try again.';
+  return job?.error || 'This picture could not be made. Describe a change and try again.';
 }
 
 function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
@@ -30,19 +32,23 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
   const left = Math.max(0, pricing.included.castRegenPerCharacter - (cast.regens_used || 0));
   // The prices come from the server (the same code that charges). The old derivation only stands in for a row without them.
   const regenCost = Number.isInteger(cast.regen_credits) ? cast.regen_credits : (cast.regens_used || 0) >= pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
+  // "Make them look like a picture": always paid, from the same server code that charges (look_credits).
+  const lookCost = Number.isInteger(cast.look_credits) ? cast.look_credits : pricing.castFromPicture;
   const retryCost = Number.isInteger(cast.retry_credits) ? cast.retry_credits : (cast.regens_used || 0) > pricing.included.castRegenPerCharacter ? pricing.castRegen : 0;
 
-  async function run(kind, fn, { rethrow = false } = {}) {
+  // rethrow: the caller shows the error (the chooser). report: show it here and also throw, so the caller keeps its state.
+  async function run(kind, fn, { rethrow = false, report = false } = {}) {
     setBusy(kind);
     setError(null);
     try {
       await fn();
       await refresh?.();
     } catch (err) {
-      if (rethrow) throw err;
+      if (rethrow && !report) throw err;
       setError(err);
       // A changed price or a state that moved on: show the current one.
       if (err?.status === 409) await refresh?.();
+      if (report) throw err;
     } finally {
       setBusy('');
     }
@@ -56,6 +62,11 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
       setNote('');
     });
   };
+  // The picture the customer chose is drawn from; a changed price (409) is refreshed by run(), and the picture stays for another press.
+  const drawLike = (assetId, text) => run('look', async () => {
+    if (Number.isInteger(lookCost)) await drawLikePicture(projectId, cast.id, assetId, text, lookCost);
+    else await drawLikePicture(projectId, cast.id, assetId, text);
+  }, { report: true });
   const retry = () => run('retry', () => (Number.isInteger(cast.retry_credits) ? retryCast(projectId, cast.id, cast.retry_credits) : retryCast(projectId, cast.id)));
   const pending = cast.status === 'pending';
   const candidates = cast.candidates || [];
@@ -93,7 +104,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
             icon={cast.status === 'blocked' ? 'block' : 'alert'}
             ratio="3 / 2"
             className={styles.wideTile}
-            title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'}
+            title={cast.status === 'blocked' ? 'This picture was blocked' : 'This picture did not come out'}
             text={cast.status === 'blocked' ? blockedReason(cast, jobs) : 'Try again, or describe a change below.'}
           >
             {cast.status === 'blocked' ? (
@@ -119,7 +130,16 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
         </div>
       )}
 
-      {candidates.length > 0 && cast.status !== 'pending' && (
+      {/* One picture: shown as it is, with nothing to choose. A round made with 3 options (older projects) keeps its pick buttons. */}
+      {candidates.length === 1 && !cast.asset_id && cast.status !== 'pending' && (
+        <div className={styles.candidates} data-single-picture="">
+          <div className={styles.candidate} data-media-card="">
+            <img src={candidates[0].url} alt={cast.name} loading="lazy" />
+          </div>
+        </div>
+      )}
+
+      {candidates.length > 1 && cast.status !== 'pending' && (
         <div className={styles.candidates}>
           {candidates.map((c, i) => {
             const chosen = cast.chosen_index === i;
@@ -142,22 +162,34 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
         </div>
       )}
 
+      {cast.look_asset_id && cast.image_url && !cast.asset_id && cast.status === 'ready' && (
+        <p className={styles.hint} data-testid="look-note">Drawn to look like a picture you chose.</p>
+      )}
+
       {cast.status !== 'pending' && (
         <button type="button" className={styles.changeToggle} aria-expanded={change} onClick={() => setChange((v) => !v)}>
           {change ? 'Hide options' : 'Change this character'}
         </button>
       )}
       {cast.status !== 'pending' && (
-        <form onSubmit={regenerate} className={`${styles.regen} ${change ? styles.regenOpen : ''}`}>
-          <label className={styles.field}>
-            <span>Describe a change</span>
-            <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="A bit older, with round glasses." />
-          </label>
+        <div className={`${styles.regen} ${change ? styles.regenOpen : ''}`}>
+          <form onSubmit={regenerate} className={styles.regenForm}>
+            <label className={styles.field}>
+              <span>Describe a change</span>
+              <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="A bit older, with round glasses." />
+            </label>
+            <div className={styles.actions}>
+              <Button type="submit" variant="ghost" size="sm" disabled={busy === 'regen'}>
+                {busy === 'regen' ? 'Drawing…' : regenCost > 0 ? `Draw again (${regenCost} credits)` : 'Draw again (included)'}
+              </Button>
+              <NeedCredits items={[{ price: regenCost }]} />
+            </div>
+            <p className={styles.hint}>
+              {left} redraw{left === 1 ? '' : 's'} included for {cast.name}, then {pricing.castRegen} credits each.
+            </p>
+          </form>
+          <LookLike name={cast.name} price={lookCost} disabled={Boolean(busy)} busy={busy === 'look'} returnTo={returnTo} onDraw={drawLike} />
           <div className={styles.actions}>
-            <Button type="submit" variant="ghost" size="sm" disabled={busy === 'regen' || !note.trim()}>
-              {busy === 'regen' ? 'Making new pictures…' : regenCost > 0 ? `Regenerate (${regenCost} credits)` : 'Regenerate'}
-            </Button>
-            <NeedCredits items={[{ price: regenCost }]} />
             <AssetPicker
               kinds={['image', 'mascot', 'product', 'logo']}
               uploadKind="image"
@@ -169,10 +201,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
               onPick={(a) => run('own', () => setCastImage(projectId, cast.id, a.id), { rethrow: true })}
             />
           </div>
-          <p className={styles.hint}>
-            {left} regeneration{left === 1 ? '' : 's'} included for {cast.name}, then {pricing.castRegen} credits each.
-          </p>
-        </form>
+        </div>
       )}
       <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
     </Card>
@@ -217,7 +246,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
     <div className={styles.step}>
       <div className={styles.stepHead}>
         <h2>Meet your <span className="accent-word">cast</span></h2>
-        <p>We picked a look for each character. Change any you like.</p>
+        <p>We drew each character. Draw again if you want a different one.</p>
       </div>
       <StyleNote project={project} />
 
@@ -232,7 +261,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       )}
 
       {!noCast && cast.length === 0 && (
-        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets three options to choose from.${project.fee_charged || shownFee === 0 ? '' : ` The project setup fee of ${shownFee} credits is taken when the cast is first made.`}`}>
+        <EmptyState icon="user" title="Your characters will appear here" text={`Each one gets a picture, drawn for you.${project.fee_charged || shownFee === 0 ? '' : ` The project setup fee of ${shownFee} credits is taken when the cast is first made.`}`}>
           <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} onRetry={start} />
           <Button onClick={start} disabled={busy}>{busy ? 'Starting…' : 'Make my cast'}</Button>
         </EmptyState>
@@ -248,7 +277,7 @@ export default function StepCast({ project, cast = [], jobs = [], refresh, onNex
       {!noCast && cast.length > 0 && (
         <StepFooter>
           <Button onClick={onNext} disabled={!allPicked}>Continue to the storyboard</Button>
-          {!allPicked && <span className={styles.hint}>Every character needs a look to continue.</span>}
+          {!allPicked && <span className={styles.hint}>Every character needs a picture to continue.</span>}
         </StepFooter>
       )}
     </div>

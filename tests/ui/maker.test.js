@@ -456,7 +456,7 @@ describe('waiting, failed and empty states', () => {
   it('shows cast candidates being made as skeletons in the portrait ratio with a status line', () => {
     render(<StepCast project={project()} cast={[{ id: 'c1', name: 'Maya', status: 'pending', candidates: [] }]} jobs={[]} refresh={vi.fn()} onNext={vi.fn()} returnTo="/" />);
     const sk = screen.getAllByTestId('candidate-pending');
-    expect(sk).toHaveLength(3);
+    expect(sk).toHaveLength(1); // one picture per character
     expect(sk[0]).toHaveTextContent('Drawing your character');
     expect(sk[0].style.aspectRatio).toBe('3 / 4');
   });
@@ -634,10 +634,10 @@ describe('cast step', () => {
     await waitFor(() => expect(refresh).toHaveBeenCalled());
   });
 
-  it('says a look was picked for each character, and Continue is on as soon as every character has a pick', () => {
+  it('says each character was drawn, and Continue is on as soon as every character has a picture', () => {
     const picked = (id) => ready({ id, name: id, chosen_index: 0, image_url: '/api/mock/storage/c0.png' });
     const { unmount } = render(<StepCast {...props([picked('Maya'), picked('Leo')])} />);
-    expect(screen.getByText('We picked a look for each character. Change any you like.')).toBeInTheDocument();
+    expect(screen.getByText('We drew each character. Draw again if you want a different one.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Continue to the storyboard/ })).toBeEnabled();
     unmount();
     render(<StepCast {...props([picked('Maya'), ready({ id: 'Leo', name: 'Leo', status: 'pending', candidates: [] })])} />);
@@ -682,7 +682,7 @@ describe('cast step', () => {
     expect(screen.getByRole('link', { name: 'Get credits' })).toHaveAttribute('href', '/app/billing');
   });
 
-  it('shows three candidates, picks one, and regenerates with a note', async () => {
+  it('a round that holds three options (an older project) shows them, picks one, and draws again with a note', async () => {
     client.pickCast.mockResolvedValue({});
     client.regenCast.mockResolvedValue({});
     render(<StepCast {...props([ready()])} />);
@@ -690,23 +690,24 @@ describe('cast step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Pick Maya, option 2' }));
     await waitFor(() => expect(client.pickCast).toHaveBeenCalledWith('p1', 'c1', 1));
     fireEvent.change(screen.getByLabelText('Describe a change'), { target: { value: 'Round glasses' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Draw again (included)' }));
     await waitFor(() => expect(client.regenCast).toHaveBeenCalledWith('p1', 'c1', 'Round glasses'));
-    expect(screen.getByText(new RegExp(`2 regenerations included for Maya, then ${DEFAULTS.castRegen} credits each`))).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`2 redraws included for Maya, then ${DEFAULTS.castRegen} credits each`))).toBeInTheDocument();
   });
 
   it('marks the picked option and offers the own image control (the asset picker)', () => {
     render(<StepCast {...props([ready({ chosen_index: 0 })])} />);
     expect(screen.getByRole('button', { name: 'Maya, option 1, picked' })).toHaveAttribute('aria-pressed', 'true');
-    const own = document.querySelector('[data-asset-picker]');
+    const own = screen.getByRole('button', { name: 'Use my own image' });
     expect(own).toBeEnabled();
-    expect(own).toHaveTextContent('Use my own image');
+    expect(own).toHaveAttribute('data-asset-picker');
+    expect(screen.getByRole('button', { name: /^Make them look like a picture/ })).toBeEnabled();
     expect(screen.getByRole('button', { name: /Continue to the storyboard/ })).toBeEnabled();
   });
 
   it('shows pending candidates as shimmer, failed with retry, and blocked with the server message', () => {
     const { rerender } = render(<StepCast {...props([ready({ status: 'pending', candidates: [] })])} />);
-    expect(screen.getAllByTestId('candidate-pending')).toHaveLength(3);
+    expect(screen.getAllByTestId('candidate-pending')).toHaveLength(1);
     rerender(<StepCast {...props([ready({ status: 'failed' })])} />);
     expect(screen.getByRole('button', { name: 'Try again' })).toBeInTheDocument();
     const jobs = [{ kind: 'cast_image', status: 'blocked', payload: { castId: 'c1' }, error: 'That description was not allowed.' }];

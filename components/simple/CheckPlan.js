@@ -2,9 +2,11 @@ import { useMemo, useState } from 'react';
 
 import Button from '../ui/Button';
 import Modal from '../ui/Modal';
-import { pickCast, regenCast, retryCast, startGeneration } from '../../lib/story/client';
+import { drawLikePicture, pickCast, regenCast, retryCast, startGeneration } from '../../lib/story/client';
 import useRebuild, { RebuildDialog } from './useRebuild';
 import ErrorNotice from '../maker/ErrorNotice';
+import LookLike from '../maker/LookLike';
+import { usePricing } from '../maker/PricingContext';
 import ShotCard from '../maker/ShotCard';
 import StepAudio from '../maker/StepAudio';
 import { Icon, Skeleton, Tile } from '../maker/Tiles';
@@ -18,16 +20,25 @@ import styles from './Simple.module.css';
 
 const castPicture = (c) => (c.image_url || c.candidates?.[c.chosen_index ?? 0]?.url || c.candidates?.[0]?.url || null);
 
-/** A character: the options, and a note to change it. The existing cast calls, with the price on every button. */
+/**
+ * A character: its picture, "Draw again" (a note is optional) and "Make them look like a picture". The existing cast calls,
+ * with the price on every button. A round made with 3 options (older projects) still shows them to pick from.
+ */
 function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState(null);
+  const pricing = usePricing();
   if (!cast) return null;
   const regen = Number.isInteger(cast.regen_credits) ? cast.regen_credits : 0;
   const retry = Number.isInteger(cast.retry_credits) ? cast.retry_credits : 0;
+  const look = Number.isInteger(cast.look_credits) ? cast.look_credits : pricing.castFromPicture;
+  const left = Math.max(0, pricing.included.castRegenPerCharacter - (cast.regens_used || 0));
+  const options = cast.candidates || [];
+  const picture = castPicture(cast);
 
-  async function run(kind, fn) {
+  // report: show the error here and also throw, so a caller that keeps something on screen (the chosen picture) can keep it.
+  async function run(kind, fn, { report = false } = {}) {
     setBusy(kind);
     setError(null);
     try {
@@ -36,6 +47,7 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
     } catch (err) {
       setError(err);
       if (err?.status === 409) await refresh?.();
+      if (report) throw err;
     } finally {
       setBusy('');
     }
@@ -47,7 +59,7 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
       {cast.description && <p className={styles.hint}>{cast.description}</p>}
       {cast.status === 'pending' && <Skeleton ratio="3 / 2" status="Drawing your character" />}
       {failed && (
-        <Tile tone="error" icon={cast.status === 'blocked' ? 'block' : 'alert'} title={cast.status === 'blocked' ? 'These pictures were blocked' : 'These pictures did not come out'} text="Describe a change below, or try again.">
+        <Tile tone="error" icon={cast.status === 'blocked' ? 'block' : 'alert'} title={cast.status === 'blocked' ? 'This picture was blocked' : 'This picture did not come out'} text="Describe a change below, or try again.">
           {cast.status === 'failed' && (
             <>
               <Button variant="ghost" size="sm" arrow={false} disabled={Boolean(busy)} onClick={() => run('retry', () => retryCast(projectId, cast.id, retry))}>
@@ -58,9 +70,9 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
           )}
         </Tile>
       )}
-      {(cast.candidates || []).length > 0 && cast.status !== 'pending' && (
+      {options.length > 1 && cast.status !== 'pending' && (
         <div className={styles.optionRow}>
-          {cast.candidates.map((c, i) => {
+          {options.map((c, i) => {
             const chosen = cast.chosen_index === i;
             return (
               <button
@@ -79,24 +91,38 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
           })}
         </div>
       )}
+      {options.length <= 1 && picture && cast.status !== 'pending' && (
+        <img className={styles.castBig} src={picture} alt={cast.name} data-single-picture="" />
+      )}
+      {cast.look_asset_id && cast.status === 'ready' && !cast.asset_id && <p className={styles.hint} data-testid="look-note">Drawn to look like a picture you chose.</p>}
       {cast.status !== 'pending' && (
-        <form
-          className={styles.field}
-          onSubmit={(e) => {
-            e.preventDefault();
-            if (!note.trim()) return;
-            run('regen', async () => { await regenCast(projectId, cast.id, note.trim(), regen); setNote(''); });
-          }}
-        >
-          <label className={styles.field}>
-            <span>Describe a change</span>
-            <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="A bit older, with round glasses." />
-          </label>
-          <Button type="submit" variant="ghost" size="sm" arrow={false} disabled={busy === 'regen' || !note.trim()}>
-            {busy === 'regen' ? 'Making new pictures…' : withPrice('Make new pictures', regen)}
-          </Button>
-          <NeedCredits items={[{ price: regen }]} />
-        </form>
+        <>
+          <form
+            className={styles.field}
+            onSubmit={(e) => {
+              e.preventDefault();
+              run('regen', async () => { await regenCast(projectId, cast.id, note.trim(), regen); setNote(''); });
+            }}
+          >
+            <label className={styles.field}>
+              <span>Describe a change</span>
+              <input value={note} maxLength={500} onChange={(e) => setNote(e.target.value)} placeholder="A bit older, with round glasses." />
+            </label>
+            <Button type="submit" variant="ghost" size="sm" arrow={false} disabled={busy === 'regen'}>
+              {busy === 'regen' ? 'Drawing…' : withPrice('Draw again', regen)}
+            </Button>
+            <NeedCredits items={[{ price: regen }]} />
+            <p className={styles.hint}>{left} redraw{left === 1 ? '' : 's'} included for {cast.name}, then {pricing.castRegen} credits each.</p>
+          </form>
+          <LookLike
+            name={cast.name}
+            price={look}
+            disabled={Boolean(busy)}
+            busy={busy === 'look'}
+            returnTo={returnTo}
+            onDraw={(assetId, text) => run('look', () => (Number.isInteger(look) ? drawLikePicture(projectId, cast.id, assetId, text, look) : drawLikePicture(projectId, cast.id, assetId, text)), { report: true })}
+          />
+        </>
       )}
       <ErrorNotice error={error} returnTo={returnTo} onRefresh={refresh} />
     </Modal>
@@ -148,7 +174,8 @@ export default function CheckPlan({ project, shots, cast, audio, plan, refresh, 
   const rebuild = useRebuild({ projectId: project.id, refresh });
   const reason = planReason({ project, shots, cast, jobs: [] , audio });
   const [pickBusy, setPickBusy] = useState('');
-  const unpicked = cast.filter((c) => c.status === 'ready' && c.chosen_index == null && !c.image_url && (c.candidates || []).length > 0);
+  // Only a round with several options asks the customer; a single picture is taken by the server (a moment after it is ready).
+  const unpicked = cast.filter((c) => c.status === 'ready' && c.chosen_index == null && !c.image_url && (c.candidates || []).length > 1);
   async function pickLook(castId, index) {
     setPickBusy(castId);
     setError(null);

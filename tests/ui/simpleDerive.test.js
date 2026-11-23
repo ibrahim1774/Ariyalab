@@ -4,6 +4,7 @@ import {
   deriveScreen, nextPlanAction, actionKey, confirmedFrom, scenesOf, nextScenes, shouldAutoRender, lengthCredits, SCREENS, audioIssues, FREE_STARTS, planGaps, planReason, furthestScreen,
 } from '../../components/simple/derive';
 import { DEFAULTS } from '../../lib/pricingConstants';
+import { stageText } from '../../components/simple/usePlanPipeline';
 
 const project = (over = {}) => ({ id: 'p1', step: 'script', seconds: 30, quality: 'standard', mode: 'narrated', fee_charged: false, consistent_cast: true, ...over });
 const shot = (over = {}) => ({ id: 's1', ord: 0, scene_id: 'a', status: 'draft', still_url: null, source: 'generated', still_credits: 0, clip_credits: null, ...over });
@@ -66,6 +67,17 @@ describe('what the pipeline does next', () => {
     expect(nextPlanAction(st({ cast: [open] }))).toEqual({ type: 'pick', castId: 'c9', name: 'Mia' });
     // No options at all: nothing to pick, the customer is told.
     expect(nextPlanAction(st({ cast: [{ ...open, candidates: [] }] }))).toMatchObject({ type: 'blocked', what: ['characters'] });
+  });
+  it('one picture that the server has not picked yet is waited for, not picked here ("Picking a look" is never shown); an old one is picked as a fallback', () => {
+    const fresh = new Date().toISOString();
+    const old = new Date(Date.now() - 5 * 60_000).toISOString();
+    const open = castRow({ id: 'c9', name: 'Mia', chosen_index: null, image_url: null, candidates: [{ url: '/a.png' }], updated_at: fresh });
+    expect(nextPlanAction(st({ cast: [open] }))).toMatchObject({ type: 'wait', what: ['characters'] });
+    // The server's pick should have landed by now: the old call (index 0) is the fallback, so the plan never stalls.
+    expect(nextPlanAction(st({ cast: [{ ...open, updated_at: old }] }))).toEqual({ type: 'pick', castId: 'c9', name: 'Mia' });
+    // A round with several options is picked at once, as before.
+    expect(nextPlanAction(st({ cast: [{ ...open, candidates: [{ url: '/a.png' }, { url: '/b.png' }] }] }))).toEqual({ type: 'pick', castId: 'c9', name: 'Mia' });
+    expect(stageText({ type: 'wait', what: ['characters'] })).toBe('Drawing your characters');
   });
   it('a character left as a draft with nothing running is started again (no fee once cast rows exist); a fresh one is waited for', () => {
     const old = new Date(Date.now() - 10 * 60_000).toISOString();

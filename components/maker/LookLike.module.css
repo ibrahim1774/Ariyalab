@@ -1,0 +1,11 @@
+/* "Make them look like a picture": the button, the two plain sentences under it, and the confirm panel after a picture is picked. */
+.look { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; min-width: 0; }
+.hint { margin: 0; color: var(--text-dim); font-size: 13px; }
+.confirm { display: flex; flex-direction: column; gap: 8px; width: 100%; max-width: 360px; padding: 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); }
+.thumb { width: 96px; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 10px; background: var(--surface); }
+.field { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 500; }
+.field input { width: 100%; box-sizing: border-box; font: inherit; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--surface); color: var(--text); }
+.row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+@media (max-width: 760px) {
+  .row button { min-height: 44px; }
+}

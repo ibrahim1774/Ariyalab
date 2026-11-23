@@ -79,7 +79,7 @@ describe('prices come from the server', () => {
     );
     await waitFor(() => expect(screen.getByTestId('quote-total')).toHaveTextContent('1,000 credits'));
     expect(screen.getByRole('button', { name: /Make it again, 3 credits/ })).toBeInTheDocument();
-    expect(screen.getByText(/1 regeneration included for Maya, then 7 credits each/)).toBeInTheDocument();
+    expect(screen.getByText(/1 redraw included for Maya, then 7 credits each/)).toBeInTheDocument();
   });
 
   it('shows the project fee from /pricing before the first cast', async () => {
@@ -219,8 +219,8 @@ describe('cast retry rules (round 1)', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Try again (7 credits)' }));
     await waitFor(() => expect(client.retryCast).toHaveBeenCalledWith('p1', 'c1', 7));
     fireEvent.change(screen.getByPlaceholderText(/A bit older/), { target: { value: 'older' } });
-    expect(screen.getByRole('button', { name: 'Regenerate (3 credits)' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Regenerate (3 credits)' }));
+    expect(screen.getByRole('button', { name: 'Draw again (3 credits)' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Draw again (3 credits)' }));
     await waitFor(() => expect(client.regenCast).toHaveBeenCalledWith('p1', 'c1', 'older', 3));
   });
   it('a changed price (409 quote_changed) refreshes the screen', async () => {

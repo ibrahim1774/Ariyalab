@@ -106,11 +106,25 @@ describe('a free start that keeps coming back is not sent forever', () => {
     await waitFor(() => expect(client.startCast).toHaveBeenCalledTimes(3));
   });
 
+  it('one picture waits for the server\'s pick: nothing is sent and no "Picking a look" stage shows; an old one is picked here', async () => {
+    client.pickCast.mockResolvedValue({});
+    const row = (updated_at) => ({ id: 'c1', name: 'Mia', status: 'ready', chosen_index: null, image_url: null, candidates: [{ url: '/1.png' }], updated_at });
+    let status = withScript({ project: project({ fee_charged: true, plan_requested: true }), cast: [row(new Date().toISOString())] });
+    const refresh = vi.fn(async () => {});
+    const { result, rerender } = renderHook(() => usePlanPipeline({ status, screen: 'plan', refresh }));
+    await new Promise((r) => setTimeout(r, 80));
+    expect(client.pickCast).not.toHaveBeenCalled();
+    expect(result.current.action).toMatchObject({ type: 'wait', what: ['characters'] });
+    status = withScript({ project: project({ fee_charged: true, plan_requested: true }), cast: [row(new Date(Date.now() - 5 * 60_000).toISOString())] });
+    rerender();
+    await waitFor(() => expect(client.pickCast).toHaveBeenCalledWith('p1', 'c1', 0));
+  });
+
   it('three different characters to pick are all sent: the cap is per start, not per type', async () => {
     client.pickCast.mockResolvedValue({});
     const mk = (pickedUpTo) => withScript({
       project: project({ fee_charged: true, plan_requested: true }),
-      cast: [1, 2, 3].map((n) => ({ id: `c${n}`, name: `P${n}`, status: 'ready', chosen_index: n <= pickedUpTo ? 0 : null, image_url: null, candidates: [{ url: `/${n}.png` }] })),
+      cast: [1, 2, 3].map((n) => ({ id: `c${n}`, name: `P${n}`, status: 'ready', chosen_index: n <= pickedUpTo ? 0 : null, image_url: null, candidates: [{ url: `/${n}.png` }, { url: `/${n}b.png` }] })),
     });
     let status = mk(0);
     const refresh = vi.fn(async () => {});

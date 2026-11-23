@@ -12,7 +12,7 @@ const STEPS = [
   },
   {
     title: 'Pick your cast',
-    body: 'Choose the characters and the look from three options each. Ask for a change and try again.',
+    body: 'We draw each character for you. Ask for a change and draw again, or make one look like your own picture.',
   },
   {
     title: 'Get your video',
