@@ -1151,6 +1151,29 @@ describe('simple maker tools', () => {
   });
 
   describe('pick_character', () => {
+    it('is described as for a character that still has several pictures: a new character has one picture and nothing to pick', () => {
+      const tool = CHAT_TOOLS.find((t) => t.name === 'pick_character');
+      expect(tool.description).not.toMatch(/three looks/i);
+      expect(tool.description).toMatch(/several pictures/i);
+      expect(tool.description).toMatch(/one picture/i);
+      expect(tool.input_schema.properties.option.description).not.toMatch(/three pictures/i);
+      const redraw = CHAT_TOOLS.find((t) => t.name === 'regenerate_character');
+      expect(redraw.description).toMatch(/new picture of one character/i);
+      expect(buildChatSystem({ project: {} })).not.toMatch(/look 1, 2 or 3/);
+      expect(buildChatSystem({ project: {} })).toMatch(/one picture/i);
+    });
+
+    it('the character card the model reads carries the picture', async () => {
+      const ctx = await newProject({ cast: { regens_used: 0, chosen_index: 0, image_url: '/a.png', image_key: 'a' } });
+      const { summary } = await run(ctx, 'get_project');
+      expect(summary.cast[0]).toMatchObject({ id: ctx.cast.id, picture_url: '/a.png', picked_option: 1 });
+      // One picture the server has not picked yet is still the character's picture; several unpicked options are not.
+      await storyDb().update('story_cast', { id: ctx.cast.id }, { chosen_index: null, image_url: null, image_key: null, candidates: [{ url: '/only.png', key: 'o' }] });
+      expect((await run(ctx, 'get_project')).summary.cast[0].picture_url).toBe('/only.png');
+      await storyDb().update('story_cast', { id: ctx.cast.id }, { candidates: [{ url: '/a.png', key: 'a' }, { url: '/b.png', key: 'b' }] });
+      expect((await run(ctx, 'get_project')).summary.cast[0].picture_url).toBeNull();
+    });
+
     it('picks option 2 by name (case does not matter) and by id, through pickCast', async () => {
       const ctx = await newProject({ cast: { regens_used: 0 } });
       const byName = await run(ctx, 'pick_character', { name: 'maya', option: 2 });

@@ -397,6 +397,26 @@ describe('money', () => {
     expect(data.cast[0]).toMatchObject({ name: 'Maya', status: 'needs_pictures', pictures: [], sheet_ready: false });
   });
 
+  it('describes one picture per character: no choosing step, pick_cast only for several pictures, and the drawn picture is in the answer', async () => {
+    const user = newUser();
+    await fund(user.id, 500);
+    const client = await connect(await tokenFor(user));
+    const { tools } = await client.listTools();
+    const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
+    expect(byName.generate_cast.description).not.toMatch(/three pictures|then pick_cast/i);
+    expect(byName.generate_cast.description).toMatch(/one picture of each character/i);
+    expect(byName.pick_cast.description).toMatch(/several pictures/i);
+    const { SERVER_INSTRUCTIONS } = await import('../../lib/mcp/server.js');
+    expect(SERVER_INSTRUCTIONS).not.toMatch(/pick_cast for each character/);
+    const { data: created } = await use(client, 'create_project', { title: 'One picture', purpose: 'app', offer: 'A booking app for barbers', seconds: 15 });
+    const projectId = created.project.id;
+    await storyDb().insert('story_cast', { project_id: projectId, ord: 0, name: 'Maya', description: 'F.', status: 'ready', candidates: [{ slot: 0, url: '/api/mock/storage/maya.png', key: 'k' }], chosen_index: 0, image_url: '/api/mock/storage/maya.png', image_key: 'k' });
+    const { data } = await use(client, 'get_status', { project_id: projectId });
+    expect(data.cast[0]).toMatchObject({ name: 'Maya', status: 'ready', picked_index: 0 });
+    expect(data.cast[0].picture_url).toMatch(/\/api\/mock\/storage\/maya\.png$/);
+    expect(data.cast[0].picture_url).toMatch(/^https?:\/\//);
+  });
+
   it('generate_cast draws needs_pictures characters again through the quote and confirm_total steps', async () => {
     const user = newUser();
     await fund(user.id, 500);
@@ -567,6 +587,8 @@ describe('a full mock sequence through the tools', () => {
     const cast = await use(client, 'generate_cast', { project_id: projectId, confirm_total: pricing.projectFee });
     expect(cast.isError, cast.text).toBe(false);
     expect(cast.data.status_text).toMatch(/get_status/);
+    expect(cast.data.status_text).not.toMatch(/call pick_cast for each/);
+    expect(cast.data.status_text).toMatch(/picked by itself/);
     expect(cast.data.credits).toBe(pricing.projectFee);
 
     await runJobs(projectId);
