@@ -82,6 +82,7 @@ Apply in this exact order. Every migration is additive (new `credit_` / `story_`
 | 28 | `20261117000400_story_shots_replace_setting.sql` | Redefines `story_shots_replace` to keep `line_index` and `setting` (same signature). After 26 and 27. |
 | 29 | `20261117000500_story_cast_style_stale.sql` | `story_cast.style_stale` (a character cleared by an art style change and waiting to be drawn again). Before the style-change code. |
 | 30 | `20261117000600_story_settings_repair_at.sql` | `story_projects.settings_repair_at` (the scene settings repair marker, one model try per 10 minutes). Before the code that writes it. |
+| 31 | `20261118000100_story_cast_look_asset.sql` | `story_cast.look_asset_id` (the picture a character was drawn to look like, "Make them look like a picture"). Before the code that writes it. |
 
 Checks on the real database after applying (they cannot be tested in the in-memory database):
 
