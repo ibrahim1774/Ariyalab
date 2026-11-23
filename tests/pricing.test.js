@@ -5,7 +5,7 @@ import {
 } from '../lib/pricing.js';
 import {
   QUALITY_LABELS, PROVIDER_COSTS_USD, costOfVideoUsd, creditsForVideo, videosPerPlan, markup,
-  DEFAULTS, SIMPLE_LENGTHS, projectFeeFor, PICTURE_USD, USD_PER_CREDIT, creditsForMargin, PICTURES_PER_CAST_REDRAW, freeRedrawsExpectedUsd,
+  DEFAULTS, SIMPLE_LENGTHS, projectFeeFor, PICTURE_USD, USD_PER_CREDIT, creditsForMargin, PICTURES_PER_CAST_REDRAW, PICTURES_PER_CAST_FROM_PICTURE, freeRedrawsExpectedUsd,
 } from '../lib/pricingConstants.js';
 import { isBillingV2 } from '../lib/billingFlags.js';
 
@@ -53,6 +53,16 @@ describe('quoting', () => {
 });
 
 describe('getPricing', () => {
+  it('carries the redraw and the look-alike prices; a saved row overrides either', async () => {
+    setPricingDb(fakeDb([]));
+    const p = await getPricing();
+    expect(p.castRegen).toBe(19);
+    expect(p.castFromPicture).toBe(19);
+    setPricingDb(fakeDb([{ key: 'castFromPicture', value: 25 }]));
+    _resetPricingCache();
+    expect((await getPricing()).castFromPicture).toBe(25);
+    expect((await getPricing()).castRegen).toBe(19);
+  });
   it('returns defaults when pricing_config is empty', async () => {
     setPricingDb(fakeDb([]));
     const p = await getPricing();
@@ -221,21 +231,26 @@ describe('the 70% rule', () => {
     // Measured 2026-11-17: kie.ai charged 18 credits = 0.09 dollars for every picture.
     expect(PROVIDER_COSTS_USD.still).toBe(0.09);
     expect(PICTURE_USD).toBe(0.09);
-    // 8 pictures (2 characters x 3 options + 1 sheet) x 0.09, plus the 0.68 the old 0.84 held besides its 8 pictures at 0.02
-    // (script and analysis calls, narration, music, render: not zeroed, still the earlier assumption).
-    expect(PROVIDER_COSTS_USD.projectFixed).toBeCloseTo(8 * 0.09 + 0.68, 10);
-    expect(PROVIDER_COSTS_USD.projectFixed).toBeCloseTo(0.84 - 8 * 0.02 + 8 * 0.09, 10);
-    // The included free redraws (2 per character, 2 characters, 4 pictures each) at the 20% allowance: 0.288 dollars expected.
-    expect(freeRedrawsExpectedUsd()).toBeCloseTo(0.2 * 2 * 2 * 4 * 0.09, 10);
+    // 4 pictures (2 characters x (1 picture + 1 sheet)) x 0.09, plus the 0.68 the old 0.84 held besides its 8 pictures at 0.02
+    // (script and analysis calls, narration, music, render: not zeroed, still the earlier assumption). Was 8 pictures (3 options + sheet) = 1.40.
+    expect(PROVIDER_COSTS_USD.projectFixed).toBeCloseTo(4 * 0.09 + 0.68, 10);
+    expect(PROVIDER_COSTS_USD.projectFixed).toBeCloseTo(1.04, 10);
+    // The included free redraws (2 per character, 2 characters, 2 pictures each: the picture and its sheet) at the 20% allowance:
+    // 0.144 dollars expected (was 0.288 with 4 pictures each).
+    expect(freeRedrawsExpectedUsd()).toBeCloseTo(0.2 * 2 * 2 * 2 * 0.09, 10);
+    expect(freeRedrawsExpectedUsd()).toBeCloseTo(0.144, 10);
     expect(PROVIDER_COSTS_USD.rerollAllowance).toBe(0.2);
   });
   it('prices every picture-backed credit price at the smallest whole number that keeps 70% margin, from one place', () => {
     expect(creditsForMargin(0.09)).toBe(10);
-    expect(creditsForMargin(0.36)).toBe(38);
-    expect(PICTURES_PER_CAST_REDRAW).toBe(4);
+    expect(creditsForMargin(0.18)).toBe(19);
+    // A redraw is one picture and its sheet; "make them look like a picture" is the same two pictures, so the same price (was 38 for 4).
+    expect(PICTURES_PER_CAST_REDRAW).toBe(2);
+    expect(PICTURES_PER_CAST_FROM_PICTURE).toBe(2);
     expect(DEFAULTS.stillReroll).toBe(10);
-    expect(DEFAULTS.castRegen).toBe(38);
-    for (const [credits, cost] of [[DEFAULTS.stillReroll, PROVIDER_COSTS_USD.still], [DEFAULTS.castRegen, PICTURES_PER_CAST_REDRAW * PROVIDER_COSTS_USD.still]]) {
+    expect(DEFAULTS.castRegen).toBe(19);
+    expect(DEFAULTS.castFromPicture).toBe(19);
+    for (const [credits, cost] of [[DEFAULTS.stillReroll, PROVIDER_COSTS_USD.still], [DEFAULTS.castRegen, PICTURES_PER_CAST_REDRAW * PROVIDER_COSTS_USD.still], [DEFAULTS.castFromPicture, PICTURES_PER_CAST_FROM_PICTURE * PROVIDER_COSTS_USD.still]]) {
       expect(1 - cost / (credits * USD_PER_CREDIT)).toBeGreaterThanOrEqual(0.7);
       expect(1 - cost / ((credits - 1) * USD_PER_CREDIT)).toBeLessThan(0.7); // one credit less would break the rule
     }
@@ -243,10 +258,11 @@ describe('the 70% rule', () => {
   // The model's margin per cell (revenue = credits x 29/900, before Stripe's fee; cost = costOfVideoUsd). Every number is
   // pinned, so any change of a cost or a rate turns this red: change the table on purpose, with the owner's decision.
   const MARGIN_PCT = {
-    economy: { 10: 51.7, 30: 56.1, 60: 58.6, 120: 60.2 },
-    standard: { 10: 52.6, 30: 57.0, 60: 59.4, 120: 61.0 },
-    pro_narrated: { 10: 58.7, 30: 62.7, 60: 64.5, 120: 65.5 },
-    pro_talking: { 10: 61.0, 30: 64.6, 60: 66.2, 120: 67.0 },
+    // One picture per character (4 fixed pictures, not 8) and 2 pictures per free redraw (not 4): every cell is about 1 to 9 points higher.
+    economy: { 10: 60.7, 30: 61.3, 60: 61.7, 120: 61.9 },
+    standard: { 10: 61.0, 30: 61.8, 60: 62.2, 120: 62.5 },
+    pro_narrated: { 10: 64.2, 30: 65.4, 60: 66.0, 120: 66.3 },
+    pro_talking: { 10: 65.6, 30: 66.8, 60: 67.3, 120: 67.6 },
   };
   const marginPct = (quality, seconds) => 100 * (1 - costOfVideoUsd({ quality, seconds }) / (creditsForVideo({ quality, seconds }) * USD_PER_CREDIT));
   it('pins the margin of every quality at 10, 30, 60 and 120 seconds to the table (within 0.2 points)', () => {
@@ -283,7 +299,7 @@ describe('the 70% rule', () => {
   it('rounds generated seconds up to whole shots', () => {
     expect(creditsForVideo({ quality: 'standard', seconds: 10 })).toBe(90 + 8 * 12);
     expect(creditsForVideo({ quality: 'standard', seconds: 10, shotSeconds: 5 })).toBe(90 + 8 * 10);
-    expect(costOfVideoUsd({ quality: 'standard', seconds: 30 })).toBeCloseTo((0.05 * 30 + 0.09 * 10) * 1.2 + 1.4 + 0.288, 10);
+    expect(costOfVideoUsd({ quality: 'standard', seconds: 30 })).toBeCloseTo((0.05 * 30 + 0.09 * 10) * 1.2 + 1.04 + 0.144, 10);
   });
   it('counts whole videos per plan', () => {
     expect(videosPerPlan({ credits: 1500, quality: 'pro_narrated', seconds: 45 })).toBe(1);

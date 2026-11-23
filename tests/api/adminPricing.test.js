@@ -126,6 +126,9 @@ describe('admin pricing editor', () => {
   it('F-M4 / F-M5 (Fable P1): two-decimal prices are accepted, a 0-credit voice clone is not', () => {
     for (const usd of [19.99, 29.99, 0.55, 8.95, 1.15, 49]) expect(validatePricingWrite('plans', { starter: { usd } })).toBeNull();
     expect(validatePricingWrite('plans', { starter: { usd: 19.999 } })).not.toBeNull();
+    expect(validatePricingWrite('castFromPicture', 19)).toBeNull();
+    expect(validatePricingWrite('castFromPicture', 1.5)).not.toBeNull();
+    expect(validatePricingWrite('castFromPicture', -1)).not.toBeNull();
     expect(validatePricingWrite('voiceClone', 0)).not.toBeNull();
     expect(validatePricingWrite('voiceClone', 1)).toBeNull();
   });
