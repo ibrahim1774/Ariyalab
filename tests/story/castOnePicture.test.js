@@ -177,9 +177,10 @@ describe('a redraw costs 19', () => {
     expect(other.charged).toBe(0);
   });
 
-  it('a paid redraw that fails gives the 19 back', async () => {
+  it('a paid redraw that fails gives the 19 back (a character with no picture stays failed; one with a picture gets it back: castFromPicture.test.js)', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
+    await storyDb().update('story_cast', { id }, { candidates: [], image_url: null, image_key: null, chosen_index: null, sheet: {}, previous: null });
     await storyDb().update('story_cast', { id }, { regens_used: 2 });
     const balance = (await getBalance(userId)).available;
     await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'x [[mock:fail]]' });

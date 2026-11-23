@@ -163,6 +163,7 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
         </div>
       )}
 
+      {cast.kept_picture && cast.status === 'ready' && <p className={styles.hint} data-testid="kept-note">{`We couldn't draw the new look, so ${cast.name} keeps their picture.`}</p>}
       <PictureFix cast={cast} disabled={Boolean(busy)} hintClass={styles.hint} onPick={(index) => run('pick', () => pickCast(projectId, cast.id, index))} />
 
       {cast.look_asset_id && cast.image_url && !cast.asset_id && cast.status === 'ready' && (

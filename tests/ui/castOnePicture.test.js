@@ -154,6 +154,28 @@ describe('nothing left stuck now that there is no pick button', () => {
   });
 });
 
+describe('a round that could not draw keeps the picture (I1)', () => {
+  it('says so in plain words on both screens, only while the character is ready and was kept', async () => {
+    const line = "We couldn't draw the new look, so Maya keeps their picture.";
+    const { rerender } = render(<StepCast {...props([one({ kept_picture: true })])} />);
+    expect(screen.getByText(line)).toBeInTheDocument();
+    rerender(<StepCast {...props([one({ kept_picture: false })])} />);
+    expect(screen.queryByText(line)).toBeNull();
+    cleanup();
+    client.getChat.mockResolvedValue({ messages: [], usage: { used: 0, limit: 150 } });
+    client.getScript.mockResolvedValue({ id: 'sc', version: 1, scenes: [{ id: 'a', title: 'S', visual: 'A.', lines: [{ speaker: 'Narrator', text: 'Hi.' }] }] });
+    client.getQuote.mockResolvedValue({ total: 33, lines: [], holdNeeded: 0, shotIds: [], spent: 0 });
+    client.getStatus.mockResolvedValue({
+      project: project({ step: 'audio' }), cast: [one({ kept_picture: true })], jobs: [], balance: { available: 1500 }, render: null, renders: [], renderPrice: null,
+      shots: [{ id: 'sh1', ord: 0, scene_id: 'a', description: 'Shot', line: 'L', seconds: 3, quality: 'standard', source: 'generated', still_url: '/s.png', clip_url: null, status: 'still_ready', still_credits: 0, clip_credits: 33, clip_price: 33, reroll_credits: null }],
+      audio: { applicable: { narration: true, narrationLines: 2 }, narration: { status: 'ready', credits: 0 }, music: { type: 'generated', status: 'ready', credits: 0 }, plan: {} },
+    });
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Maya, change this character/ }));
+    expect(within(await screen.findByRole('dialog')).getByText(line)).toBeInTheDocument();
+  });
+});
+
 describe('detailed maker, make them look like a picture', () => {
   const open = async () => {
     fireEvent.click(screen.getByRole('button', { name: /^Make them look like a picture/ }));

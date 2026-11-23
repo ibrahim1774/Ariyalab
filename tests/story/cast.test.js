@@ -98,6 +98,19 @@ async function readyCast() {
   return { ...ctx, cast: await castRows(ctx.project.id) };
 }
 
+/**
+ * A cast whose characters have no picture to put back (a first draw): a round that fails then stays failed, which is what the
+ * retry and price rules below are about. (A character WITH a picture gets it back when its new round fails or is blocked:
+ * tests/story/castFromPicture.test.js.)
+ */
+async function readyBareCast() {
+  const ctx = await readyCast();
+  for (const c of ctx.cast) {
+    await storyDb().update('story_cast', { id: c.id }, { candidates: [], image_url: null, image_key: null, chosen_index: null, sheet: {}, previous: null });
+  }
+  return { ...ctx, cast: await castRows(ctx.project.id) };
+}
+
 // ---------------------------------------------------------------- prompts
 
 describe('consistent_cast false: the cast step is not needed', () => {
@@ -919,7 +932,7 @@ describe('regenerateCharacter', () => {
   });
 
   it('a paid round that fails everywhere costs nothing', async () => {
-    const { userId, project, cast } = await readyCast();
+    const { userId, project, cast } = await readyBareCast();
     await storyDb().update('story_cast', { id: cast[0].id }, { regens_used: 2 });
     const before = await available(userId);
     await regenerateCharacter({ userId, projectId: project.id, castId: cast[0].id, note: 'x [[mock:fail]]' });
@@ -962,7 +975,7 @@ describe('regenerateCharacter', () => {
 
 describe('retry (free)', () => {
   async function failedCharacter({ paidRound = false } = {}) {
-    const ctx = await readyCast();
+    const ctx = await readyBareCast();
     const id = ctx.cast[0].id;
     if (paidRound) await storyDb().update('story_cast', { id }, { regens_used: 2 });
     await regenerateCharacter({ userId: ctx.userId, projectId: ctx.project.id, castId: id, note: 'a change [[mock:fail]]' });
@@ -1157,7 +1170,7 @@ describe('prices on the row and held credits (L1 to L7)', () => {
     }
   };
   async function failedPaidRound() {
-    const ctx = await readyCast();
+    const ctx = await readyBareCast();
     const id = ctx.cast[0].id;
     await storyDb().update('story_cast', { id }, { regens_used: 2 });
     await regenerateCharacter({ userId: ctx.userId, projectId: ctx.project.id, castId: id, note: 'x [[mock:fail]]' });
@@ -1333,7 +1346,7 @@ describe('prices on the row and held credits (L1 to L7)', () => {
   });
 
   it('R3/W7: the current round\'s jobs are found even in a project with more than 1000 cast_image jobs', async () => {
-    const { userId, project, cast } = await readyCast();
+    const { userId, project, cast } = await readyBareCast();
     await raw.query(`insert into story_jobs (project_id, user_id, kind, status, payload, created_at)
       select $1, $2, 'cast_image', 'done', jsonb_build_object('castId', gen_random_uuid()::text, 'stage', 'sheet'), now() - interval '1 day' - g * interval '1 second' from generate_series(1, 1100) g`, [project.id, userId]);
     const id = cast[0].id;
@@ -1390,7 +1403,7 @@ describe('prices on the row and held credits (L1 to L7)', () => {
   const pic = (n) => ({ url: `/api/mock/storage/${n}.png`, key: `${n}.png` });
   const roundTwo = async (projectId, id) => (await jobsOf(projectId)).filter((j) => j.payload.castId === id && j.payload.round === 2);
   async function paidRound() {
-    const ctx = await readyCast();
+    const ctx = await readyBareCast();
     const id = ctx.cast[0].id;
     await storyDb().update('story_cast', { id }, { regens_used: 2 });
     await regenerateCharacter({ userId: ctx.userId, projectId: ctx.project.id, castId: id, note: 'x' });

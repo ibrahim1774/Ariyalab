@@ -95,6 +95,7 @@ function CastDialog({ open, cast, projectId, onClose, refresh, returnTo }) {
       {options.length <= 1 && picture && cast.status !== 'pending' && (
         <img className={styles.castBig} src={picture} alt={cast.name} data-single-picture="" />
       )}
+      {cast.kept_picture && cast.status === 'ready' && <p className={styles.hint} data-testid="kept-note">{`We couldn't draw the new look, so ${cast.name} keeps their picture.`}</p>}
       <PictureFix cast={cast} disabled={Boolean(busy)} hintClass={styles.hint} onPick={(index) => run('pick', () => pickCast(projectId, cast.id, index))} />
       {cast.look_asset_id && cast.image_url && cast.status === 'ready' && !cast.asset_id && <p className={styles.hint} data-testid="look-note">Drawn to look like a picture you chose.</p>}
       {cast.status !== 'pending' && (

@@ -83,6 +83,7 @@ Apply in this exact order. Every migration is additive (new `credit_` / `story_`
 | 29 | `20261117000500_story_cast_style_stale.sql` | `story_cast.style_stale` (a character cleared by an art style change and waiting to be drawn again). Before the style-change code. |
 | 30 | `20261117000600_story_settings_repair_at.sql` | `story_projects.settings_repair_at` (the scene settings repair marker, one model try per 10 minutes). Before the code that writes it. |
 | 31 | `20261118000100_story_cast_look_asset.sql` | `story_cast.look_asset_id` (the picture a character was drawn to look like, "Make them look like a picture"). Before the code that writes it. |
+| 32 | `20261118000200_story_cast_previous_and_look_in_use.sql` | `story_cast.previous` (a character's picture kept while a new round draws, put back if the round fails) and a new `story_asset_delete` that counts a picture being drawn from as in use. After 31, before the code that writes it. |
 
 Checks on the real database after applying (they cannot be tested in the in-memory database):
 

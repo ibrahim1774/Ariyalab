@@ -78,6 +78,8 @@ async function readyCast() {
   await finishJobs(ctx.project.id);
   return { ...ctx, cast: await castRows(ctx.project.id) };
 }
+// A character with no picture yet (a first draw): a failed round has nothing to put back, so it stays failed and Try again applies.
+const noPicture = (id) => storyDb().update('story_cast', { id }, { candidates: [], image_url: null, image_key: null, chosen_index: null, sheet: {}, previous: null });
 const snapshot = async (userId, projectId) => ({ balance: await getBalance(userId), rows: await castRows(projectId), jobs: (await jobsOf(projectId)).length });
 
 describe('the price', () => {
@@ -248,6 +250,7 @@ describe('drawing a character to look like a picture', () => {
   it('a failed picture gives the 19 back, and Try again holds it once more with the same picture', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
+    await noPicture(id);
     const asset = await addAsset(userId);
     const balance = await getBalance(userId);
     await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:fail]]' });
@@ -267,6 +270,7 @@ describe('drawing a character to look like a picture', () => {
   it('a blocked picture gives the 19 back and the character shows the block', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
+    await noPicture(id);
     const asset = await addAsset(userId);
     const balance = await getBalance(userId);
     await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:blocked]]' });
@@ -279,6 +283,7 @@ describe('drawing a character to look like a picture', () => {
   it('Try again after a reset of a dead start still draws from the picture, and says so when the picture is gone', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
+    await noPicture(id);
     const asset = await addAsset(userId);
     await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:fail]]' });
     await finishJobs(project.id);
@@ -294,26 +299,13 @@ describe('drawing a character to look like a picture', () => {
     // The picture was deleted after a failure: nothing is charged and the customer is told to choose again.
     const gone = await addAsset(userId);
     await storyDb().update('story_cast', { id }, { regens_used: 0 });
+    await noPicture(id);
     await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: gone.id, note: 'y [[mock:fail]]' });
     await finishJobs(project.id);
     await storyDb().remove('story_assets', { id: gone.id });
     const before = await snapshot(userId, project.id);
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toMatchObject({ status: 409, code: 'look_picture_gone' });
     expect(await snapshot(userId, project.id)).toEqual(before);
-  });
-
-  it('a new art style clears the picture and the "drawn to look like" mark with it', async () => {
-    const { userId, project, cast } = await readyCast();
-    const id = cast[0].id;
-    const asset = await addAsset(userId);
-    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id });
-    await finishJobs(project.id);
-    expect(await castRow(id)).toMatchObject({ look_asset_id: asset.id, status: 'ready' });
-    const { updateProject } = await import('../../lib/story/projects.js');
-    const asked = await updateProject({ userId, id: project.id, patch: { style: 'anime' } }).catch((e) => e);
-    expect(asked.code).toBe('quote_changed');
-    await updateProject({ userId, id: project.id, patch: { style: 'anime' }, expectedCredits: asked.extra.credits });
-    expect(await castRow(id)).toMatchObject({ image_url: null, look_asset_id: null, style_stale: true, candidates: [] });
   });
 
   it('one automatic retry of a provider hiccup never charges twice', async () => {
@@ -384,5 +376,173 @@ describe('the picture the model is asked for', () => {
   it('the picture request carries the customer\'s picture as its reference', () => {
     const req = buildImageRequest({ prompt: 'p', refs: ['https://files.example/own.png'] });
     expect(JSON.stringify(req)).toContain('https://files.example/own.png');
+  });
+});
+
+// ---------------------------------------------------------------- review round 1
+
+describe('a refused or failed new picture never costs the character it had (I1)', () => {
+  async function drawnCharacter() {
+    const ctx = await readyCast();
+    const id = ctx.cast[0].id;
+    const before = await castRow(id);
+    expect(before.sheet.url).toBeTruthy();
+    return { ...ctx, id, before };
+  }
+  const stillThere = (before, row) => {
+    expect(row).toMatchObject({
+      status: 'ready', chosen_index: before.chosen_index, image_url: before.image_url, image_key: before.image_key, asset_id: before.asset_id,
+      regens_used: before.regens_used, style_stale: false, round_credits: 0,
+    });
+    expect(row.candidates).toEqual(before.candidates);
+    expect(row.sheet).toEqual(before.sheet);
+  };
+
+  it('a blocked look-alike puts the old picture and sheet back, releases the 19, marks nothing stale, and says so', async () => {
+    const { userId, project, id, before } = await drawnCharacter();
+    const asset = await addAsset(userId);
+    const balance = await getBalance(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:blocked]]' });
+    expect((await castRow(id)).status).toBe('pending');
+    await finishJobs(project.id);
+    const row = await castRow(id);
+    stillThere(before, row);
+    expect(row.look_asset_id).toBeNull();
+    expect(await getBalance(userId)).toMatchObject({ held: 0, available: balance.available });
+    const view = (await castView(await castRows(project.id)))[0];
+    expect(view).toMatchObject({ id, kept_picture: true, retry_credits: 0, status: 'ready' });
+    expect(view.previous).toBeUndefined();
+    // No scene picture was marked out of date, and the character is not asked for a pick.
+    expect((await storyDb().select('story_shots', { project_id: project.id })).filter((s) => s.stale)).toHaveLength(0);
+  });
+
+  it('a failed look-alike does the same, and the mark goes when the next round starts', async () => {
+    const { userId, project, id, before } = await drawnCharacter();
+    const asset = await addAsset(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:fail]]' });
+    await finishJobs(project.id);
+    stillThere(before, await castRow(id));
+    await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'again' });
+    await finishJobs(project.id);
+    expect((await castView(await castRows(project.id)))[0].kept_picture).toBe(false);
+  });
+
+  it('a paid redraw that fails puts the character back and gives the 19 back', async () => {
+    const { userId, project, id } = await drawnCharacter();
+    await storyDb().update('story_cast', { id }, { regens_used: 2 });
+    const before = await castRow(id);
+    const balance = await getBalance(userId);
+    await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'x [[mock:fail]]' });
+    await finishJobs(project.id);
+    stillThere(before, await castRow(id));
+    expect(await getBalance(userId)).toMatchObject({ held: 0, available: balance.available });
+  });
+
+  it('a free redraw that fails puts the character back and gives the free redraw back', async () => {
+    const { userId, project, id } = await drawnCharacter();
+    const before = await castRow(id);
+    await regenerateCharacter({ userId, projectId: project.id, castId: id, note: 'x [[mock:fail]]' });
+    expect((await castRow(id)).regens_used).toBe(1);
+    await finishJobs(project.id);
+    stillThere(before, await castRow(id));
+    expect((await castRow(id)).regens_used).toBe(0);
+  });
+
+  it('a first draw that fails is unchanged: failed, nothing to put back, Try again as before', async () => {
+    const ctx = await newProject();
+    await storyDb().update('story_scripts', { project_id: ctx.project.id }, { scenes: [{ ...SCENES[0], visual: `${SCENES[0].visual} [[mock:fail]]` }, SCENES[1]] });
+    await generateCast({ userId: ctx.userId, projectId: ctx.project.id });
+    await finishJobs(ctx.project.id);
+    const [maya] = await castRows(ctx.project.id);
+    expect(maya).toMatchObject({ status: 'failed', previous: null });
+    expect((await castView([maya]))[0].kept_picture).toBe(false);
+  });
+
+  it('a late picture of the new round after the restore changes nothing (the round is the same, the row is ready)', async () => {
+    const { userId, project, id, before } = await drawnCharacter();
+    const asset = await addAsset(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:blocked]]' });
+    await finishJobs(project.id);
+    await finishJobs(project.id);
+    stillThere(before, await castRow(id));
+  });
+});
+
+describe('the likeness survives a style change (M1)', () => {
+  it('keeps the look-alike picture through the reset and draws the new style from it, at the redraw price', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    const asset = await addAsset(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id });
+    await finishJobs(project.id);
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const asked = await updateProject({ userId, id: project.id, patch: { style: 'anime' } }).catch((e) => e);
+    expect(asked.code).toBe('quote_changed');
+    await updateProject({ userId, id: project.id, patch: { style: 'anime' }, expectedCredits: asked.extra.credits });
+    expect(await castRow(id)).toMatchObject({ image_url: null, look_asset_id: asset.id, style_stale: true, candidates: [] });
+    const balance = await getBalance(userId);
+    const out = await regenerateCharacter({ userId, projectId: project.id, castId: id });
+    expect(out.charged).toBe(0); // the free redraws of the character, not the look-alike price
+    const [job] = await candidateJobs(project.id, id, (await castRow(id)).round);
+    expect(job.payload).toMatchObject({ refs: [asset.url], refAssetId: asset.id });
+    expect(job.payload.prompt).toMatch(/reference picture/i);
+    expect((await castRow(id)).look_asset_id).toBe(asset.id);
+    await finishJobs(project.id);
+    expect(await getBalance(userId)).toMatchObject({ held: 0, available: balance.available });
+    expect(await castRow(id)).toMatchObject({ status: 'ready', style_stale: false, look_asset_id: asset.id });
+  });
+
+  it('when the picture is gone it is drawn from the description as before', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    const asset = await addAsset(userId);
+    await storyDb().update('story_cast', { id }, { look_asset_id: asset.id, candidates: [], image_url: null, image_key: null, chosen_index: null, sheet: {}, style_stale: true });
+    await storyDb().remove('story_assets', { id: asset.id });
+    await regenerateCharacter({ userId, projectId: project.id, castId: id });
+    const [job] = await candidateJobs(project.id, id, (await castRow(id)).round);
+    expect(job.payload.refs).toBeUndefined();
+    expect((await castRow(id)).look_asset_id).toBeNull();
+  });
+});
+
+describe('the reference picture is in use while it is being drawn from (M3)', () => {
+  it('cannot be deleted while the round is pending, can once the character is finished', async () => {
+    const { deleteAsset } = await import('../../lib/story/assets.js');
+    const { userId, project, cast } = await readyCast();
+    const asset = await addAsset(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: cast[0].id, assetId: asset.id });
+    await expect(deleteAsset({ userId, assetId: asset.id })).rejects.toMatchObject({ status: 409, code: 'asset_in_use' });
+    await finishJobs(project.id);
+    expect((await storyDb().select('story_assets', { id: asset.id })).length).toBe(1);
+    await deleteAsset({ userId, assetId: asset.id });
+    expect((await storyDb().select('story_assets', { id: asset.id })).length).toBe(0);
+    expect((await castRow(cast[0].id)).look_asset_id).toBeNull();
+  });
+});
+
+describe('server floors on the look-alike (M5, M6)', () => {
+  it('a hosted castFromPicture of 0 still charges 1 credit, on the row and on the charge', async () => {
+    const { userId, project, cast } = await readyCast();
+    await raw.query(`insert into pricing_config (key, value) values ('castFromPicture', '0'::jsonb) on conflict (key) do update set value = excluded.value`);
+    _resetPricingCache();
+    try {
+      const asset = await addAsset(userId);
+      expect((await castView(await castRows(project.id)))[0].look_credits).toBe(1);
+      expect((await drawLikePicture({ userId, projectId: project.id, castId: cast[0].id, assetId: asset.id, expectedCredits: 1 })).charged).toBe(1);
+    } finally {
+      await raw.query(`delete from pricing_config where key = 'castFromPicture'`);
+      _resetPricingCache();
+    }
+  });
+
+  it('the cast-look route needs expected_credits', async () => {
+    const { userId, project, cast } = await readyCast();
+    const asset = await addAsset(userId);
+    globalThis.__lookTestSession = { user: { id: userId, email: 'test@example.test' } };
+    const res = makeRes();
+    await handleAction(makeReq({ method: 'POST', body: { castId: cast[0].id, assetId: asset.id }, query: { id: project.id } }), res, 'cast-look');
+    expect(res.statusCode).toBe(422);
+    expect(res.body.message).toMatch(/price/i);
+    expect(await candidateJobs(project.id, cast[0].id, 2)).toHaveLength(0);
   });
 });
