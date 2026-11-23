@@ -264,6 +264,18 @@ describe('drawing a character to look like a picture', () => {
     expect((await castRow(id))).toMatchObject({ look_asset_id: asset.id, regens_used: 0 });
   });
 
+  it('a blocked picture gives the 19 back and the character shows the block', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    const asset = await addAsset(userId);
+    const balance = await getBalance(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:blocked]]' });
+    expect((await getBalance(userId)).held).toBe(19);
+    await finishJobs(project.id);
+    expect(await castRow(id)).toMatchObject({ status: 'blocked', round_credits: 19 });
+    expect(await getBalance(userId)).toMatchObject({ held: 0, available: balance.available });
+  });
+
   it('Try again after a reset of a dead start still draws from the picture, and says so when the picture is gone', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
@@ -288,6 +300,20 @@ describe('drawing a character to look like a picture', () => {
     const before = await snapshot(userId, project.id);
     await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toMatchObject({ status: 409, code: 'look_picture_gone' });
     expect(await snapshot(userId, project.id)).toEqual(before);
+  });
+
+  it('a new art style clears the picture and the "drawn to look like" mark with it', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    const asset = await addAsset(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id });
+    await finishJobs(project.id);
+    expect(await castRow(id)).toMatchObject({ look_asset_id: asset.id, status: 'ready' });
+    const { updateProject } = await import('../../lib/story/projects.js');
+    const asked = await updateProject({ userId, id: project.id, patch: { style: 'anime' } }).catch((e) => e);
+    expect(asked.code).toBe('quote_changed');
+    await updateProject({ userId, id: project.id, patch: { style: 'anime' }, expectedCredits: asked.extra.credits });
+    expect(await castRow(id)).toMatchObject({ image_url: null, look_asset_id: null, style_stale: true, candidates: [] });
   });
 
   it('one automatic retry of a provider hiccup never charges twice', async () => {

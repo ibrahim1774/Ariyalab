@@ -127,6 +127,8 @@ describe('admin pricing editor', () => {
     for (const usd of [19.99, 29.99, 0.55, 8.95, 1.15, 49]) expect(validatePricingWrite('plans', { starter: { usd } })).toBeNull();
     expect(validatePricingWrite('plans', { starter: { usd: 19.999 } })).not.toBeNull();
     expect(validatePricingWrite('castFromPicture', 19)).toBeNull();
+    expect(validatePricingWrite('castFromPicture', 0)).not.toBeNull(); // always paid, like a voice clone
+    expect(validatePricingWrite('castFromPicture', 1)).toBeNull();
     expect(validatePricingWrite('castFromPicture', 1.5)).not.toBeNull();
     expect(validatePricingWrite('castFromPicture', -1)).not.toBeNull();
     expect(validatePricingWrite('voiceClone', 0)).not.toBeNull();

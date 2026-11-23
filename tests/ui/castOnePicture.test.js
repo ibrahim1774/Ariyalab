@@ -108,6 +108,52 @@ describe('detailed maker, one picture', () => {
   });
 });
 
+describe('nothing left stuck now that there is no pick button', () => {
+  it('a single picture the server has not picked shows one free button to use it, and it is the existing pick call', async () => {
+    client.pickCast.mockResolvedValue({});
+    const refresh = vi.fn();
+    render(<StepCast {...props([one({ chosen_index: null, image_url: null, image_key: null })], { refresh })} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use this picture' }));
+    await waitFor(() => expect(client.pickCast).toHaveBeenCalledWith('p1', 'c1', 0));
+    await waitFor(() => expect(refresh).toHaveBeenCalled());
+  });
+
+  it('a character sheet that did not come out has a free "Try the character sheet again" (the same pick call, no credits)', async () => {
+    client.pickCast.mockResolvedValue({});
+    render(<StepCast {...props([one({ sheet_state: 'failed' })])} />);
+    expect(screen.getByText(/The character sheet did not come out/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use this picture' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try the character sheet again' }));
+    await waitFor(() => expect(client.pickCast).toHaveBeenCalledWith('p1', 'c1', 0));
+  });
+
+  it('shows neither while the sheet is ready or being made, or for a picture the customer uploaded', () => {
+    for (const row of [one({ sheet_state: 'ready' }), one({ sheet_state: 'making' }), one({ sheet_state: 'none', asset_id: 'a9' })]) {
+      const { unmount } = render(<StepCast {...props([row])} />);
+      expect(screen.queryByRole('button', { name: /Use this picture|Try the character sheet again/ })).toBeNull();
+      unmount();
+    }
+  });
+
+  it('the simple maker dialog has the same two buttons', async () => {
+    client.pickCast.mockResolvedValue({});
+    client.getChat.mockResolvedValue({ messages: [], usage: { used: 0, limit: 150 } });
+    client.getScript.mockResolvedValue({ id: 'sc', version: 1, scenes: [{ id: 'a', title: 'The shop', visual: 'A shop.', lines: [{ speaker: 'Narrator', text: 'Hello.' }] }] });
+    client.getQuote.mockResolvedValue({ total: 33, lines: [], holdNeeded: 0, shotIds: [], spent: 0 });
+    const withCast = (row) => ({
+      project: project({ step: 'audio' }), cast: [row], jobs: [], balance: { available: 1500 }, render: null, renders: [], renderPrice: null,
+      shots: [{ id: 'sh1', ord: 0, scene_id: 'a', description: 'Shot', line: 'L', seconds: 3, quality: 'standard', source: 'generated', still_url: '/s.png', clip_url: null, status: 'still_ready', still_credits: 0, clip_credits: 33, clip_price: 33, reroll_credits: null }],
+      audio: { applicable: { narration: true, narrationLines: 2 }, narration: { status: 'ready', credits: 0 }, music: { type: 'generated', status: 'ready', credits: 0 }, plan: {} },
+    });
+    client.getStatus.mockResolvedValue(withCast(one({ sheet_state: 'failed' })));
+    render(<SimpleMaker id="p1" returnTo="/app/p/p1" />);
+    fireEvent.click(await screen.findByRole('button', { name: /Maya, change this character/ }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Try the character sheet again' }));
+    await waitFor(() => expect(client.pickCast).toHaveBeenCalledWith('p1', 'c1', 0));
+  });
+});
+
 describe('detailed maker, make them look like a picture', () => {
   const open = async () => {
     fireEvent.click(screen.getByRole('button', { name: /^Make them look like a picture/ }));

@@ -11,6 +11,7 @@ import { projectFeeFor } from '../../lib/pricingConstants';
 import { usePricing } from './PricingContext';
 import AssetPicker from './AssetPicker';
 import LookLike from './LookLike';
+import PictureFix from './PictureFix';
 import { EmptyState, Skeleton, StyleNote, Tile } from './Tiles';
 import styles from './Steps.module.css';
 
@@ -161,6 +162,8 @@ function CastCard({ projectId, cast, jobs, refresh, returnTo }) {
           })}
         </div>
       )}
+
+      <PictureFix cast={cast} disabled={Boolean(busy)} hintClass={styles.hint} onPick={(index) => run('pick', () => pickCast(projectId, cast.id, index))} />
 
       {cast.look_asset_id && cast.image_url && !cast.asset_id && cast.status === 'ready' && (
         <p className={styles.hint} data-testid="look-note">Drawn to look like a picture you chose.</p>
