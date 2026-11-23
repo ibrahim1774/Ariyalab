@@ -1,0 +1,128 @@
+{
+  "project": {
+    "id": "636a26f3-d6bc-4fd4-b9e6-abea1af397ac",
+    "title": "A girl named Maya and her small friendly robot Bolt find...",
+    "mode": "talking",
+    "quality": "standard",
+    "style": "3d_family",
+    "seconds": 10,
+    "idea": "A girl named Maya and her small friendly robot Bolt find a lost kitten in the rain and bring it home. Warm, gentle, storybook feel."
+  },
+  "script_versions": [
+    {
+      "version": 1,
+      "source": "brief",
+      "instruction": null,
+      "scenes": [
+        {
+          "id": "s1",
+          "lines": [
+            {
+              "text": "Nobody believed a tiny robot could help in the rain.",
+              "speaker": "narrator"
+            },
+            {
+              "text": "Then Bolt found a shivering kitten.",
+              "speaker": "narrator"
+            }
+          ],
+          "title": "Kitten in the rain",
+          "visual": "Maya in a yellow raincoat and her small round robot Bolt crouch beside a garden hedge on a rainy evening, finding a tiny wet kitten shivering under a leaf. Maya's eyes are wide and soft."
+        },
+        {
+          "id": "s2",
+          "lines": [
+            {
+              "text": "By bedtime, it was purring. Bolt even made it a bed.",
+              "speaker": "narrator"
+            }
+          ],
+          "title": "Warm at home",
+          "visual": "Inside a cozy kitchen with warm lamplight, the kitten sleeps in a towel on Maya's lap while Bolt gently glows beside her. Rain streaks the window behind them."
+        }
+      ]
+    },
+    {
+      "version": 2,
+      "source": "revision",
+      "instruction": "Rewrite the script so the characters speak: give the story's lines to the characters by name, in short back and forth lines. Keep the same story, scenes and offer mention.",
+      "scenes": [
+        {
+          "id": "s1",
+          "lines": [
+            {
+              "text": "Bolt, nobody thinks a little robot can help in this rain.",
+              "speaker": "Maya"
+            },
+            {
+              "text": "Found a kitten. Shivering.",
+              "speaker": "Bolt"
+            }
+          ],
+          "title": "Kitten in the rain",
+          "visual": "Maya in a yellow raincoat and her small round robot Bolt crouch beside a garden hedge on a rainy evening, finding a tiny wet kitten shivering under a leaf. Maya's eyes are wide and soft."
+        },
+        {
+          "id": "s2",
+          "lines": [
+            {
+              "text": "Listen, it's purring. Good job, Bolt.",
+              "speaker": "Maya"
+            }
+          ],
+          "title": "Warm at home",
+          "visual": "Inside a cozy kitchen with warm lamplight, the kitten sleeps in a towel on Maya's lap while Bolt gently glows beside her. Rain streaks the window behind them."
+        }
+      ]
+    }
+  ],
+  "cast": [
+    {
+      "name": "Maya",
+      "description": "A young girl about nine years old with a slight build, shoulder-length dark brown hair tied in a loose ponytail, and a bright yellow raincoat. Her wide, soft eyes and freckled cheeks make her easy to recognise.",
+      "voice_note": "Warm, gentle and curious, around nine years old, medium pitch, speaking softly with wonder and affection.",
+      "file": "character-maya.jpg",
+      "sheet": "character-maya-sheet.jpg"
+    },
+    {
+      "name": "Bolt",
+      "description": "A small, round, friendly robot about the size of a cantaloupe, with a smooth rounded body, a single glowing blue light as its face, and two little stubby arms. Its soft glow makes it easy to recognise.",
+      "voice_note": "Bright, cheerful and simple, a small childlike mechanical pitch, speaking in short, clear, earnest phrases.",
+      "file": "character-bolt.jpg",
+      "sheet": "character-bolt-sheet.jpg"
+    }
+  ],
+  "shots": [
+    {
+      "shot": 1,
+      "scene_id": "s1",
+      "seconds": 4,
+      "line": "Bolt, nobody thinks a little robot can help in this rain.",
+      "setting": "Rainy evening in a garden beside a green hedge, dim blue-grey light with wet leaves. Maya wears her bright yellow raincoat with her dark brown hair in a loose ponytail. Bolt, the small round robot with a glowing blue light face, glows softly beside her.",
+      "description": "Medium shot of Maya in her yellow raincoat crouching beside a garden hedge in the rain, with Bolt glowing blue next to her. She looks down at Bolt with wide, soft eyes.",
+      "picture": "scene-1.jpg",
+      "clip": "clip-1.mp4"
+    },
+    {
+      "shot": 2,
+      "scene_id": "s1",
+      "seconds": 3,
+      "line": "Found a kitten. Shivering.",
+      "setting": "Rainy evening in a garden beside a green hedge, dim blue-grey light with wet leaves. Maya wears her bright yellow raincoat with her dark brown hair in a loose ponytail. Bolt, the small round robot with a glowing blue light face, glows softly beside her.",
+      "description": "Close shot of a tiny wet kitten shivering under a large leaf at the base of the hedge, while Bolt's blue glow lights it and Maya's yellow sleeve reaches in gently.",
+      "picture": "scene-2.jpg",
+      "clip": "clip-2.mp4"
+    },
+    {
+      "shot": 3,
+      "scene_id": "s2",
+      "seconds": 3,
+      "line": "Listen, it's purring. Good job, Bolt.",
+      "setting": "Cozy kitchen at night with warm golden lamplight, rain streaking the window behind. Maya still wears her yellow raincoat with her ponytail, seated with a small kitten asleep in a towel on her lap. Bolt glows softly blue beside her.",
+      "description": "Medium shot in a warm kitchen: Maya sits with the sleeping kitten in a towel on her lap, smiling down at it, while Bolt glows beside her and rain streaks the window behind.",
+      "picture": "scene-3.jpg",
+      "clip": "clip-3.mp4"
+    }
+  ],
+  "final": "final.mp4"
+}
