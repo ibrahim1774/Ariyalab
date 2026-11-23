@@ -22,6 +22,11 @@ import { castImageHandler } from '../../lib/story/castJobs.js';
 import { tick, enqueue } from '../../lib/story/runner.js';
 import { castView } from '../../lib/story/cast.js';
 
+// A new round now draws ONE picture (tests/story/castOnePicture.test.js uses the real value). This file keeps checking the
+// code that handles several pictures in one round (the split of a hold, partial failures, the stale resets, the pick among
+// options), which still serves rounds drawn with 3 options, so it pins the count to 3.
+vi.mock('../../lib/story/prompts/cast.js', async (importOriginal) => ({ ...(await importOriginal()), CANDIDATES_PER_CHARACTER: 3 }));
+
 vi.mock('../../lib/supabaseServer.js', async (importOriginal) => ({
   ...(await importOriginal()),
   getUserFromRequest: vi.fn(async () => globalThis.__castTestSession ?? null),
