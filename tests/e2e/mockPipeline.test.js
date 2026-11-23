@@ -113,7 +113,7 @@ async function makeVideo(projectId) {
   expect(script.scenes.length).toBeGreaterThan(0);
   expect(script.violations).toEqual([]);
 
-  // The cast: the project fee, once; then three pictures per character.
+  // The cast: the project fee, once; then one picture per character (picked by itself) and its sheet.
   const cast = await api('POST', projectId, 'cast');
   expect(cast.charged).toBe(pricing.projectFee);
   expect(cast.cast.length).toBeGreaterThan(0);

@@ -264,6 +264,32 @@ describe('drawing a character to look like a picture', () => {
     expect((await castRow(id))).toMatchObject({ look_asset_id: asset.id, regens_used: 0 });
   });
 
+  it('Try again after a reset of a dead start still draws from the picture, and says so when the picture is gone', async () => {
+    const { userId, project, cast } = await readyCast();
+    const id = cast[0].id;
+    const asset = await addAsset(userId);
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: asset.id, note: 'x [[mock:fail]]' });
+    await finishJobs(project.id);
+    // The failed round's job is gone (a reset of a dead start takes its jobs out); the row still names the picture.
+    await storyDb().remove('story_jobs', { project_id: project.id, kind: 'cast_image', status: 'failed' });
+    expect(await castRow(id)).toMatchObject({ status: 'failed', look_asset_id: asset.id });
+    const retry = await regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true, expectedCredits: 19 });
+    expect(retry.charged).toBe(19);
+    const [job] = await candidateJobs(project.id, id, (await castRow(id)).round);
+    expect(job.payload.refs).toEqual([asset.url]);
+    await finishJobs(project.id);
+
+    // The picture was deleted after a failure: nothing is charged and the customer is told to choose again.
+    const gone = await addAsset(userId);
+    await storyDb().update('story_cast', { id }, { regens_used: 0 });
+    await drawLikePicture({ userId, projectId: project.id, castId: id, assetId: gone.id, note: 'y [[mock:fail]]' });
+    await finishJobs(project.id);
+    await storyDb().remove('story_assets', { id: gone.id });
+    const before = await snapshot(userId, project.id);
+    await expect(regenerateCharacter({ userId, projectId: project.id, castId: id, retry: true })).rejects.toMatchObject({ status: 409, code: 'look_picture_gone' });
+    expect(await snapshot(userId, project.id)).toEqual(before);
+  });
+
   it('one automatic retry of a provider hiccup never charges twice', async () => {
     const { userId, project, cast } = await readyCast();
     const id = cast[0].id;
