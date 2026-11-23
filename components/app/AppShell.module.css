@@ -71,7 +71,7 @@
 .classicLink {
   margin-left: 12px;
   font-size: 13px;
-  color: var(--muted, inherit);
+  color: var(--text-dim);
   text-decoration: underline;
 }
 .topbar:empty { display: none; }

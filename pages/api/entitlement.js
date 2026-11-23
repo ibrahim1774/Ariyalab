@@ -3,15 +3,19 @@ import { getEntitlement } from '../../lib/entitlement';
 import { currentPlanFor } from '../../lib/currentPlan.js';
 import { planWithin } from '../../lib/planWait.js';
 
-const PLAN_WAIT_MS = 3000;
+const PLAN_WAIT_MS = 1500;
 
-// True when the customer is on an old (legacy) plan and has no v2 plan. currentPlanFor reads the customer's own Stripe
-// subscriptions once and keeps the answer per user for a minute, so this costs one cached read, not one per request.
-// Admins never count; a slow (over 3 s) or failing lookup answers false, so the customer stays where they are.
-async function onLegacyPlan(userId, ent) {
-  if (ent?.isAdmin || ent?.tier === 'admin') return false;
-  const { plan } = await planWithin(currentPlanFor(userId), PLAN_WAIT_MS);
-  return plan?.legacy === true;
+// Started alongside getEntitlement (never after it), so it adds no wait of its own beyond the 1.5 s cap on a cache miss.
+// Resolves true only when the customer is on an old (legacy) plan with no v2 plan (currentPlanFor reads their own Stripe
+// subscriptions, cached per user for a minute). Anything else (slow, failing, throwing) is false and can never touch the entitlement.
+function startLegacyLookup(userId) {
+  try {
+    return planWithin(Promise.resolve().then(() => currentPlanFor(userId)), PLAN_WAIT_MS)
+      .then(({ plan }) => plan?.legacy === true)
+      .catch(() => false);
+  } catch {
+    return Promise.resolve(false);
+  }
 }
 
 export default async function handler(req, res) {
@@ -30,9 +34,10 @@ export default async function handler(req, res) {
       legacyPlan: false,
     });
   }
+  const legacyLookup = startLegacyLookup(session.user.id);
   try {
     const ent = await getEntitlement({ supabase: session.supabase, userId: session.user.id, user: session.user });
-    return res.status(200).json({ ...ent, legacyPlan: await onLegacyPlan(session.user.id, ent) });
+    return res.status(200).json({ ...ent, legacyPlan: !(ent?.isAdmin || ent?.tier === 'admin') && (await legacyLookup) });
   } catch (err) {
     return res.status(200).json({
       tier: 'none',

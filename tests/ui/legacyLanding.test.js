@@ -19,7 +19,9 @@ vi.mock('../../lib/supabase', () => ({
 const AppHome = (await import('../../pages/app/index.js')).default;
 const AppShell = (await import('../../components/app/AppShell.js')).default;
 const LegacyHome = (await import('../../pages/legacy-home.js')).default;
-const { _resetInApp } = await import('../../lib/appVisit.js');
+const { _resetInApp, markInApp, wasInApp } = await import('../../lib/appVisit.js');
+const { _resetLegacyPlan } = await import('../../lib/useLegacyPlan.js');
+const { signOutAndGoHome } = await import('../../lib/signOut.js');
 
 function stubFetch(entitlement) {
   vi.stubGlobal('fetch', vi.fn(async (url) => {
@@ -38,6 +40,7 @@ beforeEach(() => {
   supa.user = { id: 'u1' };
   window.history.replaceState({}, '', '/app');
   _resetInApp();
+  _resetLegacyPlan();
 });
 afterEach(() => {
   cleanup();
@@ -191,5 +194,84 @@ describe('/legacy-home story maker link', () => {
     render(<LegacyHome />);
     await settle();
     expect(screen.queryByRole('link', { name: 'Try the new story maker' })).toBeNull();
+  });
+});
+
+describe('round 1: one request, sessionStorage flag, no flash', () => {
+  it('the app shell plus the /app home make one /api/entitlement request', async () => {
+    stubFetch({ tier: 'monthly', legacyPlan: false, creditsRemaining: 2 });
+    render(<AppShell><AppHome /></AppShell>);
+    await screen.findByText('No videos yet');
+    await screen.findByText('2 credits');
+    const n = fetch.mock.calls.filter((c) => c[0] === '/api/entitlement').length;
+    expect(n).toBe(1);
+  });
+
+  it('shows no projects until the plan is known, then redirects without showing them', async () => {
+    let release;
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === '/api/entitlement') { await new Promise((r) => { release = r; }); return { ok: true, json: async () => ({ legacyPlan: true }) }; }
+      return { ok: true, json: async () => ({ projects: [] }) };
+    }));
+    render(<AppHome />);
+    await settle();
+    expect(screen.queryByText('No videos yet')).toBeNull();
+    release();
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/legacy-home'));
+    expect(screen.queryByText('No videos yet')).toBeNull();
+  });
+
+  it('after 1.5 seconds without an answer the story maker shows and no redirect follows', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let release;
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === '/api/entitlement') { await new Promise((r) => { release = r; }); return { ok: true, json: async () => ({ legacyPlan: true }) }; }
+      return { ok: true, json: async () => ({ projects: [] }) };
+    }));
+    render(<AppHome />);
+    await vi.advanceTimersByTimeAsync(1600);
+    expect(await screen.findByText('No videos yet')).toBeInTheDocument();
+    release();
+    await vi.advanceTimersByTimeAsync(50);
+    expect(router.replace).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it('?maker=1 marks the tab, so a later plain /app (even after a reload) does not bounce', async () => {
+    window.history.replaceState({}, '', '/app?maker=1');
+    stubFetch({ legacyPlan: true });
+    const { unmount } = render(<AppHome />);
+    await settle();
+    unmount();
+    expect(window.sessionStorage.getItem('ariya_in_app')).toBe('1');
+    window.history.replaceState({}, '', '/app');
+    _resetLegacyPlan();
+    render(<AppHome />);
+    await settle();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it('signing out clears the mark, so the next person on this tab is redirected', async () => {
+    markInApp();
+    expect(wasInApp()).toBe(true);
+    await signOutAndGoHome({ push: vi.fn() });
+    expect(wasInApp()).toBe(false);
+    stubFetch({ legacyPlan: true });
+    render(<AppHome />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/legacy-home'));
+  });
+
+  it('works when sessionStorage is unavailable', async () => {
+    const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+    const spy2 = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => { throw new Error('blocked'); });
+    markInApp();
+    expect(() => wasInApp()).not.toThrow();
+    spy.mockRestore(); spy2.mockRestore();
+    _resetInApp();
+    const spy3 = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('blocked'); });
+    stubFetch({ legacyPlan: true });
+    render(<AppHome />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/legacy-home'));
+    spy3.mockRestore();
   });
 });

@@ -4,14 +4,21 @@ import Link from 'next/link';
 import { getBrowserSupabase } from '../../lib/supabase';
 import { subscribeEntitlement } from '../../lib/entitlementBus';
 import Pill from '../ui/Pill';
+import { sharedEntitlement } from '../../lib/useLegacyPlan';
 
 /** Credit balance pill for the app shell. Reads /api/entitlement. */
 export default function CreditBadge() {
   const [entitlement, setEntitlement] = useState(null);
   const [signedIn, setSignedIn] = useState(false);
 
-  const load = useCallback(async () => {
+  // The first read shares the page's single /api/entitlement request; later refreshes (credits changed) ask again.
+  const load = useCallback(async (first = false) => {
     try {
+      if (first === true) {
+        const ent = await sharedEntitlement();
+        if (ent) setEntitlement(ent);
+        return;
+      }
       const r = await fetch('/api/entitlement');
       if (!r.ok) return;
       setEntitlement(await r.json());
@@ -33,8 +40,8 @@ export default function CreditBadge() {
       setEntitlement(null);
       return undefined;
     }
-    load();
-    return subscribeEntitlement(load);
+    load(true);
+    return subscribeEntitlement(() => load());
   }, [signedIn, load]);
 
   if (!signedIn || !entitlement) return null;
