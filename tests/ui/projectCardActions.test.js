@@ -10,7 +10,7 @@ vi.mock('../../lib/story/client', async (importOriginal) => {
   return { ...actual, deleteProject: vi.fn(), duplicateProject: vi.fn() };
 });
 const push = vi.fn();
-vi.mock('next/router', () => ({ default: { push: (...a) => push(...a) } }));
+vi.mock('next/router', () => ({ default: { push: (...a) => push(...a) }, useRouter: () => ({ pathname: '/app', asPath: '/app', replace: () => {} }) }));
 
 const client = await import('../../lib/story/client');
 const { default: ProjectCard, projectStatus } = await import('../../components/app/ProjectCard');

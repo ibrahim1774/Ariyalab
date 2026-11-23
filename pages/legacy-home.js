@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import Head from 'next/head';
+import Link from 'next/link';
 import Script from 'next/script';
 import { useRouter } from 'next/router';
 
@@ -998,6 +999,11 @@ export default function HomePage() {
     <>
       <Head><title>From a Single Image to a Full Video — Ariya Lab</title></Head>
       <main className={styles.page} style={{ paddingTop: 20 }}>
+        {authUser && entitlement?.legacyPlan === true && (
+          <p style={{ margin: '0 auto 10px', textAlign: 'center', fontSize: 14 }}>
+            New: make animated story videos. <Link href="/app?maker=1">Try the new story maker</Link>
+          </p>
+        )}
         <div className={styles.hero} style={{ marginBottom: 18 }}>
           <h1
             className={styles.headline}

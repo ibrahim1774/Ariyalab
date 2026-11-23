@@ -1,14 +1,34 @@
 import { useEffect, useState } from 'react';
 import Head from 'next/head';
+import { useRouter } from 'next/router';
 
 import Button from '../../components/ui/Button';
 import Card from '../../components/ui/Card';
 import ProjectCard from '../../components/app/ProjectCard';
 import styles from '../../styles/AppPages.module.css';
+import { wasInApp } from '../../lib/appVisit';
 
 export default function AppHome() {
   // null = still loading. Any non-200 (including a route that is not built yet) shows the empty state.
   const [projects, setProjects] = useState(null);
+  const router = useRouter();
+
+  // Customers on an old plan land on the classic Image to Video page instead, unless they asked for the story maker
+  // (?maker=1) or are already moving around inside the app. Only this home page ever redirects; /legacy-home never sends anyone back.
+  useEffect(() => {
+    if (wasInApp() || new URLSearchParams(window.location.search).get('maker') === '1') return undefined;
+    let alive = true;
+    (async () => {
+      try {
+        const r = await fetch('/api/entitlement');
+        if (!r.ok) return;
+        const ent = await r.json();
+        if (alive && ent?.legacyPlan === true) router.replace('/legacy-home');
+      } catch {}
+    })();
+    return () => { alive = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let alive = true;

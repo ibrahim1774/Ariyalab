@@ -68,6 +68,12 @@
 .signOut:disabled { opacity: 0.6; cursor: default; }
 .main { flex: 1; padding: 4px 28px 24px; }
 
+.classicLink {
+  margin-left: 12px;
+  font-size: 13px;
+  color: var(--muted, inherit);
+  text-decoration: underline;
+}
 .topbar:empty { display: none; }
 
 @media (max-width: 760px) {

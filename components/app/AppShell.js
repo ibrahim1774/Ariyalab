@@ -4,6 +4,8 @@ import { useRouter } from 'next/router';
 
 import CreditBadge from './CreditBadge';
 import SignOutButton from './SignOutButton';
+import useLegacyPlan from '../../lib/useLegacyPlan';
+import { markInApp } from '../../lib/appVisit';
 import styles from './AppShell.module.css';
 
 const NAV = [
@@ -17,12 +19,21 @@ const NAV = [
 
 /** Signed-in chrome: left sidebar, credit balance top right, page content in the main area. */
 export default function AppShell({ children }) {
-  const { pathname } = useRouter();
+  const { pathname, events } = useRouter();
+  const { legacyPlan } = useLegacyPlan();
   const activeRef = useRef(null);
   // On a phone the nav is a horizontal strip: bring the current tab into view.
   useEffect(() => {
     activeRef.current?.scrollIntoView?.({ inline: 'center', block: 'nearest' });
   }, [pathname]);
+  // Remember that this customer is moving around inside the app (see lib/appVisit.js): a deep link, or a link click.
+  useEffect(() => {
+    if (pathname !== '/app') markInApp();
+    // Only a move to another /app page counts (signing out to / does not, so the next sign-in lands normally).
+    const onStart = (url) => { if (/^\/app(\/|\?|#|$)/.test(String(url))) markInApp(); };
+    events?.on?.('routeChangeStart', onStart);
+    return () => events?.off?.('routeChangeStart', onStart);
+  }, [pathname, events]);
   const isActive = (item) => (item.exact ? pathname === item.href : pathname === item.href || pathname.startsWith(`${item.href}/`));
 
   return (
@@ -49,6 +60,7 @@ export default function AppShell({ children }) {
       <div className={styles.column}>
         <header className={styles.topbar}>
           <CreditBadge />
+          {legacyPlan && <Link href="/legacy-home" className={styles.classicLink}>Classic tools</Link>}
           <SignOutButton />
         </header>
         <main className={styles.main}>{children}</main>
