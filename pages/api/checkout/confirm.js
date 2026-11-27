@@ -103,7 +103,7 @@ export default async function handler(req, res) {
         return res.status(409).json({ error: 'This payment is linked to another account. Contact support.' });
       }
       const refused = await refuseSecondPlan({ userId: session.user.id, customerId, checkoutSession, claim: false });
-      if (refused) return res.status(409).json({ error: refused.message, code: 'HAS_PLAN', refunded: refused.refunded });
+      if (refused) return res.status(409).json({ error: refused.message, code: 'HAS_PLAN', refunded: refused.refunded, classicUrl: refused.classicUrl });
     }
 
     let linkPlan;

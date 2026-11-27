@@ -170,10 +170,10 @@ async function handleInvoicePaymentSucceeded(eventInvoice, req, { purchase = tru
   // CAPI for someone else's purchase.
   if (!plan) return;
 
-  // Shared Stripe account: under billing_v2 this app handles only its own (ariya_v2_*) prices. A classic
-  // (ariyalab_*) renewal belongs to www.ariyalab.online: acknowledge it and write nothing (no ledger, no
-  // customer metadata, no CAPI).
-  if (!isV2Price(price) && (await isBillingV2Strict())) {
+  // Shared Stripe account: this endpoint handles only this app's own (ariya_v2_*) prices, whatever billing_v2 says.
+  // A classic (ariyalab_*) renewal belongs to www.ariyalab.online, whose own endpoint credits it: acknowledge it and
+  // write nothing (no ledger, no customer metadata, no CAPI).
+  if (!isV2Price(price)) {
     console.info('[stripe-webhook] skipped: classic_price', invoice.id);
     return;
   }
@@ -273,9 +273,9 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
   const topup = plan ? null : topupFromPrice(price);
   // Not this app's price (haelabs): write nothing.
   if (!plan && !topup) return;
-  // Under billing_v2 only this app's own (ariya_v2_*) prices: a classic (ariyalab_*) session belongs to
-  // www.ariyalab.online. Acknowledge and write nothing (no grant, no profile link, no CAPI).
-  if (!isV2Price(price) && (await isBillingV2Strict())) {
+  // Only this app's own (ariya_v2_*) prices, whatever billing_v2 says: a classic (ariyalab_*) session belongs to
+  // www.ariyalab.online, whose own endpoint credits it. Acknowledge and write nothing (no grant, no profile link, no CAPI).
+  if (!isV2Price(price)) {
     console.info('[stripe-webhook] skipped: classic_price', fullSession.id);
     return;
   }

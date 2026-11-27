@@ -154,7 +154,7 @@ export default async function handler(req, res) {
     const refused = await refuseSecondPlan({ userId: session.user.id, customerId, checkoutSession });
     if (refused) {
       clearClaimCookie(res, req.cookies?.[CLAIM_NONCE_COOKIE], checkoutSession);
-      return res.status(409).json({ error: refused.message, code: 'HAS_PLAN', refunded: refused.refunded });
+      return res.status(409).json({ error: refused.message, code: 'HAS_PLAN', refunded: refused.refunded, classicUrl: refused.classicUrl });
     }
 
     // Grant before linking (the entitlement reader must never see a linked

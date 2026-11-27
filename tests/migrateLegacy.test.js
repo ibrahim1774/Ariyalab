@@ -113,7 +113,7 @@ async function run(args, env = {}) {
   const lines = [];
   const out = await runMigration({
     argv: args,
-    env: { STRIPE_SECRET_KEY: 'sk_test_stub', ...env },
+    env: { STRIPE_SECRET_KEY: 'sk_test_stub', ALLOW_LEGACY_MIGRATION: 'i-know-this-double-spends', ...env },
     stripeClient: S.api,
     log: (l) => lines.push(l),
     fail: (l) => lines.push(l),
@@ -384,9 +384,18 @@ describe('guards', () => {
     ).toBe(0);
   });
 
+  it('is retired: it refuses unless ALLOW_LEGACY_MIGRATION is the exact override, and reads nothing', async () => {
+    for (const env of [{ ALLOW_LEGACY_MIGRATION: undefined }, { ALLOW_LEGACY_MIGRATION: '1' }, { ALLOW_LEGACY_MIGRATION: 'true' }]) {
+      const out = await run([cutoff(60), '--apply', '--confirm=1:1'], env);
+      expect(out.ok).toBe(false);
+      expect(out.lines.join('\n')).toMatch(/retired/);
+      expect(out.rows).toEqual([]);
+    }
+  });
+
   it('as a command with no key it refuses cleanly (plain node, nothing contacted)', () => {
     const script = fileURLToPath(new URL('../scripts/migrate-legacy-credits.mjs', import.meta.url));
-    const env = { PATH: process.env.PATH, HOME: process.env.HOME };
+    const env = { PATH: process.env.PATH, HOME: process.env.HOME, ALLOW_LEGACY_MIGRATION: 'i-know-this-double-spends' };
     const r = spawnSync(process.execPath, [script], { env, encoding: 'utf8', timeout: 30_000 });
     expect(r.status).toBe(2);
     expect(r.stderr).toMatch(/STRIPE_SECRET_KEY/);

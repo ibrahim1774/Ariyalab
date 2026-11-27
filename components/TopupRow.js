@@ -175,7 +175,8 @@ export default function TopupRow({
   return (
     <>
       {offersReady && renderRow('Video credits', videoPacks, 'video credits', false)}
-      {renderRow('Image credits', IMAGE_PACKS, 'image credits', inflateImage, imageNoun)}
+      {/* Billing v2: the legacy image packs are ariyalab.online's, /api/checkout refuses them. */}
+      {offersReady && !v2Topups && renderRow('Image credits', IMAGE_PACKS, 'image credits', inflateImage, imageNoun)}
       {localError && (
         <div className={paywallStyles.error} style={{ marginTop: 12 }}>
           {localError}

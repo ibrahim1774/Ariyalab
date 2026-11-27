@@ -235,6 +235,11 @@ export async function runMigration({
     fail(message);
     return { ok: false, rows: [], count: 0, total: 0, error: message };
   };
+  // Retired: Ariya Lab customers stay on ariyalab.online, so moving their legacy credits to the ledger would let
+  // them spend the same balance twice. The code stays, but it cannot run by accident.
+  if (env.ALLOW_LEGACY_MIGRATION !== 'i-know-this-double-spends') {
+    return refuse('The legacy credit migration is retired (Ariya Lab customers stay on ariyalab.online; moving their credits would double-spend them). Nothing was read or written. To run it anyway set ALLOW_LEGACY_MIGRATION=i-know-this-double-spends.');
+  }
   if (opts.unknown.length) return refuse(`Unknown option(s): ${opts.unknown.join(' ')}`);
   const key = env.STRIPE_SECRET_KEY;
   if (!key && !stripeClient) return refuse('STRIPE_SECRET_KEY is not set. Nothing was read or written.');

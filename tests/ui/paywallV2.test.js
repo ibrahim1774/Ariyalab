@@ -80,5 +80,15 @@ describe('old funnel pricing with billing_v2', () => {
     render(<TopupRow returnTo="/dashboard" />);
     await waitFor(() => expect(screen.getByText('$40')).toBeInTheDocument());
     expect(screen.queryByText('$50')).toBeNull();
+    // The legacy image packs are ariyalab.online's: not drawn under billing v2.
+    expect(screen.queryByText('Image credits')).toBeNull();
+    expect(screen.queryByText('$5')).toBeNull();
+  });
+
+  it('off: the video and image packs both show', async () => {
+    stubFetch(false);
+    render(<TopupRow returnTo="/dashboard" />);
+    await waitFor(() => expect(screen.getByText('Image credits')).toBeInTheDocument());
+    expect(screen.getByText('Video credits')).toBeInTheDocument();
   });
 });

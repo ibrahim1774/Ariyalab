@@ -410,20 +410,17 @@ describe('billing_v2 off (legacy metadata grants)', () => {
     const session = topupSession({ customer, buyer });
     const event = completedEvent(session);
 
-    const results = await Promise.all([deliver(event), deliver(event)]);
-    const again = await deliver(event);
-    // A second, different event for the same session (Stripe resend) is also a no-op.
-    const other = await deliver(completedEvent(session));
-
-    // A delivery racing the one that holds the grant lock gets 500 (in
-    // progress) so Stripe retries it; it never grants.
-    for (const r of results) expect([200, 500]).toContain(r.statusCode);
-    expect(results.map((r) => r.statusCode)).toContain(200);
-    for (const r of [again, other]) expect(r.statusCode).toBe(200);
+    // The webhook ignores a classic price whatever the flag says (classic's own endpoint credits it); the grant
+    // here is /confirm's (a sonallo legacy sale while billing v2 is still off).
+    expect((await deliver(event)).statusCode).toBe(200);
+    expect(legacyCredits(customer)).toBe(0);
+    const results = await Promise.all([confirmAs(buyer, session.id), confirmAs(buyer, session.id)]);
+    const again = await confirmAs(buyer, session.id);
+    // A call racing the one that holds the grant lock answers in progress; it never grants.
+    for (const r of [...results, again]) expect(r.statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
     // Two racing grants can lose an update and still end at 2,280: count the writes.
     expect(creditWrites(customer)).toBe(1);
-    expect(await recorded(event.id)).toBe(true);
     expect(await recorded(`checkout:${session.id}`)).toBe(true);
   });
 
@@ -435,9 +432,8 @@ describe('billing_v2 off (legacy metadata grants)', () => {
     const event = completedEvent(session);
     const [hook, conf] = await Promise.all([deliver(event), confirmAs(buyer, session.id)]);
 
-    // Whichever path loses the lock: /confirm answers 200 (in progress), the
-    // webhook 500 so Stripe redelivers. The redelivery is a no-op.
-    expect([200, 500]).toContain(hook.statusCode);
+    // The webhook ignores the classic price (200, writes nothing); /confirm grants once.
+    expect(hook.statusCode).toBe(200);
     expect(conf.statusCode).toBe(200);
     expect((await deliver(event)).statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
@@ -451,15 +447,22 @@ describe('billing_v2 off (legacy metadata grants)', () => {
     const event = completedEvent(session);
 
     S.state.failCustomerUpdates = 1;
-    const failed = await deliver(event);
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
+    let failed;
+    try {
+      failed = await confirmAs(buyer, session.id);
+    } finally {
+      errors.mockRestore();
+    }
     expect(failed.statusCode).toBe(500);
-    expect(await recorded(event.id)).toBe(false);
     expect(await recorded(`checkout:${session.id}`)).toBe(false);
     expect(legacyCredits(customer)).toBe(0);
 
-    const retried = await deliver(event);
+    const retried = await confirmAs(buyer, session.id);
     expect(retried.statusCode).toBe(200);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
+    // The webhook ignores the classic price either way.
+    expect((await deliver(event)).statusCode).toBe(200);
   });
 
   it('/confirm with a session whose client_reference_id or customer email does not match the caller returns 403', async () => {
@@ -830,23 +833,23 @@ describe('review fixes, billing_v2 off', () => {
     const session = topupSession({ customer, buyer });
     await lockRow(`checkout:${session.id}`, '3 minutes');
 
-    expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+    const first = await confirmAs(buyer, session.id);
+    expect(first.statusCode).toBe(200);
+    expect(first.body.creditsAdded).toBe(TOPUP_S.credits);
     expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
     expect(await recorded(`checkout:${session.id}:done`)).toBe(true);
     expect((await confirmAs(buyer, session.id)).body.creditsAdded).toBe(0);
     expect(creditWrites(customer)).toBe(1);
   });
 
-  it('I1: a live grant lock makes the webhook retry and /confirm answer in progress', async () => {
+  it('I1: a live grant lock makes /confirm answer in progress (the webhook ignores the classic price)', async () => {
     const buyer = newUser();
     const customer = newCustomer();
     const session = topupSession({ customer, buyer });
     await lockRow(`checkout:${session.id}`);
     const event = completedEvent(session);
 
-    const hook = await deliver(event);
-    expect(hook.statusCode).toBe(500);
-    expect(await recorded(event.id)).toBe(false);
+    expect((await deliver(event)).statusCode).toBe(200);
     const conf = await confirmAs(buyer, session.id);
     expect(conf.statusCode).toBe(200);
     expect(conf.body.inProgress).toBe(true);
@@ -946,7 +949,7 @@ describe('review fixes, billing_v2 off', () => {
     const customer = newCustomer();
     S.state.customers.get(customer).deleted = true;
     const session = topupSession({ customer, buyer });
-    const res = await deliver(completedEvent(session));
+    const res = await confirmAs(buyer, session.id);
     expect(res.statusCode).toBe(200);
     expect(await recorded(`checkout:${session.id}:done`)).toBe(true);
   });
@@ -997,10 +1000,12 @@ describe('review fixes, billing_v2 on', () => {
     const session = topupSession({ customer, buyer, extra: { line_items: { data: [{ price: { lookup_key: TOPUPS.s.lookupKey } }] } } });
     setPricingDb({ query: async () => { throw new Error('db down'); } });
     let res;
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
-      res = await deliver(completedEvent(session));
+      res = await confirmAs(buyer, session.id);
     } finally {
       setPricingDb(db);
+      errors.mockRestore();
     }
     expect(res.statusCode).toBe(500);
     expect(legacyCredits(customer)).toBe(0);
@@ -1747,8 +1752,8 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
         expect(parked.rows).toEqual([{ claimed_by: null }]);
         expect((await getBalance(user.id)).available).toBe(0);
       } else {
-        // Legacy: the payment sits on the new customer (the grant), nothing else.
-        expect(legacyCredits(fresh)).toBe(TOPUP_S.credits);
+        // Legacy: the webhook ignores a classic price (classic credits it), so nothing is written at all.
+        expect(legacyCredits(fresh)).toBe(0);
         expect(S.state.updates.filter((u) => u.id === old)).toHaveLength(0);
       }
     });
@@ -1762,26 +1767,24 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
         await expectUntouched();
       });
 
-      it('the grant stays parked after the 409 and is delivered when the admin route merges', async () => {
+      it('a v2 plan claimed by a buyer whose account has another customer is cancelled by the one-plan guard; its grant stays parked and unclaimed', async () => {
+        // (A real v2 plan claim like this is always refused and refunded by lib/planGuard.js, so the admin merge
+        // is not tested delivering a grant for a plan that was cancelled and refunded.)
         const { user, fresh, expectUntouched } = await returningBuyer();
         knownAccount(user);
         const invoice = paidInvoice({ customer: fresh, subId: newSub(fresh) });
         await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
-        const { session, cookies } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
+        const { cookies } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
         const refused = await callRoute(claimTicket, { user, cookies });
         expect(refused.statusCode).toBe(409);
+        expect(refused.body).toMatchObject({ code: 'HAS_PLAN' });
         expect(refused.body.error).toMatch(/^Buy the plan while signed in/); // the one-plan guard answers first
+        expect(S.state.cancelledSubs).toContain(invoice.subscription);
+        expect(S.state.subs.get(invoice.subscription).status).toBe('canceled');
         await expectUntouched();
-        const pending = () =>
-          db.query('select claimed_by from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
-        expect((await pending()).rows).toEqual([{ claimed_by: null }]);
+        const pending = await db.query('select claimed_by from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
+        expect(pending.rows).toEqual([{ claimed_by: null }]);
         expect((await getBalance(user.id)).available).toBe(0);
-
-        const merged = await healAs({ sessionId: session.id, email: user.email, dryRun: false, ...OVERRIDE });
-        expect(merged.statusCode).toBe(200);
-        expect(await profileOf(user.id)).toBe(fresh);
-        expect(String((await pending()).rows[0].claimed_by)).toBe(user.id);
-        expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
       });
     } else {
       it('the admin route performs the merge: profile moved, credits moved once', async () => {
@@ -2186,19 +2189,18 @@ describe('round 5: admin merge grants first (B1)', () => {
     }
   });
 
-  it('B1 v2: a parked subscription invoice is delivered by the merge once; re-opening the claim link adds nothing', async () => {
+  it('B1 v2: a returning buyer claiming a v2 plan is refused and the plan cancelled; the parked invoice stays unclaimed', async () => {
     await setBillingV2(true);
     try {
       const { user, fresh } = await returningBuyer();
       knownAccount(user);
       const invoice = paidInvoice({ customer: fresh, subId: newSub(fresh) });
       await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } });
-      const { session, cookies } = ticketSub(fresh, { email: user.email });
-      expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(409);
-      expect((await healAs({ sessionId: session.id, dryRun: false })).statusCode).toBe(200);
-      expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
-      expect((await callRoute(claimTicket, { user, cookies })).statusCode).toBe(200);
-      expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+      const { cookies } = ticketSub(fresh, { email: user.email });
+      const refused = await callRoute(claimTicket, { user, cookies });
+      expect(refused.statusCode).toBe(409);
+      expect(S.state.cancelledSubs).toContain(invoice.subscription);
+      expect((await getBalance(user.id)).plan).toBe(0);
     } finally {
       await setBillingV2(false);
     }
@@ -2617,7 +2619,8 @@ describe('task 6 round 2: migrated customers are granted in the ledger whatever 
     const customer = newCustomer();
     await link(user.id, customer);
     await migrate(customer, user.id);
-    const session = topupSession({ customer, buyer: user });
+    // A v2 price (a classic one is never clawed back here).
+    const session = topupSession({ customer, buyer: user, extra: { line_items: { data: [{ price: { lookup_key: v2TopupKey('s') } }] } } });
     await grantForCheckoutSession(session, { userId: user.id });
     expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S);
 
@@ -2841,6 +2844,56 @@ describe('billing_v2 gate: only ariya_v2_* prices (classic ariyalab_* purchases 
       expect(res.statusCode).toBe(409);
       expect(res.body.code).toBe('HAS_PLAN');
       expect(res.body.classicUrl).toBeUndefined();
+    });
+  });
+
+  describe('v2 off: this endpoint still ignores classic prices (classic credits them itself)', () => {
+    beforeAll(() => setBillingV2(false));
+
+    it('a classic top-up, renewal and refund event writes nothing', async () => {
+      const { sendCapiEvent } = await import('../../lib/meta');
+      sendCapiEvent.mockClear();
+      const buyer = newUser();
+      const customer = newCustomer({ [KEY.credits]: '500' });
+      await link(buyer.id, customer);
+      const updates0 = S.state.updates.length;
+      const rev0 = await reversalRows();
+      const session = classicTopup({ customer, buyer });
+      const topEvent = completedEvent(session);
+      expect((await deliver(topEvent)).statusCode).toBe(200);
+      expect(await recorded(topEvent.id)).toBe(true);
+      expect(await recorded(`checkout:${session.id}:done`)).toBe(false);
+      const invoice = paidInvoice({ customer, subId: classicNewSub(customer), reason: 'subscription_cycle' });
+      for (const type of ['invoice.payment_succeeded', 'invoice.paid']) {
+        expect((await deliver({ id: `evt_${randomUUID()}`, type, data: { object: invoice } })).statusCode).toBe(200);
+      }
+      const charge = { id: `ch_${randomUUID().slice(0, 8)}`, customer, amount: 1500, amount_refunded: 1500, payment_intent: session.payment_intent, invoice: null };
+      S.state.charges.set(charge.id, charge);
+      expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } })).statusCode).toBe(200);
+      expect(S.state.updates.length).toBe(updates0);
+      expect(mdOf(customer)[KEY.credits]).toBe('500');
+      expect(await reversalRows()).toBe(rev0);
+      expect((await getBalance(buyer.id)).available).toBe(0);
+      expect(sendCapiEvent).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('planGuard pointer for a classic subscriber', () => {
+    beforeAll(() => setBillingV2(true));
+    afterAll(() => setBillingV2(false));
+
+    it('a v2 plan bought by a classic subscriber is cancelled with a message pointing to ariyalab.online', async () => {
+      const user = newUser();
+      const customer = newCustomer({ supabase_user_id: user.id }, user.email);
+      await link(user.id, customer);
+      classicNewSub(customer); // the old plan
+      const v2Sub = newSub(customer); // the v2 plan just bought
+      const session = subSession({ customer, email: user.email, metadata: { supabase_user_id: user.id }, extra: { subscription: S.state.subs.get(v2Sub) } });
+      const res = await confirmAs(user, session.id);
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ code: 'HAS_PLAN', classicUrl: 'https://www.ariyalab.online/' });
+      expect(res.body.error).toMatch(/Ariya Lab plan lives on https:\/\/www\.ariyalab\.online\//);
+      expect(S.state.cancelledSubs).toContain(v2Sub);
     });
   });
 

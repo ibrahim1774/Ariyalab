@@ -95,6 +95,8 @@ Checks on the real database after applying (they cannot be tested in the in-memo
 
 ## 3. Legacy credit migration (dry run, then for real)
 
+**RETIRED (2026-11-26): do not run this step.** Ariya Lab customers stay on ariyalab.online and their legacy credits are never moved to the ledger, because classic knows nothing of the ledger and a migrated balance could be spent twice. The admin route answers 410 and the script refuses unless `ALLOW_LEGACY_MIGRATION=i-know-this-double-spends` is set. The text below is kept for history only.
+
 The script moves this app's legacy credit balances (Stripe customer metadata) into the ledger.
 
 Owner decision (2026-11-16): dormant balances (customers with no active plan) ARE moved, so every run below uses

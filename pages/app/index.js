@@ -63,13 +63,15 @@ export default function AppHome() {
           <Button href="/app/new">New video</Button>
         </div>
 
-        {gate === 'classic' ? (
+        {gate === 'classic' && (
           <Card className={styles.empty} data-testid="classic-notice">
             <h2>Your Ariya Lab plan lives on ariyalab.online</h2>
             <p>Your plan and credits are on the Ariya Lab site. Sonallo has its own plans.</p>
             <Button href={classicUrl}>Go to ariyalab.online</Button>
           </Card>
-        ) : gate === 'check' ? (
+        )}
+
+        {gate === 'check' ? (
           <p className={styles.note}>Loading your projects…</p>
         ) : projects === null ? (
           <p className={styles.note}>Loading your projects…</p>

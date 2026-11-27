@@ -287,6 +287,17 @@ describe('billing v2: an old-plan customer is sent to ariyalab.online', () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it('/app home keeps the project list below the notice for a legacy user who has projects', async () => {
+    vi.stubGlobal('fetch', vi.fn(async (url) => {
+      if (url === '/api/entitlement') return { ok: true, status: 200, json: async () => ({ tier: 'monthly', legacyPlan: true, classicUrl: CLASSIC }) };
+      if (url === '/api/story/projects') return { ok: true, status: 200, json: async () => ({ projects: [{ id: 'p1', title: 'My Sonallo story', status: 'draft' }] }) };
+      return { ok: false, status: 404, json: async () => ({}) };
+    }));
+    render(<AppHome />);
+    expect(await screen.findByTestId('classic-notice')).toBeInTheDocument();
+    expect(await screen.findByText(/My Sonallo story/)).toBeInTheDocument();
+  });
+
   it('the header link points at ariyalab.online instead of /legacy-home', async () => {
     stubFetch({ tier: 'monthly', legacyPlan: true, classicUrl: CLASSIC, creditsRemaining: 0 });
     render(<AppShell><p>x</p></AppShell>);
