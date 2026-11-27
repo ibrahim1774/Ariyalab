@@ -1,5 +1,5 @@
 // Final review M1: a <title> with text next to a JSX expression renders two children, and React's SSR puts a
-// `<!-- -->` comment between them, so the tab reads "Sign up<!-- --> — Ariya Lab". One expression (a template
+// `<!-- -->` comment between them, so the tab reads "Sign up<!-- --> — Sonallo". One expression (a template
 // string) or plain text only.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';

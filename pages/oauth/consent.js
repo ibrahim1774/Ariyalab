@@ -41,13 +41,13 @@ export default function OAuthConsentPage({ error = null, details = null, email =
   return (
     <>
       <Head>
-        <title>{`${error ? 'Connection error' : 'Allow access'} · Ariya Lab`}</title>
+        <title>{`${error ? 'Connection error' : 'Allow access'} · Sonallo`}</title>
         <meta name="robots" content="noindex" />
         <meta name="referrer" content="same-origin" />
       </Head>
       <main className={styles.page}>
         <Card className={styles.card}>
-          <p className={styles.brand}>Ariya Lab</p>
+          <p className={styles.brand}>Sonallo</p>
           {error ? (
             <>
               <h1 className={styles.title}>{error.title}</h1>
@@ -64,13 +64,13 @@ export default function OAuthConsentPage({ error = null, details = null, email =
             <>
               {details.verified ? (
                 <h1 className={styles.title}>
-                  Allow <span className={styles.client}>{details.headline}</span> to use your Ariya Lab account?
+                  Allow <span className={styles.client}>{details.headline}</span> to use your Sonallo account?
                 </h1>
               ) : (
                 <>
                   <p className={styles.unverified}>Unverified app</p>
                   <h1 className={styles.title}>
-                    Allow an app at <span className={styles.client}>{details.headline}</span> to use your Ariya Lab account?
+                    Allow an app at <span className={styles.client}>{details.headline}</span> to use your Sonallo account?
                   </h1>
                   {details.clientName && <p className={styles.meta}>It calls itself {details.clientName}.</p>}
                   {details.clientIdHost && <p className={styles.meta}>Its details come from {details.clientIdHost}.</p>}

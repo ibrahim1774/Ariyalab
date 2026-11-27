@@ -89,7 +89,7 @@ export default async function handler(req, res) {
     const plan = planFromPrice(price);
     const topup = plan ? null : topupFromPrice(price);
     if (!plan && !topup) {
-      return res.status(400).json({ error: 'This checkout is not for an Ariya Lab plan or pack.' });
+      return res.status(400).json({ error: 'This checkout is not for an Sonallo plan or pack.' });
     }
 
     // One plan per account (billing v2): a second plan bought at the same time

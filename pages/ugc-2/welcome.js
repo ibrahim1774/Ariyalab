@@ -45,7 +45,7 @@ export default function Ugc2WelcomePage() {
   return (
     <>
       <Head>
-        <title>Finish setup — Ariya Lab</title>
+        <title>Finish setup — Sonallo</title>
       </Head>
       <main
         style={{

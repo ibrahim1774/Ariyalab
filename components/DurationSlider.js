@@ -1,5 +1,5 @@
 /*
- * Duration control for Ariya Lab video generation.
+ * Duration control for Sonallo video generation.
  * Standard (Seedance) → 4/6/12s preset pills.
  * Studio Pro (Kling 3.0) → 3–15s slider.
  * Live cost reflects model × resolution × audio.

@@ -88,7 +88,7 @@ export default function TopupPage() {
   if (!user) {
     return (
       <>
-        <Head><title>Top up credits — Ariya Lab</title></Head>
+        <Head><title>Top up credits — Sonallo</title></Head>
         <main style={pageStyle}>
           <div style={heroStyle}>
             <span style={eyebrowStyle}>◆ Top up</span>
@@ -116,7 +116,7 @@ export default function TopupPage() {
 
   return (
     <>
-      <Head><title>Top up credits — Ariya Lab</title></Head>
+      <Head><title>Top up credits — Sonallo</title></Head>
       <main style={pageStyle}>
         <div style={heroStyle}>
           <span style={eyebrowStyle}>◆ Top up</span>

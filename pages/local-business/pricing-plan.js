@@ -50,7 +50,7 @@ export default function LocalBusinessPricingPlanPage() {
   return (
     <>
       <Head>
-        <title>Local Business Plans — Ariya Lab</title>
+        <title>Local Business Plans — Sonallo</title>
       </Head>
       <main className={styles.page} style={{ paddingTop: 8 }}>
         <div className={styles.hero} style={{ marginBottom: 6, textAlign: 'center' }}>
@@ -81,7 +81,7 @@ export default function LocalBusinessPricingPlanPage() {
               textAlign: 'center',
             }}
           >
-            Type what you want or upload a photo, and Ariya Lab builds a
+            Type what you want or upload a photo, and Sonallo builds a
             ready-to-post video in minutes.
           </p>
         </div>

@@ -14,7 +14,7 @@ export default function SignInPage() {
   return (
     <>
       <Head>
-        <title>Sign in — Ariya Lab</title>
+        <title>Sign in — Sonallo</title>
       </Head>
       <main style={{ minHeight: '80vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <AuthModal open={open} onClose={() => (window.location.href = '/')} initialMode="signin" redirectTo={returnTo} closeOnSuccess={false} />

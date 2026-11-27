@@ -6,8 +6,8 @@ import section from './Section.module.css';
 const ITEMS = [
   {
     id: 'what',
-    title: 'What is Ariya Lab?',
-    body: 'Ariya Lab turns an idea into a finished animated story video. You describe it, pick your cast, review a storyboard, and we generate the shots, add narration, music and captions, and put it all together.',
+    title: 'What is Sonallo?',
+    body: 'Sonallo turns an idea into a finished animated story video. You describe it, pick your cast, review a storyboard, and we generate the shots, add narration, music and captions, and put it all together.',
   },
   {
     id: 'who',
@@ -42,7 +42,7 @@ const ITEMS = [
   {
     id: 'claude',
     title: 'Can I use it from Claude?',
-    body: 'Yes. Ariya Lab has a connector for Claude. You add its address in Claude, sign in with your Ariya Lab account, and you can make videos by chatting. It uses the same credits and always shows a quote before it spends any.',
+    body: 'Yes. Sonallo has a connector for Claude. You add its address in Claude, sign in with your Sonallo account, and you can make videos by chatting. It uses the same credits and always shows a quote before it spends any.',
   },
 ];
 

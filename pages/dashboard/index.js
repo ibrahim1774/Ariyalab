@@ -165,7 +165,7 @@ export default function DashboardPage() {
   return (
     <>
       <Head>
-        <title>Dashboard — Ariya Lab</title>
+        <title>Dashboard — Sonallo</title>
       </Head>
       <main className={styles.page} style={{ paddingTop: 20, paddingBottom: 40 }}>
         <div className={styles.hero} style={{ marginBottom: 12 }}>

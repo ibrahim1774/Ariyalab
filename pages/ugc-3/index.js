@@ -442,7 +442,7 @@ export default function Ugc3Page() {
   if (entitlement && entitlement.tier === 'none' && !entitlement.canSwap) {
     return (
       <>
-        <Head><title>Pick a Plan — Ariya Lab</title></Head>
+        <Head><title>Pick a Plan — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>◆ Pick a plan</span>
@@ -873,7 +873,7 @@ export default function Ugc3Page() {
 
     return (
       <>
-        <Head><title>UGC Creator — Ariya Lab</title></Head>
+        <Head><title>UGC Creator — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>{eyebrow}</span>
@@ -1019,7 +1019,7 @@ export default function Ugc3Page() {
     entitlement?.status === 'trialing';
   return (
     <>
-      <Head><title>From a Single Image to a Full Video — Ariya Lab</title></Head>
+      <Head><title>From a Single Image to a Full Video — Sonallo</title></Head>
       <main className={styles.page} style={{ paddingTop: 8 }}>
         <div className={`${styles.hero} fade-up`} style={{ marginBottom: 6 }}>
           <h1

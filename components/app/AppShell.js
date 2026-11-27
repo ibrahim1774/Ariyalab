@@ -40,8 +40,8 @@ export default function AppShell({ children }) {
     <div className={styles.shell}>
       <aside className={styles.sidebar}>
         <Link href="/" className={styles.brand}>
-          <span className={styles.mark} aria-hidden="true">A</span>
-          <span className={styles.wordmark}>Ariya Lab</span>
+          <span className={styles.mark} aria-hidden="true">S</span>
+          <span className={styles.wordmark}>Sonallo</span>
         </Link>
         <nav className={styles.nav} aria-label="App">
           {NAV.map((item) => (

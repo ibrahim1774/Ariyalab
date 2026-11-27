@@ -143,7 +143,7 @@ export default function VoicesPage() {
 
   return (
     <>
-      <Head><title>Voices | Ariya Lab</title></Head>
+      <Head><title>Voices | Sonallo</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>

@@ -52,7 +52,7 @@ export default function AppHome() {
 
   return (
     <>
-      <Head><title>Projects | Ariya Lab</title></Head>
+      <Head><title>Projects | Sonallo</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>

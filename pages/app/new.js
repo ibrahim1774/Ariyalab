@@ -24,11 +24,11 @@ export default function NewVideoPage() {
     await router.replace(`/app/p/${id}`);
   }
   // The simple view is the default; ?view=steps keeps the 12 step start screen.
-  if (!router.isReady) return <Head><title>New video | Ariya Lab</title></Head>;
+  if (!router.isReady) return <Head><title>New video | Sonallo</title></Head>;
   if (router.query?.view !== 'steps') {
     return (
       <>
-        <Head><title>New video | Ariya Lab</title></Head>
+        <Head><title>New video | Sonallo</title></Head>
         <SimpleMaker id={null} returnTo="/app/new" />
       </>
     );
@@ -36,7 +36,7 @@ export default function NewVideoPage() {
   const steps = stepsFor(null).map((s) => ({ id: s.id, label: s.label, locked: s.id !== 'start' }));
   return (
     <>
-      <Head><title>New video | Ariya Lab</title></Head>
+      <Head><title>New video | Sonallo</title></Head>
       <MakerLayout title="New video" steps={steps} currentId="start">
         <StepStart onCreate={onCreate} onCreateForVideo={onCreateForVideo} onOpenProject={onOpenProject} returnTo="/app/new" />
       </MakerLayout>

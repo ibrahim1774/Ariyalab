@@ -13,7 +13,7 @@ export default function Home() {
   return (
     <>
       <Head>
-        <title>Ariya Lab | Animated story videos</title>
+        <title>Sonallo | Animated story videos</title>
         <meta
           name="description"
           content="Describe your story or start from a video you like. Get a finished, captioned animated video in minutes."

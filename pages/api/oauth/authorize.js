@@ -33,7 +33,7 @@ export default async function handler(req, res) {
   // unforgeable Sec-Fetch-Site says same-origin.
   const originOk = !origin || origin === new URL(oauthIssuer(req)).origin || (origin === 'null' && fetchSite === 'same-origin');
   if (!originOk || (fetchSite && fetchSite !== 'same-origin')) {
-    return sendErrorPage(res, 403, 'Request not accepted', 'The approval must come from the Ariya Lab consent page.');
+    return sendErrorPage(res, 403, 'Request not accepted', 'The approval must come from the Sonallo consent page.');
   }
   const auth = await getUserFromRequest(req, res);
   if (!auth?.user) {

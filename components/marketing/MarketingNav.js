@@ -37,8 +37,8 @@ export default function MarketingNav() {
     <header className={styles.wrap}>
       <nav className={styles.bar} aria-label="Main">
         <Link href="/" className={styles.brand}>
-          <span className={styles.mark} aria-hidden="true">A</span>
-          <span className={styles.wordmark}>Ariya Lab</span>
+          <span className={styles.mark} aria-hidden="true">S</span>
+          <span className={styles.wordmark}>Sonallo</span>
         </Link>
 
         <div className={styles.links}>

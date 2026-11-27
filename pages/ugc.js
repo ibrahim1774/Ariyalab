@@ -446,7 +446,7 @@ export default function UgcPage() {
   if (entitlement && entitlement.tier === 'none' && !entitlement.canSwap) {
     return (
       <>
-        <Head><title>Pick a Plan — Ariya Lab</title></Head>
+        <Head><title>Pick a Plan — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>◆ Pick a plan</span>
@@ -839,7 +839,7 @@ export default function UgcPage() {
 
     return (
       <>
-        <Head><title>UGC Creator — Ariya Lab</title></Head>
+        <Head><title>UGC Creator — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>{eyebrow}</span>
@@ -972,7 +972,7 @@ export default function UgcPage() {
     entitlement?.status === 'trialing';
   return (
     <>
-      <Head><title>From a Single Image to a Full Video — Ariya Lab</title></Head>
+      <Head><title>From a Single Image to a Full Video — Sonallo</title></Head>
       <main className={`${styles.page} ugc-lux-page`} style={{ paddingTop: 8 }}>
         <div className={styles.hero} style={{ marginBottom: 10 }}>
           <span className={`${styles.eyebrow} ugc-lux-in ugc-lux-d1`}>◆ UGC Creator</span>
@@ -986,7 +986,7 @@ export default function UgcPage() {
             </em>
           </h1>
           <p className={`${styles.subtitle} ugc-lux-in ugc-lux-d3`} style={{ marginTop: 12, fontSize: 15 }}>
-            Upload your character, write the script — Ariya Lab animates it in minutes.
+            Upload your character, write the script — Sonallo animates it in minutes.
           </p>
         </div>
 

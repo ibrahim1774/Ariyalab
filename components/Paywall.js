@@ -10,7 +10,7 @@ import { CHECKOUT_FAILED, failPayment, paymentErrorText } from '../lib/paymentEr
 const IMAGE_DISPLAY_MULTIPLIER = 10;
 const IMAGE_PERIOD_CAP = 30;
 
-// Ariya Lab video credit caps. Base-quality short video = 4s × 10cr/s = 40cr.
+// Sonallo video credit caps. Base-quality short video = 4s × 10cr/s = 40cr.
 const PLAN_VIDEO_CAPS = {
   monthly: 760,
   pro: 2280,
@@ -85,7 +85,7 @@ const SURFACE_COPY = {
       'Customize each shot with your own prompt + edit any result',
       'One charge, cancel anytime',
     ],
-    bonusLine: 'Access to every other Ariya Lab AI tool included',
+    bonusLine: 'Access to every other Sonallo AI tool included',
     creditsKind: 'image',
     imageNoun: 'images',
   },
@@ -115,7 +115,7 @@ const SURFACE_COPY = {
       'Customize each design',
       'One charge, cancel anytime',
     ],
-    bonusLine: 'Access to every other Ariya Lab AI tool included',
+    bonusLine: 'Access to every other Sonallo AI tool included',
     creditsKind: 'image',
     imageNoun: 'redesigns',
   },
@@ -145,7 +145,7 @@ const SURFACE_COPY = {
       'Top up anytime for more credits',
       'One charge, cancel anytime',
     ],
-    bonusLine: 'Access to every other Ariya Lab AI tool included',
+    bonusLine: 'Access to every other Sonallo AI tool included',
     creditsKind: 'video',
   },
   'real-estate': {
@@ -174,7 +174,7 @@ const SURFACE_COPY = {
       'Top up anytime for more credits',
       'One charge, cancel anytime',
     ],
-    bonusLine: 'Access to every other Ariya Lab AI tool included',
+    bonusLine: 'Access to every other Sonallo AI tool included',
     creditsKind: 'video',
   },
 };

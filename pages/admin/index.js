@@ -160,7 +160,7 @@ function AdminTools({ adminEmail, billing }) {
   return (
     <>
       <Head>
-        <title>Admin — Ariya Lab</title>
+        <title>Admin — Sonallo</title>
       </Head>
       <main className={styles.page} style={{ maxWidth: 640, margin: '0 auto' }}>
         <div className={styles.hero}>

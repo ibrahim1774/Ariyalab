@@ -66,7 +66,7 @@ describe('getOrCreatePortalConfiguration', () => {
     const id = await getOrCreatePortalConfiguration(stripe(), {});
     expect(id).toBe('bpc_new1');
     const c = F.created[0];
-    expect(c.business_profile.headline).toBe('Manage your Ariya Lab plan');
+    expect(c.business_profile.headline).toBe('Manage your Sonallo plan');
     expect(c.metadata.app).toBe('ariyalab');
     expect(c.metadata.hash).toMatch(/^[0-9a-f]{12}$/);
     expect(c.features.payment_method_update).toEqual({ enabled: true });

@@ -24,7 +24,7 @@ function isHttpUrl(value) {
 }
 
 // Face swap = 1 stage-1 character frame on Replicate (~$0.025 nano-banana)
-// + 1 stage-2 motion-control video (~$0.10-0.20 Kling v3). At Ariya Lab's
+// + 1 stage-2 motion-control video (~$0.10-0.20 Kling v3). At Sonallo's
 // inflated credit rate (~$0.0013/credit cost), 100 credits ≈ $0.13 of
 // underlying cost — covers stage-1 + stage-2 with modest margin.
 const COST = FACE_SWAP_COST;

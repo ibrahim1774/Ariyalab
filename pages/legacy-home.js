@@ -442,7 +442,7 @@ export default function HomePage() {
   if (entitlement && entitlement.tier === 'none' && !entitlement.canSwap) {
     return (
       <>
-        <Head><title>Pick a Plan — Ariya Lab</title></Head>
+        <Head><title>Pick a Plan — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>◆ Pick a plan</span>
@@ -860,7 +860,7 @@ export default function HomePage() {
 
     return (
       <>
-        <Head><title>UGC Creator — Ariya Lab</title></Head>
+        <Head><title>UGC Creator — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>{eyebrow}</span>
@@ -997,7 +997,7 @@ export default function HomePage() {
     entitlement?.status === 'trialing';
   return (
     <>
-      <Head><title>From a Single Image to a Full Video — Ariya Lab</title></Head>
+      <Head><title>From a Single Image to a Full Video — Sonallo</title></Head>
       <main className={styles.page} style={{ paddingTop: 20 }}>
         {authUser && entitlement?.legacyPlan === true && (
           <p style={{ margin: '0 auto 10px', textAlign: 'center', fontSize: 14 }}>

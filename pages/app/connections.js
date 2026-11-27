@@ -67,7 +67,7 @@ export default function ConnectionsPage() {
   return (
     <>
       <Head>
-        <title>Connected apps · Ariya Lab</title>
+        <title>Connected apps · Sonallo</title>
       </Head>
       <div className={styles.page}>
         <div className={styles.header}>
@@ -94,7 +94,7 @@ export default function ConnectionsPage() {
         ) : connections.length === 0 ? (
           <Card className={styles.empty}>
             <h2>No apps are connected</h2>
-            <p>When you connect Ariya Lab to Claude, it shows up here.</p>
+            <p>When you connect Sonallo to Claude, it shows up here.</p>
           </Card>
         ) : (
           <div className={own.list}>

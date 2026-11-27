@@ -228,7 +228,7 @@ export default function BrandPage() {
 
   return (
     <>
-      <Head><title>Brand kit | Ariya Lab</title></Head>
+      <Head><title>Brand kit | Sonallo</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>

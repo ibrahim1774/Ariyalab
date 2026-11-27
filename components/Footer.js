@@ -38,7 +38,7 @@ export default function Footer() {
           marginBottom: 12,
         }}
       >
-        Ariya&nbsp;Lab
+        Sonallo
       </div>
       <div
         style={{

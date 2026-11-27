@@ -143,7 +143,7 @@ export default function BillingPage() {
 
   return (
     <>
-      <Head><title>Billing | Ariya Lab</title></Head>
+      <Head><title>Billing | Sonallo</title></Head>
       <div className={styles.page}>
         <div className={styles.header}>
           <div>

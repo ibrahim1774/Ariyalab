@@ -94,7 +94,7 @@ export default function HistoryPage() {
   return (
     <>
       <Head>
-        <title>History — Ariya Lab</title>
+        <title>History — Sonallo</title>
       </Head>
       <main className={styles.page}>
         <header className={styles.header}>

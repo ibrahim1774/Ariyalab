@@ -51,11 +51,11 @@ describe('ProductDemo', () => {
     const { container } = render(<ProductDemo />);
     expect(container.querySelector('[data-demo]')).not.toBeNull();
     expect(win(container)).toHaveAttribute('aria-hidden', 'true');
-    expect(win(container).textContent).toContain('ariyalab.com/app');
+    expect(win(container).textContent).toContain('sonallo.com/app');
     const rail = [...container.querySelectorAll('[data-demo-rail] li')];
     expect(rail.map((li) => li.getAttribute('data-step'))).toEqual(ORDER);
     expect(rail.map((li) => li.textContent.replace(/^\d/, ''))).toEqual(LABELS);
-    expect(screen.getByText(/demo of making a video with Ariya Lab/i)).toBeInTheDocument();
+    expect(screen.getByText(/demo of making a video with Sonallo/i)).toBeInTheDocument();
   });
 
   it('types the idea letter by letter', () => {

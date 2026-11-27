@@ -205,7 +205,7 @@ export default function VideoEditingPage() {
   return (
     <>
       <Head>
-        <title>Video Editor — Ariya Lab</title>
+        <title>Video Editor — Sonallo</title>
       </Head>
       <main className={styles.page}>
         <header className={styles.header}>

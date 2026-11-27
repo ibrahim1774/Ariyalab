@@ -85,7 +85,7 @@ describe('portal configuration variants', () => {
     expect(keysOf(c).some((k) => k.includes('_month_'))).toBe(false);
     expect(c.metadata).toMatchObject({ app: 'ariyalab', variant: 'yearly' });
     expect(c.features.subscription_update.proration_behavior).toBe('always_invoice');
-    expect(c.business_profile.headline).toBe('Manage your Ariya Lab plan');
+    expect(c.business_profile.headline).toBe('Manage your Sonallo plan');
   });
 
   it('the two variants are separate configurations (different hashes), each reused by metadata afterwards', async () => {

@@ -40,8 +40,8 @@ export default function MarketingFooter() {
       <div className={styles.inner}>
         <div className={styles.about}>
           <div className={styles.brand}>
-            <span className={styles.mark} aria-hidden="true">A</span>
-            <span className={styles.wordmark}>Ariya Lab</span>
+            <span className={styles.mark} aria-hidden="true">S</span>
+            <span className={styles.wordmark}>Sonallo</span>
           </div>
           <p className={styles.blurb}>
             Turn a short idea into an animated story video, ready to post. Describe it, pick your cast, get your video.
@@ -69,7 +69,7 @@ export default function MarketingFooter() {
           </div>
         ))}
       </div>
-      <div className={styles.legal}>© {new Date().getFullYear()} Ariya Lab. All rights reserved.</div>
+      <div className={styles.legal}>© {new Date().getFullYear()} Sonallo. All rights reserved.</div>
     </footer>
   );
 }

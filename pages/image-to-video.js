@@ -214,7 +214,7 @@ export default function ImageToVideoPage() {
   return (
     <>
       <Head>
-        <title>Image to Video — Ariya Lab</title>
+        <title>Image to Video — Sonallo</title>
       </Head>
       <main className={styles.page}>
         {/* ── Hero ── */}

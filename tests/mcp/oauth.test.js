@@ -568,7 +568,7 @@ describe('consent page', () => {
     expect(html).not.toContain('<script');
     expect(html).toContain('&lt;img src=x onerror=alert(1)&gt;');
     expect(html).not.toMatch(/<a /);
-    expect(html).toContain('Create and manage your Ariya Lab story videos and spend your credits');
+    expect(html).toContain('Create and manage your Sonallo story videos and spend your credits');
     expect(html).toContain('alice@example.test');
     expect(html).toContain('app.example');
     expect(html).toContain('action="/api/oauth/authorize"');

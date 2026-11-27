@@ -473,7 +473,7 @@ export default function LocalBusinessPage() {
   if (entitlement && entitlement.tier === 'none' && !entitlement.canSwap) {
     return (
       <>
-        <Head><title>Pick a Plan — Ariya Lab</title></Head>
+        <Head><title>Pick a Plan — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>◆ Pick a plan</span>
@@ -901,7 +901,7 @@ export default function LocalBusinessPage() {
 
     return (
       <>
-        <Head><title>UGC Creator — Ariya Lab</title></Head>
+        <Head><title>UGC Creator — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>{eyebrow}</span>
@@ -1038,7 +1038,7 @@ export default function LocalBusinessPage() {
     entitlement?.status === 'trialing';
   return (
     <>
-      <Head><title>Content for Local Businesses — Ariya Lab</title></Head>
+      <Head><title>Content for Local Businesses — Sonallo</title></Head>
       <main className={styles.page} style={{ paddingTop: 8 }}>
         <div className={styles.hero} style={{ marginBottom: 6, textAlign: 'center' }}>
           <h1
@@ -1068,7 +1068,7 @@ export default function LocalBusinessPage() {
               textAlign: 'center',
             }}
           >
-            Type what you want or upload a photo, and Ariya Lab builds a
+            Type what you want or upload a photo, and Sonallo builds a
             ready-to-post video in minutes.
           </p>
 

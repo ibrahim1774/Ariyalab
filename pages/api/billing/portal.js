@@ -16,7 +16,7 @@ import { planWithin } from '../../../lib/planWait';
  * request. 401 signed out, 404 when the account has no Stripe customer yet.
  *
  * Billing v2 on: the session names this app's OWN portal configuration
- * (lib/stripePortal.js, one of two variants by the customer's plan interval: only the Ariya v2 plan prices, upgrades invoiced at
+ * (lib/stripePortal.js, one of two variants by the customer's plan interval: only the Sonallo v2 plan prices, upgrades invoiced at
  * once, downgrades at period end). Without one Stripe would use the account
  * default, which belongs to another product on the shared Stripe account, so
  * when the configuration cannot be made this answers the plain failure line and
@@ -49,7 +49,7 @@ export default async function handler(req, res) {
     const client = stripe();
     let configuration = null;
     if (await isBillingV2Strict()) {
-      // A customer who is POSITIVELY known to be on a yearly Ariya plan gets the yearly-only configuration, so a shorter
+      // A customer who is POSITIVELY known to be on a yearly Sonallo plan gets the yearly-only configuration, so a shorter
       // interval cannot be chosen. A customer positively known to have no plan, a monthly plan or a legacy plan gets the
       // full one. An UNKNOWN plan (lookup failed or took over 3 seconds) is retried once; still unknown, no portal opens
       // at all: the full configuration would let a yearly subscriber switch to monthly at once.

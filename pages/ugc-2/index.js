@@ -521,7 +521,7 @@ export default function Ugc2Page() {
   if (!hasActiveSub) {
     return (
       <>
-        <Head><title>AI UGC Videos — Ariya Lab</title></Head>
+        <Head><title>AI UGC Videos — Sonallo</title></Head>
         <main className={styles.page} style={{ paddingTop: 8 }}>
           <div className={`${styles.hero} fade-up`} style={{ marginBottom: 8 }}>
             <h1
@@ -1008,7 +1008,7 @@ export default function Ugc2Page() {
 
     return (
       <>
-        <Head><title>UGC Creator — Ariya Lab</title></Head>
+        <Head><title>UGC Creator — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow}>{eyebrow}</span>
@@ -1153,7 +1153,7 @@ export default function Ugc2Page() {
 
   return (
     <>
-      <Head><title>From a Single Image to a Full Video — Ariya Lab</title></Head>
+      <Head><title>From a Single Image to a Full Video — Sonallo</title></Head>
       <main className={styles.page} style={{ paddingTop: 12 }}>
         <div className={`${styles.hero} fade-up`} style={{ marginBottom: 8 }}>
           <span className={styles.eyebrow}>{chooseEyebrow}</span>

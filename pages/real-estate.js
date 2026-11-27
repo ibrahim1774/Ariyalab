@@ -461,7 +461,7 @@ export default function RealEstatePage() {
   if (entitlement && entitlement.tier === 'none' && !entitlement.canSwap) {
     return (
       <>
-        <Head><title>Pick a Plan — Ariya Lab</title></Head>
+        <Head><title>Pick a Plan — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow} style={{ marginBottom: 16, display: 'inline-flex' }}>◆ Pick a Plan</span>
@@ -836,7 +836,7 @@ export default function RealEstatePage() {
 
     return (
       <>
-        <Head><title>UGC Creator — Ariya Lab</title></Head>
+        <Head><title>UGC Creator — Sonallo</title></Head>
         <main className={styles.page}>
           <div className={styles.hero}>
             <span className={styles.eyebrow} style={{ marginBottom: 16, display: 'inline-flex' }}>{eyebrow}</span>
@@ -996,7 +996,7 @@ export default function RealEstatePage() {
     entitlement?.status === 'trialing';
   return (
     <>
-      <Head><title>Real Estate Listing Videos — Ariya Lab</title></Head>
+      <Head><title>Real Estate Listing Videos — Sonallo</title></Head>
       <main className={styles.page} style={{ paddingTop: 8 }}>
         <div className={styles.hero} style={{ marginBottom: 16, textAlign: 'center' }}>
           <span className={styles.eyebrow} style={{ marginBottom: 16, display: 'inline-flex' }}>
@@ -1027,7 +1027,7 @@ export default function RealEstatePage() {
             }}
           >
             Type what you want to announce — a new listing, an open house, a
-            market update — and Ariya Lab builds the video in minutes.
+            market update — and Sonallo builds the video in minutes.
           </p>
 
           {/* Mode toggle — centered pill, pairs visually with ModelPicker.

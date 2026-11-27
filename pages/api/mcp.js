@@ -1,7 +1,7 @@
 import { handleMcpRequest } from '../../lib/mcp/server.js';
 
 /*
- * /api/mcp: the Ariya Lab MCP connector (Streamable HTTP, stateless), signed in
+ * /api/mcp: the Sonallo MCP connector (Streamable HTTP, stateless), signed in
  * through the OAuth server in lib/mcp/oauth.js. Customers paste APP_URL + /api/mcp
  * into Claude (docs/connector.md). Not in the middleware matcher.
  *

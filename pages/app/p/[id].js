@@ -14,7 +14,7 @@ export default function ProjectMakerPage() {
   const detailed = router.query?.view === 'steps';
   return (
     <>
-      <Head><title>Make your video | Ariya Lab</title></Head>
+      <Head><title>Make your video | Sonallo</title></Head>
       {id ? (
         detailed ? <MakerPage id={id} returnTo={router.asPath} /> : <SimpleMaker id={id} returnTo={router.asPath} />
       ) : (

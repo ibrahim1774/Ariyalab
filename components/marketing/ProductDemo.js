@@ -499,7 +499,7 @@ export default function ProductDemo() {
   return (
     <div className={styles.demo} data-demo>
       <p className={styles.srOnly}>
-        A short demo of making a video with Ariya Lab. Someone describes a story idea in one line, checks the script and asks
+        A short demo of making a video with Sonallo. Someone describes a story idea in one line, checks the script and asks
         for a funnier opening, checks the cast, pictures, voice and music, then watches the finished video and downloads it.
       </p>
       <div className={styles.shell}>
@@ -516,15 +516,15 @@ export default function ProductDemo() {
               <svg viewBox="0 0 16 16" width="10" height="10" aria-hidden="true">
                 <path d="M5 7V5a3 3 0 0 1 6 0v2h1v7H4V7zm1.5 0h3V5a1.5 1.5 0 0 0-3 0z" fill="currentColor" />
               </svg>
-              ariyalab.com/app
+              sonallo.com/app
             </span>
             <span />
           </div>
           <div className={styles.app}>
             <div className={styles.appHead}>
               <span className={styles.brand}>
-                <span className={styles.logo}>A</span>
-                <span className={styles.brandName}>Ariya Lab</span>
+                <span className={styles.logo}>S</span>
+                <span className={styles.brandName}>Sonallo</span>
               </span>
               <Rail current={scene.id} />
               <span key={balance} className={`${styles.balance} ${spent && !still ? styles.flash : ''}`}>

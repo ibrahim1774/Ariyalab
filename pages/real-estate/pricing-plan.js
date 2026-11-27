@@ -39,7 +39,7 @@ export default function RealEstatePricingPlanPage() {
   return (
     <>
       <Head>
-        <title>Real Estate Plans — Ariya Lab</title>
+        <title>Real Estate Plans — Sonallo</title>
       </Head>
       <main className={styles.page} style={{ paddingTop: 24 }}>
         <div className={styles.hero} style={{ marginBottom: 12, textAlign: 'center' }}>
@@ -70,7 +70,7 @@ export default function RealEstatePricingPlanPage() {
             }}
           >
             Type what you want to announce — a new listing, an open house, a
-            market update — and Ariya Lab builds the video in minutes.
+            market update — and Sonallo builds the video in minutes.
           </p>
         </div>
 
