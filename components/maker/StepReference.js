@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 import Button from '../ui/Button';
 import Card from '../ui/Card';
-import { startAnalysis, uploadReference } from '../../lib/story/client';
+import { getCapabilities, startAnalysis, uploadReference } from '../../lib/story/client';
 import { REFERENCE_LIMITS, REFERENCE_MESSAGES, RIGHTS_STATEMENT, VIDEO_EXTENSION, VIDEO_TYPES, isAllowedReferenceLink } from '../../lib/story/referenceRules';
 import ErrorNotice from './ErrorNotice';
 import { Icon } from './Tiles';
@@ -44,13 +44,29 @@ export async function checkVideoFile(file, { readDuration = readVideoDuration } 
   return null;
 }
 
+/** What this deployment can do (/api/story/capabilities). Unknown or unreachable counts as everything: the server refuses what it cannot do. */
+export function useReferenceCapabilities() {
+  const [caps, setCaps] = useState({ linkDownload: true, transcription: true });
+  useEffect(() => {
+    let alive = true;
+    Promise.resolve()
+      .then(() => getCapabilities())
+      .then((c) => {
+        if (alive && c && typeof c === 'object') setCaps({ linkDownload: c.linkDownload !== false, transcription: c.transcription !== false });
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+  return caps;
+}
+
 /**
  * "Start from a video": upload an MP4 or paste an Instagram, TikTok or Facebook link, tick the rights statement,
  * and the analysis starts. `ensureProject()` returns the project id to use (on the first screen it creates the
  * project, only once everything checks out); `onStarted(projectId, reference)` runs after the start.
  */
 export default function StepReference({ ensureProject, onStarted, returnTo, readDuration = readVideoDuration, title = 'Start from a video' }) {
-  const [mode, setMode] = useState('upload');
+  const [chosenMode, setChosenMode] = useState('upload');
   const [file, setFile] = useState(null);
   const [fileInfo, setFileInfo] = useState(null); // { seconds } once read
   const [fileProblem, setFileProblem] = useState(null);
@@ -60,6 +76,11 @@ export default function StepReference({ ensureProject, onStarted, returnTo, read
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState(null);
   const projectId = useRef(null);
+  const caps = useReferenceCapabilities();
+  // Without a downloader key there is no "Paste a link": the upload is the only door.
+  const linkAvailable = caps.linkDownload;
+  const mode = linkAvailable ? chosenMode : 'upload';
+  const setMode = setChosenMode;
 
   const trimmed = link.trim();
   const linkProblem = mode === 'link' && trimmed && !isAllowedReferenceLink(trimmed) ? REFERENCE_MESSAGES.link : null;
@@ -118,7 +139,7 @@ export default function StepReference({ ensureProject, onStarted, returnTo, read
           </div>
         </div>
 
-        <div className={styles.segmented} role="radiogroup" aria-label="Where the video comes from">
+        {linkAvailable && <div className={styles.segmented} role="radiogroup" aria-label="Where the video comes from">
           {[['upload', 'Upload a file', 'upload'], ['link', 'Paste a link', 'link']].map(([id, text, icon]) => (
             <label key={id} className={mode === id ? styles.segOn : ''}>
               <input type="radio" name="reference-source" value={id} checked={mode === id} disabled={Boolean(busy)} onChange={() => { setMode(id); setError(null); }} />
@@ -126,7 +147,7 @@ export default function StepReference({ ensureProject, onStarted, returnTo, read
               {text}
             </label>
           ))}
-        </div>
+        </div>}
 
         {mode === 'upload' ? (
           <div className={styles.source}>
@@ -146,6 +167,7 @@ export default function StepReference({ ensureProject, onStarted, returnTo, read
               )}
             </label>
             {fileProblem && <p className={styles.problem} role="alert">{fileProblem}</p>}
+            {!caps.transcription && <p className={styles.hint}>Speech in the video is not transcribed right now, so the breakdown follows the pictures.</p>}
           </div>
         ) : (
           <div className={styles.source}>

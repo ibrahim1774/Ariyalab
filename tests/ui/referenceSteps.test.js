@@ -54,6 +54,29 @@ const linkTab = () => fireEvent.click(screen.getByRole('radio', { name: /Paste a
 const rightsBox = () => screen.getByRole('checkbox', { name: /right to use this video/i });
 const submit = () => screen.getByRole('button', { name: /Break down my video/ });
 
+describe('StepReference capabilities', () => {
+  it('hides "Paste a link" when the server has no downloader key, and says speech is not transcribed when it has no transcription key', async () => {
+    client.getCapabilities.mockResolvedValue({ linkDownload: false, transcription: false });
+    renderReference();
+    await waitFor(() => expect(screen.queryByRole('radio', { name: /Paste a link/ })).toBeNull());
+    expect(screen.getByLabelText('Choose a video file')).toBeInTheDocument();
+    expect(await screen.findByText(/not transcribed right now/)).toBeInTheDocument();
+  });
+
+  it('keeps both doors and no note when everything is configured, and when the capabilities cannot be read', async () => {
+    client.getCapabilities.mockResolvedValue({ linkDownload: true, transcription: true });
+    renderReference();
+    expect(screen.getByRole('radio', { name: /Paste a link/ })).toBeInTheDocument();
+    await act(async () => {});
+    expect(screen.queryByText(/not transcribed right now/)).toBeNull();
+    cleanup();
+    client.getCapabilities.mockRejectedValue(new Error('offline'));
+    renderReference();
+    await act(async () => {});
+    expect(screen.getByRole('radio', { name: /Paste a link/ })).toBeInTheDocument();
+  });
+});
+
 describe('StepReference', () => {
   it('offers an upload and a link, says the limits, and shows the rights statement', () => {
     renderReference();

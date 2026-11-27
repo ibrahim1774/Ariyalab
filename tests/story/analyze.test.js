@@ -50,6 +50,10 @@ vi.mock('../../lib/providers/stt.js', async (importOriginal) => {
   const real = await importOriginal();
   return { ...real, transcribe: vi.fn(async (...args) => { await maybeFail('stt'); return real.transcribe(...args); }) };
 });
+vi.mock('../../lib/providers/capabilities.js', async (importOriginal) => {
+  const real = await importOriginal();
+  return { ...real, transcriptionConfigured: () => (globalThis.__noStt ? false : real.transcriptionConfigured()) };
+});
 vi.mock('../../lib/providers/llm.js', async (importOriginal) => {
   const real = await importOriginal();
   return {
@@ -345,6 +349,20 @@ describe('analysis of a fixture reference', () => {
     expect(readdirSync(dir).sort()).toEqual(ref.frames.map((f) => path.basename(f.key)).sort());
   });
 
+  it('with no transcription key, a video with sound is analysed from its pictures alone and nothing is transcribed', async () => {
+    globalThis.__noStt = true;
+    try {
+      const { ref } = await analysed(FX.multi);
+      expect(ref.status).toBe('ready');
+      expect(ref.beat_sheet).toHaveLength(3);
+      expect(ref.beat_sheet.every((b) => b.said === '')).toBe(true);
+      expect(ref.transcript.words).toEqual([]);
+      expect(transcribe).not.toHaveBeenCalled();
+    } finally {
+      delete globalThis.__noStt;
+    }
+  });
+
   it('a no-speech video still yields beats, with empty said, and pays for no transcription', async () => {
     const { ref } = await analysed(FX.silent);
     expect(ref.status).toBe('ready');
@@ -472,6 +490,21 @@ describe('what is refused before any job exists', () => {
     accounts.set({ paid: false });
     await refused(ctx, start(ctx, { type: 'link', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' }), /Upload the file instead/);
     await refused(ctx, start(ctx, { type: 'link', url: 'https://www.vm.tiktok.com/ZM123/' }), /Upload the file instead/);
+    expect(fetchReference).not.toHaveBeenCalled();
+  });
+
+  it('a pasted link is refused when no downloader key is set, before anything is counted or queued', async () => {
+    const ctx = await newProject();
+    const keys = ['STORY_MOCK', 'APIFY_TOKEN', 'SCRAPECREATORS_API_KEY'];
+    const saved = Object.fromEntries(keys.map((k) => [k, process.env[k]]));
+    process.env.STORY_MOCK = '0';
+    delete process.env.APIFY_TOKEN;
+    delete process.env.SCRAPECREATORS_API_KEY;
+    try {
+      await refused(ctx, start(ctx, { type: 'link', url: 'https://www.tiktok.com/@a/video/1' }), REFERENCE_MESSAGES.linkUnavailable);
+    } finally {
+      for (const k of keys) { if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k]; }
+    }
     expect(fetchReference).not.toHaveBeenCalled();
   });
 
