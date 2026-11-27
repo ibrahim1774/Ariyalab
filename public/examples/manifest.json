@@ -1,10 +1,16 @@
 [
   { "src": "/examples/story-watch.mp4", "poster": "/examples/story-watch.jpg", "label": "Animated story" },
-  { "src": "/examples/ugc-barber-hook.mp4", "poster": "/examples/ugc-barber-hook.jpg", "label": "AI UGC ad" },
-  { "src": "/examples/story-got-serious.mp4", "poster": "/examples/story-got-serious.jpg", "label": "Fast cut story" },
+  { "src": "/examples/drink-moment-1.mp4", "poster": "/examples/drink-moment-1.jpg", "label": "Wordless product story" },
+  { "src": "/examples/drink-moment-5.mp4", "poster": "/examples/drink-moment-5.jpg", "label": "Product ad with captions" },
+  { "src": "/examples/drink-moment-2.mp4", "poster": "/examples/drink-moment-2.jpg", "label": "Talking skit" },
   { "src": "/examples/skit-3d-barbers.mp4", "poster": "/examples/skit-3d-barbers.jpg", "label": "3D animated skit" },
-  { "src": "/examples/ugc-contractor-truck.mp4", "poster": "/examples/ugc-contractor-truck.jpg", "label": "AI UGC ad" },
+  { "src": "/examples/drink-moment-3.mp4", "poster": "/examples/drink-moment-3.jpg", "label": "Narrator voice-over" },
+  { "src": "/examples/ugc-barber-hook.mp4", "poster": "/examples/ugc-barber-hook.jpg", "label": "AI UGC ad" },
+  { "src": "/examples/drink-moment-4.mp4", "poster": "/examples/drink-moment-4.jpg", "label": "Fast-cut song" },
+  { "src": "/examples/story-got-serious.mp4", "poster": "/examples/story-got-serious.jpg", "label": "Fast cut story" },
+  { "src": "/examples/drink-moment-6.mp4", "poster": "/examples/drink-moment-6.jpg", "label": "Everyday moment ad" },
   { "src": "/examples/cartoon-unc-jay.mp4", "poster": "/examples/cartoon-unc-jay.jpg", "label": "2D cartoon" },
+  { "src": "/examples/ugc-contractor-truck.mp4", "poster": "/examples/ugc-contractor-truck.jpg", "label": "AI UGC ad" },
   { "src": "/examples/ugc-spotlight-barber.mp4", "poster": "/examples/ugc-spotlight-barber.jpg", "label": "Spotlight ad" },
   { "src": "/examples/ugc-podcast.mp4", "poster": "/examples/ugc-podcast.jpg", "label": "Podcast style ad" }
 ]
