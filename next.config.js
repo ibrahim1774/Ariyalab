@@ -1,3 +1,33 @@
+// The old Ariya Lab tools and funnels still ship in this codebase, but sonallo.com is the story video
+// maker: these pages belong on www.ariyalab.online, which serves them from its own (classic) branch.
+// Not redirected on purpose, because the Sonallo app still uses them:
+//   /dashboard         Stripe success_url / cancel_url; it finalizes the paid session, then goes to /app.
+//   /ugc-2/claim, /ugc-2/welcome   the pay-first claim pages the checkout API still builds URLs for.
+//   /sign-up, /sign-in, /pricing, /privacy, /terms, /support, /app/*, /tracking, /admin/*, /oauth/*.
+// Exact sources only (no :path*), so the kept sub-pages above are never caught. permanent: false so the
+// move can be undone without browsers remembering it.
+const CLASSIC_HOST = 'https://www.ariyalab.online';
+const CLASSIC_PATHS = [
+  '/ugc',
+  '/ugc-2',
+  '/ugc-3',
+  '/local-business',
+  '/local-business/pricing-plan',
+  '/real-estate',
+  '/real-estate/pricing-plan',
+  '/interior-design',
+  '/image-to-video',
+  '/history',
+  '/topup',
+  '/video/editing',
+  '/face-swap',
+  '/glow-up',
+];
+const classicRedirects = [
+  ...CLASSIC_PATHS.map((source) => ({ source, destination: `${CLASSIC_HOST}${source}`, permanent: false })),
+  { source: '/legacy-home', destination: `${CLASSIC_HOST}/`, permanent: false },
+];
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
@@ -28,6 +58,9 @@ const nextConfig = {
       '/api/story/projects/*/analyze': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
       '/api/story/projects/*/\\[action\\]': ['./node_modules/@ffmpeg-installer/linux-x64/**/*'],
     },
+  },
+  async redirects() {
+    return classicRedirects;
   },
   // OAuth discovery for the MCP connector (lib/mcp/oauth.js). Clients try
   // the bare well-known paths and the path-suffixed forms (RFC 8414 3.1,
