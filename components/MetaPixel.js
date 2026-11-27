@@ -15,12 +15,12 @@ import Script from 'next/script';
 export const META_PIXEL_ID = '26490568997297314';
 
 // This deployment's product id. The pixel above is SHARED across several
-// products (ariyalab, primehub, aibarber, primevoiceai, ...), so every browser
+// products (sonallo, ariyalab, primehub, aibarber, primevoiceai, ...), so every browser
 // conversion event is stamped with `product` — matching the server CAPI
 // custom_data (lib/meta.js META_PRODUCT) — so a Custom Conversion
-// (Purchase where product = ariyalab) can count ONLY this product's sales and
+// (Purchase where product = sonallo) can count ONLY this product's sales and
 // exclude the other sites' events. Keep in sync with lib/meta.js.
-export const META_PRODUCT = 'ariyalab';
+export const META_PRODUCT = 'sonallo';
 
 export default function MetaPixel() {
   const inline = `
