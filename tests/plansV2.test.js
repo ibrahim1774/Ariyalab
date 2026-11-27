@@ -210,6 +210,25 @@ describe('v2 offers from pricing config', () => {
 });
 
 describe('checkout', () => {
+  it('puts SONALLO on the card statement of one-time packs and explains the billing name on every session', async () => {
+    await setV2(true);
+    auth.user = newUser();
+    let res = makeRes();
+    await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { mode: 'topup', pack: 's', catalog: 'v2' } }, res);
+    expect(res.statusCode).toBe(200);
+    const topup = S.state.created.at(-1);
+    expect(topup.mode).toBe('payment');
+    expect(topup.payment_intent_data.statement_descriptor_suffix).toBe('SONALLO');
+    expect(topup.custom_text.submit.message).toBe('Sonallo is billed by Primehub. Your statement will show PRIMEHUB* SONALLO.');
+    res = makeRes();
+    await checkout({ method: 'POST', headers: { host: 'localhost:3000' }, body: { plan: 'creator' } }, res);
+    const sub = S.state.created.at(-1);
+    expect(sub.mode).toBe('subscription');
+    // Checkout takes no descriptor for subscriptions, so none is sent and the notice names the account descriptor.
+    expect(sub.payment_intent_data).toBeUndefined();
+    expect(sub.custom_text.submit.message).toBe('Sonallo is billed by Primehub. Your statement will show PRIMEHUB.');
+  });
+
   it('with billing_v2 off still sells legacy plans and refuses v2 plans', async () => {
     await setV2(false);
     auth.user = null;

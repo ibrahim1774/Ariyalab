@@ -24,6 +24,14 @@ import { signClaimNonces, verifyClaimNonces } from '../../lib/jobToken';
 // attribution cookie (ownership and claims read them).
 const RESERVED_METADATA = new Set(['supabase_user_id', 'pending_supabase_link', 'claim_ticket']);
 
+// What the buyer's card statement shows. Stripe appends the suffix to the account's
+// statement descriptor prefix (PRIMEHUB* SONALLO) for one-time payments. Checkout has no
+// per-session descriptor for subscriptions (subscription_data takes none), so a recurring
+// charge shows the account-level descriptor; the notice on the pay button says so.
+const STATEMENT_SUFFIX = 'SONALLO';
+const PAYMENT_NOTICE = 'Sonallo is billed by Primehub. Your statement will show PRIMEHUB* SONALLO.';
+const SUBSCRIPTION_NOTICE = 'Sonallo is billed by Primehub. Your statement will show PRIMEHUB.';
+
 // The origin to send the buyer back to. Stays on the host the buyer is on
 // when it is APP_URL's host or its www/apex twin, so host-only cookies (the
 // claim ticket, the auth session) are there when Stripe redirects back.
@@ -327,6 +335,8 @@ export default async function handler(req, res) {
         billing_address_collection: 'auto',
         // Ties the session to the buyer: /confirm only binds it to this user.
         client_reference_id: session.user.id,
+        payment_intent_data: { statement_descriptor_suffix: STATEMENT_SUFFIX },
+        custom_text: { submit: { message: PAYMENT_NOTICE } },
         metadata: { ...adAttr, supabase_user_id: session.user.id },
       });
       const value = (v2Pack ? v2Pack.cents : TOPUPS[pack].amountCents) / 100;
@@ -489,6 +499,7 @@ export default async function handler(req, res) {
       allow_promotion_codes: true,
       billing_address_collection: 'auto',
       ...(isAnon ? {} : { client_reference_id: session.user.id }),
+      custom_text: { submit: { message: SUBSCRIPTION_NOTICE } },
       subscription_data: {
         metadata: subMetadata,
       },
