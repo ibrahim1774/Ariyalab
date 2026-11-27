@@ -13,6 +13,7 @@ import TikTokRouteEvents from '../components/TikTokRouteEvents';
 import ClarityTracker from '../components/ClarityTracker';
 import MarketingNav from '../components/marketing/MarketingNav';
 import MarketingFooter from '../components/marketing/MarketingFooter';
+import OgTags from '../components/marketing/OgTags';
 import AppShell from '../components/app/AppShell';
 
 const MARKETING_ROUTES = new Set(['/', '/pricing', '/privacy', '/terms']);
@@ -49,6 +50,7 @@ export default function App({ Component, pageProps }) {
         </AppShell>
       ) : chrome === 'marketing' ? (
         <>
+          <OgTags />
           <MarketingNav />
           <Component {...pageProps} />
           <MarketingFooter />

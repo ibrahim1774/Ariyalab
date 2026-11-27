@@ -8,17 +8,16 @@ import HowItWorks from '../components/marketing/HowItWorks';
 import PricingSection from '../components/marketing/PricingSection';
 import Faq from '../components/marketing/Faq';
 import ClosingCta from '../components/marketing/ClosingCta';
+import OgTags, { OG_DEFAULTS } from '../components/marketing/OgTags';
 
 export default function Home() {
   return (
     <>
       <Head>
         <title>Sonallo | Animated story videos</title>
-        <meta
-          name="description"
-          content="Describe your story or start from a video you like. Get a finished, captioned animated video in minutes."
-        />
+        <meta name="description" content={OG_DEFAULTS.description} />
       </Head>
+      <OgTags />
       <main className={styles.main}>
         <Hero />
         <ProductDemo />
