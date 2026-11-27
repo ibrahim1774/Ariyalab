@@ -15,7 +15,7 @@ import MarketingNav from '../components/marketing/MarketingNav';
 import MarketingFooter from '../components/marketing/MarketingFooter';
 import AppShell from '../components/app/AppShell';
 
-const MARKETING_ROUTES = new Set(['/', '/pricing']);
+const MARKETING_ROUTES = new Set(['/', '/pricing', '/privacy', '/terms']);
 
 // Chrome by route: marketing pages, the signed-in app, or the legacy tools.
 function chromeFor(pathname) {

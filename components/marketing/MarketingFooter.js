@@ -23,6 +23,8 @@ const COLUMNS = [
     links: [
       { href: '/support', label: 'Support' },
       { href: 'mailto:support@davoxa.com', label: 'Contact' },
+      { href: '/privacy', label: 'Privacy' },
+      { href: '/terms', label: 'Terms' },
     ],
   },
 ];
