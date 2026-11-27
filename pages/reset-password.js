@@ -86,7 +86,8 @@ export default function ResetPasswordPage() {
           {state === 'expired' && (
             <>
               <div className={styles.error} role="alert">
-                This reset link has expired or was already used. Request a new one from the sign-in page.
+                This reset link didn&apos;t work. Links only work once, for one hour, and in the same browser where you
+                asked for them. Request a new one from the sign-in page and open the email on the same device.
               </div>
               <footer className={styles.footer}>
                 <Link href="/sign-in" className={styles.link}>Back to sign in</Link>

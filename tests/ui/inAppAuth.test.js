@@ -29,7 +29,7 @@ describe('sign-up inside the Facebook / Instagram app', () => {
     const renderButton = withGoogle();
     vi.spyOn(window.navigator, 'userAgent', 'get').mockReturnValue(FB_UA);
     render(<AuthModal open onClose={() => {}} initialMode="signup" />);
-    expect(await screen.findByRole('note')).toHaveTextContent("Google sign-in doesn't work inside the Facebook app. Use email, or open this page in your browser (tap ••• then Open in browser).");
+    expect(await screen.findByRole('note')).toHaveTextContent("Google sign-in doesn't work inside the Facebook, Instagram or TikTok app. Use email, or open this page in your browser (tap ••• then Open in browser).");
     expect(screen.getByLabelText('Email')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create account' })).toBeInTheDocument();
     expect(renderButton).not.toHaveBeenCalled();

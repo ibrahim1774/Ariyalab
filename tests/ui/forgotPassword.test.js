@@ -97,7 +97,7 @@ describe('/reset-password', () => {
     vi.useFakeTimers();
     render(<ResetPassword />);
     await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
-    expect(screen.getByRole('alert')).toHaveTextContent(/expired or was already used/);
+    expect(screen.getByRole('alert')).toHaveTextContent(/reset link didn.t work/);
     expect(screen.getByRole('link', { name: 'Back to sign in' })).toHaveAttribute('href', '/sign-in');
   });
 });
