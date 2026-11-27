@@ -4,6 +4,7 @@ import { useRouter } from 'next/router';
 import styles from './AuthModal.module.css';
 import { getBrowserSupabase } from '../lib/supabase';
 import { META_PRODUCT } from './MetaPixel';
+import { IN_APP_NOTICE, isMetaInAppBrowser } from '../lib/inAppBrowser';
 
 // Fire the same event to both Meta Pixel and TikTok Pixel, deduping
 // against server-side CAPI/Events-API via the shared eventId. TikTok
@@ -56,6 +57,13 @@ export default function AuthModal({
   const [busy, setBusy] = useState(null); // 'google' | 'email' | null
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  // Inside the Facebook / Instagram app Google sign-in is blocked: email goes first, no Google button.
+  // Set after mount so the server and first client render agree.
+  // null until checked, so the Google button is never started in the first render.
+  const [inApp, setInApp] = useState(null);
+  useEffect(() => {
+    setInApp(isMetaInAppBrowser(typeof navigator !== 'undefined' ? navigator.userAgent : ''));
+  }, []);
   const router = useRouter();
   const googleBtnRef = useRef(null);
 
@@ -88,7 +96,7 @@ export default function AuthModal({
   }, [lockedEmail]);
 
   useEffect(() => {
-    if (!open || !googleClientId) return undefined;
+    if (!open || !googleClientId || inApp !== false) return undefined;
 
     let cancelled = false;
     let pollId;
@@ -197,7 +205,7 @@ export default function AuthModal({
       cancelled = true;
       if (pollId) clearInterval(pollId);
     };
-  }, [open, mode, googleClientId, router, onClose, closeOnSuccess, redirectTo, isClaimFlow, isTicketClaim, lockedEmail, claimSessionId]);
+  }, [open, mode, googleClientId, inApp, router, onClose, closeOnSuccess, redirectTo, isClaimFlow, isTicketClaim, lockedEmail, claimSessionId]);
 
   if (!open) return null;
 
@@ -387,20 +395,28 @@ export default function AuthModal({
           </div>
         )}
 
-        {googleClientId ? (
-          <div
-            ref={googleBtnRef}
-            style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}
-          />
+        {inApp ? (
+          <div className={styles.notice} role="note" style={{ marginBottom: 12 }}>{IN_APP_NOTICE}</div>
+        ) : googleClientId ? (
+          <>
+            <div
+              ref={googleBtnRef}
+              style={{ display: 'flex', justifyContent: 'center', minHeight: 44 }}
+            />
+            <div className={styles.divider}>
+              <span>or</span>
+            </div>
+          </>
         ) : (
-          <div className={styles.error}>
-            Google sign-in unavailable — NEXT_PUBLIC_GOOGLE_CLIENT_ID not set.
-          </div>
+          <>
+            <div className={styles.error}>
+              Google sign-in unavailable — NEXT_PUBLIC_GOOGLE_CLIENT_ID not set.
+            </div>
+            <div className={styles.divider}>
+              <span>or</span>
+            </div>
+          </>
         )}
-
-        <div className={styles.divider}>
-          <span>or</span>
-        </div>
 
         <form className={styles.form} onSubmit={handleEmail}>
           <label className={styles.field}>
