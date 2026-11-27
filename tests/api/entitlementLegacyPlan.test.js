@@ -6,6 +6,8 @@ let ent = { tier: 'monthly', creditsRemaining: 10 };
 let entFails = false;
 let entDelay = null;
 let planImpl = null;
+let v2On = false;
+let v2Fails = false;
 const planCalls = [];
 const planCallsAtEnt = [];
 
@@ -18,6 +20,12 @@ vi.mock('../../lib/entitlement', () => ({
     if (entDelay) await entDelay;
     if (entFails) throw new Error('boom');
     return ent;
+  },
+}));
+vi.mock('../../lib/billingFlags.js', () => ({
+  isBillingV2: async () => {
+    if (v2Fails) throw new Error('config down');
+    return v2On;
   },
 }));
 vi.mock('../../lib/currentPlan.js', () => ({
@@ -43,6 +51,8 @@ beforeEach(() => {
   planCallsAtEnt.length = 0;
   entDelay = null;
   planImpl = async () => null;
+  v2On = false;
+  v2Fails = false;
 });
 afterEach(() => vi.useRealTimers());
 
@@ -115,5 +125,31 @@ describe('GET /api/entitlement legacyPlan', () => {
     const res = await get();
     expect(res.statusCode).toBe(200);
     expect(res.body).toEqual({ ...ent, legacyPlan: false });
+  });
+});
+
+describe('GET /api/entitlement classicUrl (billing v2: an old plan lives on ariyalab.online)', () => {
+  const legacy = async () => ({ plan: 'monthly', interval: 'month', legacy: true, status: 'active' });
+
+  it('is set for an old-plan customer while billing v2 is on', async () => {
+    v2On = true;
+    planImpl = legacy;
+    const res = await get();
+    expect(res.body.legacyPlan).toBe(true);
+    expect(res.body.classicUrl).toBe('https://www.ariyalab.online/');
+    expect(res.body.tier).toBe('monthly');
+  });
+
+  it('is absent while billing v2 is off, for a v2 plan, and when the flag cannot be read', async () => {
+    planImpl = legacy;
+    expect((await get()).body.classicUrl).toBeUndefined();
+    v2On = true;
+    v2Fails = true;
+    const failed = await get();
+    expect(failed.body.legacyPlan).toBe(true);
+    expect(failed.body.classicUrl).toBeUndefined();
+    v2Fails = false;
+    planImpl = async () => ({ plan: 'creator', interval: 'month', legacy: false, status: 'active' });
+    expect((await get()).body.classicUrl).toBeUndefined();
   });
 });

@@ -15,6 +15,7 @@ const S = vi.hoisted(() => {
     failCustomerUpdates: 0,
     failSessionRetrieves: 0,
     created: [], // checkout.sessions.create params
+    cancelledSubs: [], // subscriptions.cancel calls
     updates: [], // customers.update calls: { id, metadata }
     failUpdatesFor: new Map(), // customer id -> failures left
     creditWrites: new Map(), // customer id -> number of customers.update calls
@@ -93,6 +94,13 @@ const S = vi.hoisted(() => {
     },
     subscriptions: {
       retrieve: async (id) => clone(state.subs.get(id)),
+      // The one-plan guard (lib/planGuard.js) cancels a refused second plan.
+      cancel: async (id) => {
+        const x = state.subs.get(id);
+        if (x) x.status = 'canceled';
+        state.cancelledSubs.push(id);
+        return clone(x);
+      },
       // Paginated like Stripe: `limit` per page, `starting_after`, `has_more`.
       list: async ({ customer, status, limit = 10, starting_after: after }) => {
         const all = [...state.subs.values()].filter(
@@ -131,6 +139,12 @@ vi.mock('../../lib/stripe', async (importOriginal) => {
     stripe: () => S.api,
     getOrCreatePrice: async (plan) => ({ id: `price_${plan}`, lookup_key: actual.PLANS[plan].lookupKey }),
     getOrCreateTopupPrice: async (pack) => ({ id: `price_topup_${pack}`, lookup_key: actual.TOPUPS[pack].lookupKey }),
+    getOrCreateV2Price: async (offer) => ({
+      id: `price_v2_${offer.kind}`,
+      lookup_key: offer.kind === 'plan'
+        ? actual.v2PlanLookupKey(offer)
+        : actual.v2TopupLookupKey(offer),
+    }),
   };
 });
 vi.mock('../../lib/meta', () => ({ sendCapiEvent: vi.fn(async () => {}) }));
@@ -228,6 +242,14 @@ const TOPUP_S = TOPUPS.s; // 2,280 legacy video credits, $15
 const V2_TOPUP_S = Math.ceil((TOPUP_S.credits * 21) / 100); // 479
 const V2_MONTHLY = Math.ceil((PLANS.monthly.cap * 21) / 100); // 160
 
+// While billing_v2 is on, only this app's own (ariya_v2_*) prices are credited, so the fixtures sell v2 prices
+// then (same credit amounts as the converted legacy ones); with it off they sell the classic (ariyalab_*) ones.
+let flagOn = false;
+const v2TopupKey = (pack) => `ariya_v2_topup_${pack}_${TOPUPS[pack].amountCents}_${Math.ceil((TOPUPS[pack].credits * 21) / 100)}`;
+const v2MonthlyKey = `ariya_v2_starter_month_${PLANS.monthly.amountCents}_${V2_MONTHLY}`;
+const topupKeyFor = (pack) => (flagOn ? v2TopupKey(pack) : TOPUPS[pack].lookupKey);
+const monthlyKey = () => (flagOn ? v2MonthlyKey : PLANS.monthly.lookupKey);
+
 function newUser(email) {
   const id = randomUUID();
   return { id, email: email || `${id.slice(0, 8)}@example.test`, email_confirmed_at: '2026-11-01T00:00:00Z' };
@@ -253,7 +275,7 @@ function topupSession({ customer, buyer, pack = 's', created = nowS(), email, ex
     created,
     payment_intent: `pi_${id}`,
     amount_total: TOPUPS[pack].amountCents,
-    line_items: { data: [{ price: { lookup_key: TOPUPS[pack].lookupKey } }] },
+    line_items: { data: [{ price: { lookup_key: topupKeyFor(pack) } }] },
     ...extra,
   };
   S.state.sessions.set(id, s);
@@ -263,8 +285,11 @@ function subSession({ customer, metadata = {}, email = null, created = nowS(), e
   seq += 1;
   const id = `cs_test_sub_${seq}_${randomUUID().replace(/-/g, '')}`;
   const subId = `sub_${id}`;
-  const sub = { id: subId, status: 'active', current_period_start: nowS(), items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] } };
-  S.state.subs.set(subId, sub);
+  // The session's subscription is the customer's existing one when it has one (the invoice paid for it),
+  // not a second plan (the one-plan guard would refuse that under v2).
+  const existingSub = [...S.state.subs.values()].find((x) => x.customer === customer);
+  const sub = existingSub || { id: subId, status: 'active', current_period_start: nowS(), items: { data: [{ price: { lookup_key: monthlyKey() } }] } };
+  if (!existingSub) S.state.subs.set(subId, sub);
   const s = {
     id,
     object: 'checkout.session',
@@ -275,9 +300,9 @@ function subSession({ customer, metadata = {}, email = null, created = nowS(), e
     metadata,
     customer_details: { email },
     created,
-    subscription: sub,
+    subscription: existingSub || sub,
     amount_total: PLANS.monthly.amountCents,
-    line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+    line_items: { data: [{ price: { lookup_key: monthlyKey() } }] },
     ...extra,
   };
   S.state.sessions.set(id, s);
@@ -291,7 +316,7 @@ function paidInvoice({ customer, subId, reason = 'subscription_create' }) {
 }
 function newSub(customer) {
   const subId = `sub_${randomUUID().slice(0, 12)}`;
-  S.state.subs.set(subId, { id: subId, customer, status: 'active', current_period_start: nowS(), items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] } });
+  S.state.subs.set(subId, { id: subId, customer, status: 'active', current_period_start: nowS(), items: { data: [{ price: { lookup_key: monthlyKey() } }] } });
   return subId;
 }
 
@@ -360,6 +385,7 @@ const link = (userId, customerId) =>
   );
 
 async function setBillingV2(on) {
+  flagOn = Boolean(on);
   await db.query("delete from public.pricing_config where key = 'billing_v2'");
   if (on) await db.query("insert into public.pricing_config (key, value) values ('billing_v2', 'true'::jsonb)");
   _resetPricingCache();
@@ -879,7 +905,7 @@ describe('review fixes, billing_v2 off', () => {
         payment_status: 'paid',
         customer,
         subscription: structuredClone(S.state.subs.get(subId)),
-        line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+        line_items: { data: [{ price: { lookup_key: monthlyKey() } }] },
       });
       const res = await callRoute(claimTicket, {
         user: newUser(),
@@ -967,7 +993,8 @@ describe('review fixes, billing_v2 on', () => {
     const buyer = newUser();
     const customer = newCustomer();
     await link(buyer.id, customer);
-    const session = topupSession({ customer, buyer });
+    // A classic price: the flag decides whether it is ours, so an unreadable flag must retry.
+    const session = topupSession({ customer, buyer, extra: { line_items: { data: [{ price: { lookup_key: TOPUPS.s.lookupKey } }] } } });
     setPricingDb({ query: async () => { throw new Error('db down'); } });
     let res;
     try {
@@ -1214,7 +1241,7 @@ describe('review fixes round 2, billing_v2 on', () => {
     expect((await getBalance(a.id)).topup + (await getBalance(b.id)).topup).toBe(V2_TOPUP_S);
   });
 
-  it('N2: a parked first invoice lands after a returning customer claims on a new customer', async () => {
+  it('N2: a returning customer claiming a v2 plan on a new customer is refused by the one-plan guard; the parked invoice stays parked', async () => {
     await setRelinkMode('auto');
     const user = newUser();
     const old = newCustomer();
@@ -1228,9 +1255,11 @@ describe('review fixes round 2, billing_v2 on', () => {
       user,
       cookies: { ugc2_claim_sid: session.id, ugc2_claim_nonce: signClaimNonce(nonce) },
     });
-    expect(res.statusCode).toBe(200);
-    expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
-    expect(S.state.customers.get(fresh).metadata[KEY.relinkedFrom]).toBe(old);
+    // (Before the billing v2 gate this fixture used a classic price, which skipped the guard.)
+    expect(res.statusCode).toBe(409);
+    expect(res.body.error).toMatch(/^Buy the plan while signed in/);
+    expect((await getBalance(user.id)).plan).toBe(0);
+    expect(S.state.customers.get(fresh).metadata[KEY.relinkedFrom]).toBeUndefined();
     await setRelinkMode('support');
   });
 
@@ -1315,7 +1344,7 @@ const ticketSession = (customer, cookieRes) => {
     payment_status: 'paid',
     customer,
     subscription: structuredClone(S.state.subs.get(subId)),
-    line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+    line_items: { data: [{ price: { lookup_key: monthlyKey() } }] },
   });
   return { paid, cookie: cookieValue(cookieRes, 'ugc2_claim_nonce') };
 };
@@ -1370,7 +1399,7 @@ describe('review fixes round 3, billing_v2 off', () => {
       payment_status: 'paid',
       customer,
       subscription: structuredClone(S.state.subs.get(subId)),
-      line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] },
+      line_items: { data: [{ price: { lookup_key: monthlyKey() } }] },
     });
     const res = await callRoute(claimTicket, { user: newUser(), cookies: { ugc2_claim_sid: target.id, ugc2_claim_nonce: cookie } });
     expect(res.statusCode).toBe(200);
@@ -1683,7 +1712,9 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
       const session = subSession({ customer: fresh, email: user.email, metadata: { pending_supabase_link: 'true' } });
       const res = await callRoute(claim, { user, query: { session_id: session.id } });
       expect(res.statusCode).toBe(409);
-      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      // A v2 plan claim by a buyer whose account has another customer is refused first, by the one-plan guard.
+      if (v2) expect(res.body.error).toMatch(/^Buy the plan while signed in/);
+      else expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
       await expectUntouched();
     });
 
@@ -1692,7 +1723,8 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
       const { cookies } = ticketSub(fresh);
       const res = await callRoute(claimTicket, { user, cookies });
       expect(res.statusCode).toBe(409);
-      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      if (v2) expect(res.body.error).toMatch(/^Buy the plan while signed in/);
+      else expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
       await expectUntouched();
     });
 
@@ -1738,7 +1770,7 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
         const { session, cookies } = ticketSub(fresh, { email: 'paid-with-another@example.test' });
         const refused = await callRoute(claimTicket, { user, cookies });
         expect(refused.statusCode).toBe(409);
-        expect(refused.body.error).toBe(BILLING_PROFILE_MESSAGE);
+        expect(refused.body.error).toMatch(/^Buy the plan while signed in/); // the one-plan guard answers first
         await expectUntouched();
         const pending = () =>
           db.query('select claimed_by from public.credit_pending_grants where ref = $1', [`invoice:${invoice.id}`]);
@@ -1797,7 +1829,8 @@ describe.each([{ v2: false, flag: 'off' }, { v2: true, flag: 'on' }])(
       expect(checkSessionOwner(session, user, { claimNonces: [] })).toEqual({ ok: true, via: 'email' });
       const res = await callRoute(claimTicket, { user, cookies });
       expect(res.statusCode).toBe(409);
-      expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
+      if (v2) expect(res.body.error).toMatch(/^Buy the plan while signed in/);
+      else expect(res.body.error).toBe(BILLING_PROFILE_MESSAGE);
       await expectUntouched();
     });
   }
@@ -2565,7 +2598,7 @@ describe('task 6 round 2: migrated customers are granted in the ledger whatever 
     expect(mdOf(customer)[KEY.credits]).toBe('500');
   });
 
-  it('a renewal invoice after the switch-off lands in the ledger', async () => {
+  it('a classic (ariyalab_*) renewal invoice is never credited here, migrated or not', async () => {
     const { grantForInvoice } = await import('../../lib/grants.js');
     const user = newUser();
     const customer = newCustomer();
@@ -2573,8 +2606,9 @@ describe('task 6 round 2: migrated customers are granted in the ledger whatever 
     await migrate(customer, user.id);
     const subId = newSub(customer);
     const out = await grantForInvoice(paidInvoice({ customer, subId, reason: 'subscription_cycle' }));
-    expect(out.granted).toBe(true);
-    expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+    expect(out.granted).toBe(false);
+    expect(out.skipped).toBe('classic_price');
+    expect((await getBalance(user.id)).plan).toBe(0);
   });
 
   it('a refund or dispute on a migrated customer is taken back from the ledger with the flag off', async () => {
@@ -2616,5 +2650,210 @@ describe('task 6 round 2: migrated customers are granted in the ledger whatever 
     await grantForCheckoutSession(topupSession({ customer, buyer: user }), { userId: user.id });
     expect(mdOf(customer)[KEY.credits]).toBe(String(500 + TOPUP_S.credits));
     expect((await getBalance(user.id)).topup).toBe(0);
+  });
+});
+
+// =====================================================================
+// Shared Stripe account: under billing_v2 only this app's own (ariya_v2_*) prices are credited, linked or sold.
+// A classic (ariyalab_*) purchase belongs to www.ariyalab.online: acknowledged, nothing written.
+describe('billing_v2 gate: only ariya_v2_* prices (classic ariyalab_* purchases are ignored)', () => {
+  const classicTopup = (args) => topupSession({ ...args, extra: { line_items: { data: [{ price: { lookup_key: TOPUP_S.lookupKey } }] } } });
+  const classicSub = (args) => subSession({ ...args, extra: { line_items: { data: [{ price: { lookup_key: PLANS.monthly.lookupKey } }] }, ...(args.extra || {}) } });
+  const classicNewSub = (customer) => {
+    const subId = newSub(customer);
+    S.state.subs.get(subId).items.data[0].price.lookup_key = PLANS.monthly.lookupKey;
+    return subId;
+  };
+  const ledgerRows = async () => (await db.query('select count(*)::int as n from public.credit_ledger')).rows[0].n;
+  const reversalRows = async () => (await db.query('select count(*)::int as n from public.credit_reversals')).rows[0].n;
+  const pendingRows = async (customerId) =>
+    (await db.query('select count(*)::int as n from public.credit_pending_grants where stripe_customer_id = $1', [customerId])).rows[0].n;
+
+  describe('v2 on', () => {
+    beforeAll(() => setBillingV2(true));
+    afterAll(() => setBillingV2(false));
+
+    it('a classic renewal invoice writes nothing (no ledger, no parked grant, no customer metadata, no Purchase event)', async () => {
+      const { sendCapiEvent } = await import('../../lib/meta');
+      sendCapiEvent.mockClear();
+      const user = newUser();
+      const customer = newCustomer({ [KEY.credits]: '500' });
+      await link(user.id, customer);
+      const subId = classicNewSub(customer);
+      const invoice = paidInvoice({ customer, subId, reason: 'subscription_cycle' });
+      const [ledger0, pending0, updates0] = [await ledgerRows(), await pendingRows(customer), S.state.updates.length];
+      for (const type of ['invoice.payment_succeeded', 'invoice.paid']) {
+        const event = { id: `evt_${randomUUID()}`, type, data: { object: invoice } };
+        expect((await deliver(event)).statusCode).toBe(200);
+        expect(await recorded(event.id)).toBe(true); // acknowledged
+      }
+      expect(await ledgerRows()).toBe(ledger0);
+      expect(await pendingRows(customer)).toBe(pending0);
+      expect(S.state.updates.length).toBe(updates0);
+      expect(mdOf(customer)[KEY.credits]).toBe('500');
+      expect(sendCapiEvent).not.toHaveBeenCalled();
+    });
+
+    it('a classic renewal for an UNLINKED customer is not parked either', async () => {
+      const customer = newCustomer();
+      const invoice = paidInvoice({ customer, subId: classicNewSub(customer), reason: 'subscription_cycle' });
+      expect((await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } })).statusCode).toBe(200);
+      expect(await pendingRows(customer)).toBe(0);
+    });
+
+    it('a classic top-up session writes nothing and links nothing, with or without the processed-session tag', async () => {
+      const { sendCapiEvent } = await import('../../lib/meta');
+      sendCapiEvent.mockClear();
+      const buyer = newUser();
+      const customer = newCustomer({ [KEY.credits]: '500' });
+      const session = classicTopup({ customer, buyer });
+      const [ledger0, updates0] = [await ledgerRows(), S.state.updates.length];
+      const event = completedEvent(session);
+      expect((await deliver(event)).statusCode).toBe(200);
+      expect(await recorded(event.id)).toBe(true);
+      expect(await recorded(`checkout:${session.id}:done`)).toBe(false);
+      expect(await profileOf(buyer.id)).toBeFalsy(); // no profile link
+      // The same, once classic has tagged the session as processed.
+      const tagged = newCustomer({ [KEY.processedSessions]: 'whatever' });
+      const session2 = classicTopup({ customer: tagged, buyer });
+      expect((await deliver(completedEvent(session2))).statusCode).toBe(200);
+      expect(await ledgerRows()).toBe(ledger0);
+      expect(await pendingRows(customer)).toBe(0);
+      expect(await pendingRows(tagged)).toBe(0);
+      expect(S.state.updates.length).toBe(updates0);
+      expect(mdOf(customer)[KEY.credits]).toBe('500');
+      expect(sendCapiEvent).not.toHaveBeenCalled();
+    });
+
+    it('a classic subscription session is not linked to the buyer', async () => {
+      const buyer = newUser();
+      const customer = newCustomer();
+      const session = classicSub({ customer, extra: { client_reference_id: buyer.id } });
+      expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+      expect(await profileOf(buyer.id)).toBeFalsy();
+    });
+
+    it('a refund or dispute of a classic purchase claws back nothing and writes no tombstone', async () => {
+      const { clawbackForPayment } = await import('../../lib/grants.js');
+      const customer = newCustomer();
+      const topup = classicTopup({ customer, buyer: newUser() });
+      const c1 = { id: `ch_${randomUUID().slice(0, 8)}`, customer, amount: 1500, amount_refunded: 1500, payment_intent: topup.payment_intent, invoice: null };
+      S.state.charges.set(c1.id, c1);
+      const invoice = paidInvoice({ customer, subId: classicNewSub(customer), reason: 'subscription_cycle' });
+      const c2 = { id: `ch_${randomUUID().slice(0, 8)}`, customer, amount: 400, amount_refunded: 400, invoice: invoice.id };
+      S.state.charges.set(c2.id, c2);
+      const rev0 = await reversalRows();
+      expect(await clawbackForPayment({ charge: c1 })).toEqual({ skipped: 'classic_price' });
+      expect(await clawbackForPayment({ charge: c2 })).toEqual({ skipped: 'classic_price' });
+      const dispute = { id: `dp_${randomUUID().slice(0, 8)}`, charge: c1.id, amount: 1500 };
+      S.state.disputes.set(dispute.id, dispute);
+      expect(await clawbackForPayment({ dispute })).toEqual({ skipped: 'classic_price' });
+      expect(await reversalRows()).toBe(rev0);
+      // Through the webhook too: acknowledged.
+      expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: c1 } })).statusCode).toBe(200);
+      expect(await reversalRows()).toBe(rev0);
+    });
+
+    it('grantForCheckoutSession refuses a classic session even when called directly', async () => {
+      const { grantForCheckoutSession } = await import('../../lib/grants.js');
+      const buyer = newUser();
+      const customer = newCustomer();
+      await link(buyer.id, customer);
+      const out = await grantForCheckoutSession(classicTopup({ customer, buyer }), { userId: buyer.id });
+      expect(out).toMatchObject({ granted: false, skipped: 'classic_price' });
+      expect((await getBalance(buyer.id)).available).toBe(0);
+    });
+
+    it('v2 prices still grant: a v2 plan invoice renews, a v2 top-up lands, a v2 refund is clawed back', async () => {
+      const user = newUser();
+      const customer = newCustomer();
+      await link(user.id, customer);
+      const invoice = paidInvoice({ customer, subId: newSub(customer), reason: 'subscription_cycle' });
+      expect((await deliver({ id: `evt_${randomUUID()}`, type: 'invoice.payment_succeeded', data: { object: invoice } })).statusCode).toBe(200);
+      expect((await getBalance(user.id)).plan).toBe(V2_MONTHLY);
+      const session = topupSession({ customer, buyer: user });
+      expect((await deliver(completedEvent(session))).statusCode).toBe(200);
+      expect((await getBalance(user.id)).topup).toBe(V2_TOPUP_S);
+      const charge = { id: `ch_${randomUUID().slice(0, 8)}`, customer, amount: 1500, amount_refunded: 1500, payment_intent: session.payment_intent, invoice: null };
+      S.state.charges.set(charge.id, charge);
+      expect((await deliver({ id: `evt_${randomUUID()}`, type: 'charge.refunded', data: { object: charge } })).statusCode).toBe(200);
+      expect((await getBalance(user.id)).topup).toBe(0);
+    });
+
+    it('/confirm, /claim and /claim-ticket refuse a classic session: 409 CLASSIC_PRICE, nothing linked or granted', async () => {
+      const buyer = newUser();
+      const customer = newCustomer({ [KEY.credits]: '500' });
+      const top = classicTopup({ customer, buyer });
+      const confirmed = await confirmAs(buyer, top.id);
+      expect(confirmed.statusCode).toBe(409);
+      expect(confirmed.body).toMatchObject({ code: 'CLASSIC_PRICE', classicUrl: 'https://www.ariyalab.online/' });
+
+      const claimer = newUser();
+      const subCustomer = newCustomer();
+      const sub = classicSub({ customer: subCustomer, email: claimer.email, metadata: { pending_supabase_link: 'true' } });
+      const claimed = await callRoute(claim, { user: claimer, query: { session_id: sub.id } });
+      expect(claimed.statusCode).toBe(409);
+      expect(claimed.body.code).toBe('CLASSIC_PRICE');
+
+      const nonce = 'cp-' + randomUUID();
+      const ticketed = classicSub({ customer: subCustomer, metadata: { pending_supabase_link: 'true', claim_ticket: hashClaimTicket(nonce) } });
+      const viaTicket = await callRoute(claimTicket, { user: claimer, cookies: ticketCookies(ticketed, nonce) });
+      expect(viaTicket.statusCode).toBe(409);
+      expect(viaTicket.body.code).toBe('CLASSIC_PRICE');
+
+      expect(await profileOf(buyer.id)).toBeFalsy();
+      expect(await profileOf(claimer.id)).toBeFalsy();
+      expect((await getBalance(buyer.id)).available).toBe(0);
+      expect(mdOf(customer)[KEY.credits]).toBe('500');
+      expect(await recorded(`checkout:${top.id}:done`)).toBe(false);
+    });
+
+    it('/api/checkout refuses every legacy pack (image packs included) with a clear 400; v2 packs still sell', async () => {
+      const user = newUser();
+      for (const pack of ['image-s', 'image-m', 'image-l']) {
+        const res = await callCheckout({ user, body: { mode: 'topup', pack } });
+        expect(res.statusCode).toBe(400);
+        expect(res.body.error).toMatch(/ariyalab\.online/);
+      }
+      const before = S.state.created.length;
+      const ok = await callCheckout({ user, body: { mode: 'topup', pack: 's', catalog: 'v2' } });
+      expect(ok.statusCode).toBe(200);
+      expect(S.state.created.length).toBe(before + 1);
+    });
+
+    it('/api/checkout: a classic subscriber who tries to buy a v2 plan is pointed to ariyalab.online (409 HAS_PLAN)', async () => {
+      const user = newUser();
+      const customer = newCustomer({ supabase_user_id: user.id }, user.email);
+      await link(user.id, customer);
+      classicNewSub(customer);
+      const res = await callCheckout({ user, body: { plan: 'starter', interval: 'month' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.body).toMatchObject({ code: 'HAS_PLAN', classicUrl: 'https://www.ariyalab.online/' });
+      expect(res.body.error).toMatch(/ariyalab\.online/);
+    });
+
+    it('/api/checkout: a v2 subscriber gets the plain HAS_PLAN message', async () => {
+      const user = newUser();
+      const customer = newCustomer({ supabase_user_id: user.id }, user.email);
+      await link(user.id, customer);
+      newSub(customer); // a v2 plan (flag on fixtures)
+      const res = await callCheckout({ user, body: { plan: 'starter', interval: 'month' } });
+      expect(res.statusCode).toBe(409);
+      expect(res.body.code).toBe('HAS_PLAN');
+      expect(res.body.classicUrl).toBeUndefined();
+    });
+  });
+
+  describe('v2 off (unchanged)', () => {
+    beforeAll(() => setBillingV2(false));
+
+    it('a classic top-up is still credited by the confirm path and a classic session is not refused', async () => {
+      const buyer = newUser();
+      const customer = newCustomer();
+      const session = classicTopup({ customer, buyer });
+      const res = await confirmAs(buyer, session.id);
+      expect(res.statusCode).toBe(200);
+      expect(legacyCredits(customer)).toBe(TOPUP_S.credits);
+    });
   });
 });

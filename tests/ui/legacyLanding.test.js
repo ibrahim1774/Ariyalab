@@ -275,3 +275,29 @@ describe('round 1: one request, sessionStorage flag, no flash', () => {
     spy3.mockRestore();
   });
 });
+
+describe('billing v2: an old-plan customer is sent to ariyalab.online', () => {
+  const CLASSIC = 'https://www.ariyalab.online/';
+
+  it('/app home shows the notice with a link instead of redirecting to /legacy-home', async () => {
+    stubFetch({ tier: 'monthly', legacyPlan: true, classicUrl: CLASSIC });
+    render(<AppHome />);
+    expect(await screen.findByText('Your Ariya Lab plan lives on ariyalab.online')).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Go to ariyalab.online' })).toHaveAttribute('href', CLASSIC);
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it('the header link points at ariyalab.online instead of /legacy-home', async () => {
+    stubFetch({ tier: 'monthly', legacyPlan: true, classicUrl: CLASSIC, creditsRemaining: 0 });
+    render(<AppShell><p>x</p></AppShell>);
+    const link = await screen.findByRole('link', { name: 'Your plan is on ariyalab.online' });
+    expect(link).toHaveAttribute('href', CLASSIC);
+    expect(screen.queryByText('Classic tools')).toBeNull();
+  });
+
+  it('without classicUrl (billing v2 off) nothing changes: redirect to /legacy-home', async () => {
+    stubFetch({ tier: 'monthly', legacyPlan: true });
+    render(<AppHome />);
+    await waitFor(() => expect(router.replace).toHaveBeenCalledWith('/legacy-home'));
+  });
+});

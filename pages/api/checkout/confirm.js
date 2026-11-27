@@ -14,6 +14,8 @@ import {
   GrantInProgressError,
   CLAIM_NONCE_COOKIE,
   claimNoncesFromCookie,
+  isClassicPriceUnderV2,
+  CLASSIC_PRICE_REFUSAL,
 } from '../../../lib/grants';
 
 /*
@@ -91,6 +93,8 @@ export default async function handler(req, res) {
     if (!plan && !topup) {
       return res.status(400).json({ error: 'This checkout is not for an Sonallo plan or pack.' });
     }
+    // Billing v2: a classic (ariyalab_*) session is www.ariyalab.online's. Nothing is linked or granted here.
+    if (await isClassicPriceUnderV2(price)) return res.status(409).json(CLASSIC_PRICE_REFUSAL);
 
     // One plan per account (billing v2): a second plan bought at the same time
     // (another tab) is cancelled and refunded before anything is linked.

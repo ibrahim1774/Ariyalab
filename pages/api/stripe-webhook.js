@@ -8,6 +8,7 @@ import {
   grantForCheckoutSession,
   grantForInvoice,
   clawbackForPayment,
+  isV2Price,
   syncSubscription,
   recordStripeEvent,
   isStripeEventRecorded,
@@ -135,6 +136,8 @@ async function handleRefundOrDispute(payment) {
   const id = payment.charge?.id || payment.dispute?.id;
   if (result.skipped === 'legacy') {
     console.info('[stripe-webhook] refund/dispute acknowledged (billing_v2 off)', id);
+  } else if (result.skipped === 'classic_price') {
+    console.info('[stripe-webhook] skipped: classic_price', id);
   } else {
     console.info('[stripe-webhook] refund/dispute clawback', id, JSON.stringify(result));
   }
@@ -166,6 +169,14 @@ async function handleInvoicePaymentSucceeded(eventInvoice, req, { purchase = tru
   // Skip silently so we don't write to namespaced metadata or fire
   // CAPI for someone else's purchase.
   if (!plan) return;
+
+  // Shared Stripe account: under billing_v2 this app handles only its own (ariya_v2_*) prices. A classic
+  // (ariyalab_*) renewal belongs to www.ariyalab.online: acknowledge it and write nothing (no ledger, no
+  // customer metadata, no CAPI).
+  if (!isV2Price(price) && (await isBillingV2Strict())) {
+    console.info('[stripe-webhook] skipped: classic_price', invoice.id);
+    return;
+  }
 
   // Credits (billing_v2 only; the legacy path rolls plan credits over
   // lazily in lib/entitlement.js). Includes the first invoice.
@@ -262,6 +273,12 @@ async function handleCheckoutSessionCompleted(checkoutSession, req) {
   const topup = plan ? null : topupFromPrice(price);
   // Not this app's price (haelabs): write nothing.
   if (!plan && !topup) return;
+  // Under billing_v2 only this app's own (ariya_v2_*) prices: a classic (ariyalab_*) session belongs to
+  // www.ariyalab.online. Acknowledge and write nothing (no grant, no profile link, no CAPI).
+  if (!isV2Price(price) && (await isBillingV2Strict())) {
+    console.info('[stripe-webhook] skipped: classic_price', fullSession.id);
+    return;
+  }
 
   if (fullSession.mode === 'subscription') {
     // Legacy subscriptions are seeded by /confirm or a claim route (they

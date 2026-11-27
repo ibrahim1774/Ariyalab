@@ -16,6 +16,8 @@ import {
   CLAIM_NONCE_COOKIE,
   claimNoncesFromCookie,
   claimCookieWithoutSession,
+  isClassicPriceUnderV2,
+  CLASSIC_PRICE_REFUSAL,
 } from '../../../lib/grants';
 
 /*
@@ -136,6 +138,8 @@ export default async function handler(req, res) {
     if (!plan) {
       return res.status(400).json({ error: 'Session is not a subscription.' });
     }
+    // Billing v2: a classic (ariyalab_*) session is www.ariyalab.online's. Nothing is linked or granted here.
+    if (await isClassicPriceUnderV2(price)) return res.status(409).json(CLASSIC_PRICE_REFUSAL);
 
 
     // The paid customer already belongs to another account: refused before

@@ -17,7 +17,7 @@ import { getUserFromRequest, getSupabaseAdmin } from '../../lib/supabaseServer';
 import { sendCapiEvent } from '../../lib/meta';
 import { nsEventId } from '../../lib/metaKeys';
 import { linkStripeCustomerToProfile, CustomerLinkedElsewhereError } from '../../lib/entitlement';
-import { CLAIM_NONCE_COOKIE, hashClaimTicket, usersForCustomer } from '../../lib/grants';
+import { CLAIM_NONCE_COOKIE, hashClaimTicket, usersForCustomer, isV2Price, CLASSIC_URL } from '../../lib/grants';
 import { signClaimNonces, verifyClaimNonces } from '../../lib/jobToken';
 
 // Session metadata keys only the server sets; never taken from the
@@ -184,13 +184,22 @@ async function findStripeCustomerForUser({ admin, userId, email }) {
   return customerId;
 }
 
-/** True when the customer has an active or trialing subscription to one of this app's prices. */
-async function hasOurSubscription(customerId) {
+/**
+ * The customer's live subscription to one of this app's prices: 'v2' (a Sonallo plan), 'classic' (an old
+ * ariyalab_* plan, which lives on www.ariyalab.online), or null.
+ */
+async function ourSubscriptionKind(customerId) {
+  let found = null;
   for (const status of ['active', 'trialing', 'past_due']) {
     const list = await stripe().subscriptions.list({ customer: customerId, status, limit: 20, expand: ['data.items.data.price'] });
-    if ((list?.data || []).some((sub) => planFromPrice(sub.items?.data?.[0]?.price))) return true;
+    for (const sub of list?.data || []) {
+      const price = sub.items?.data?.[0]?.price;
+      if (!planFromPrice(price)) continue;
+      if (isV2Price(price)) return 'v2';
+      found = 'classic';
+    }
   }
-  return false;
+  return found;
 }
 
 /*
@@ -280,8 +289,14 @@ export default async function handler(req, res) {
         return res.status(409).json({ error: 'Prices have changed. Reload the page and try again.', code: 'RELOAD' });
       }
       const legacyPack = typeof pack === 'string' && Object.hasOwn(TOPUPS, pack) ? TOPUPS[pack] : null;
-      if (!v2Pack && (!legacyPack || (v2 && legacyPack.kind === 'video'))) {
-        return res.status(400).json({ error: 'Invalid top-up pack.' });
+      // Under billing_v2 every legacy (ariyalab_*) pack is refused, image packs included: they are www.ariyalab.online's
+      // to sell and credit. Only v2 offers sell here.
+      if (!v2Pack && (!legacyPack || v2)) {
+        return res.status(400).json({
+          error: legacyPack
+            ? 'That pack is not sold here. Ariya Lab packs are sold on https://www.ariyalab.online/.'
+            : 'Invalid top-up pack.',
+        });
       }
       const price = v2Pack
         ? await getOrCreateV2Price({ kind: 'topup', pack, amountCents: v2Pack.cents, credits: v2Pack.credits })
@@ -453,10 +468,14 @@ export default async function handler(req, res) {
 
     // One plan per customer: a second subscription would bill twice. Plan
     // changes go through the Stripe customer portal (docs/go-live.md).
-    if (v2Plan && subCustomerId && (await hasOurSubscription(subCustomerId))) {
+    const existingPlan = v2Plan && subCustomerId ? await ourSubscriptionKind(subCustomerId) : null;
+    if (existingPlan) {
       return res.status(409).json({
-        error: 'You already have a plan. To change it, use Manage billing or contact support.',
+        error: existingPlan === 'classic'
+          ? 'Your Ariya Lab plan lives on ariyalab.online. Manage or change it there: https://www.ariyalab.online/'
+          : 'You already have a plan. To change it, use Manage billing or contact support.',
         code: 'HAS_PLAN',
+        ...(existingPlan === 'classic' ? { classicUrl: CLASSIC_URL } : {}),
       });
     }
 

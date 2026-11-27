@@ -2,6 +2,10 @@ import { getUserFromRequest } from '../../lib/supabaseServer';
 import { getEntitlement } from '../../lib/entitlement';
 import { currentPlanFor } from '../../lib/currentPlan.js';
 import { planWithin } from '../../lib/planWait.js';
+import { isBillingV2 } from '../../lib/billingFlags.js';
+
+// Under billing v2 an old-plan customer's plan, credits and tools live on the classic site.
+const CLASSIC_URL = 'https://www.ariyalab.online/';
 
 const PLAN_WAIT_MS = 1500;
 
@@ -37,7 +41,10 @@ export default async function handler(req, res) {
   const legacyLookup = startLegacyLookup(session.user.id);
   try {
     const ent = await getEntitlement({ supabase: session.supabase, userId: session.user.id, user: session.user });
-    return res.status(200).json({ ...ent, legacyPlan: !(ent?.isAdmin || ent?.tier === 'admin') && (await legacyLookup) });
+    const legacyPlan = !(ent?.isAdmin || ent?.tier === 'admin') && (await legacyLookup);
+    // Only for an old-plan customer; a failed flag read just leaves it out (never touches the entitlement).
+    const classicUrl = legacyPlan && (await isBillingV2().catch(() => false)) ? CLASSIC_URL : undefined;
+    return res.status(200).json({ ...ent, legacyPlan, ...(classicUrl ? { classicUrl } : {}) });
   } catch (err) {
     return res.status(200).json({
       tier: 'none',

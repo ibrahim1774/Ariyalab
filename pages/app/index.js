@@ -17,7 +17,7 @@ export default function AppHome() {
   // Customers on an old plan land on the classic Image to Video page instead, unless they asked for the story maker
   // (?maker=1) or already chose it in this tab. Only this home page ever redirects; /legacy-home never sends anyone back.
   // Nothing but the loading line shows until the plan is known (at most 1.5 s, then the story maker shows).
-  const { loaded, legacyPlan } = useLegacyPlan();
+  const { loaded, legacyPlan, classicUrl } = useLegacyPlan();
   const [gate, setGate] = useState('check'); // 'check' | 'open'
   const gateRef = useRef('check');
   const open = () => { gateRef.current = 'open'; setGate('open'); };
@@ -29,7 +29,8 @@ export default function AppHome() {
   }, []);
   useEffect(() => {
     if (!loaded || gateRef.current !== 'check') return;
-    if (legacyPlan) router.replace('/legacy-home');
+    if (legacyPlan && classicUrl) { gateRef.current = 'classic'; setGate('classic'); } // billing v2: the plan lives on the classic site
+    else if (legacyPlan) router.replace('/legacy-home');
     else open();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, legacyPlan]);
@@ -62,7 +63,13 @@ export default function AppHome() {
           <Button href="/app/new">New video</Button>
         </div>
 
-        {gate === 'check' ? (
+        {gate === 'classic' ? (
+          <Card className={styles.empty} data-testid="classic-notice">
+            <h2>Your Ariya Lab plan lives on ariyalab.online</h2>
+            <p>Your plan and credits are on the Ariya Lab site. Sonallo has its own plans.</p>
+            <Button href={classicUrl}>Go to ariyalab.online</Button>
+          </Card>
+        ) : gate === 'check' ? (
           <p className={styles.note}>Loading your projects…</p>
         ) : projects === null ? (
           <p className={styles.note}>Loading your projects…</p>

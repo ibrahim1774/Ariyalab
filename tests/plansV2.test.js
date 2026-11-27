@@ -299,16 +299,15 @@ describe('invoice grants (billing_v2)', () => {
     expect((await getBalance(user.id)).plan).toBe(2600);
   });
 
-  it('a legacy subscriber renewal grants ceil(legacyCredits x 21 / 100)', async () => {
+  it('a classic (ariyalab_*) renewal is acknowledged and credits nothing here (www.ariyalab.online credits it)', async () => {
     await setV2(true);
     const user = newUser();
     const customer = await linkedCustomer(user);
     const sub = newSub(customer, PLANS.pro.lookupKey);
     const inv = paidInvoice(customer, sub, 'subscription_cycle');
     expect((await deliver(invoiceEvent(inv))).statusCode).toBe(200);
-    const rows = await ledger(user.id);
-    expect(rows[0]).toMatchObject({ op: 'renew', amount: Math.ceil((PLANS.pro.cap * 21) / 100) });
-    expect(rows[0].amount).toBe(479);
+    expect(await ledger(user.id)).toHaveLength(0);
+    expect((await getBalance(user.id)).available).toBe(0);
   });
 
   it('a v2 top-up grants its own credits (never the 21% legacy conversion)', async () => {

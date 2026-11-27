@@ -20,7 +20,7 @@ const NAV = [
 /** Signed-in chrome: left sidebar, credit balance top right, page content in the main area. */
 export default function AppShell({ children }) {
   const { pathname, events } = useRouter();
-  const { legacyPlan } = useLegacyPlan();
+  const { legacyPlan, classicUrl } = useLegacyPlan();
   const activeRef = useRef(null);
   // On a phone the nav is a horizontal strip: bring the current tab into view.
   useEffect(() => {
@@ -60,7 +60,9 @@ export default function AppShell({ children }) {
       <div className={styles.column}>
         <header className={styles.topbar}>
           <CreditBadge />
-          {legacyPlan && <Link href="/legacy-home" className={styles.classicLink}>Classic tools</Link>}
+          {legacyPlan && (classicUrl
+            ? <a href={classicUrl} className={styles.classicLink}>Your plan is on ariyalab.online</a>
+            : <Link href="/legacy-home" className={styles.classicLink}>Classic tools</Link>)}
           <SignOutButton />
         </header>
         <main className={styles.main}>{children}</main>
