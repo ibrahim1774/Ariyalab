@@ -55,6 +55,7 @@ export default function AuthModal({
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(null); // 'google' | 'email' | null
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   const router = useRouter();
   const googleBtnRef = useRef(null);
 
@@ -280,6 +281,33 @@ export default function AuthModal({
     }
   };
 
+  // Emails a reset link; the link lands on /reset-password, which signs the visitor in with a
+  // recovery session and asks for the new password. The reply is the same whether or not the
+  // address has an account (Supabase does not say), so nothing here confirms one.
+  const handleForgot = async () => {
+    if (busy) return;
+    setError('');
+    setNotice('');
+    if (!email.trim()) {
+      setError('Type your email above first, then tap Forgot password again.');
+      return;
+    }
+    setBusy('reset');
+    try {
+      const supabase = getBrowserSupabase();
+      if (!supabase) throw new Error('Auth not configured. Contact support.');
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (err) throw err;
+      setNotice(`If ${email.trim()} has an account, we have sent a link to reset the password. Check your inbox and spam folder.`);
+    } catch (err) {
+      setError(err.message || 'We could not send the reset email. Please try again.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   return (
     <div className={styles.backdrop} onClick={onClose} role="presentation">
       <div
@@ -400,6 +428,12 @@ export default function AuthModal({
               className={styles.input}
             />
           </label>
+          {mode === 'signin' && !isClaimFlow && (
+            <button type="button" className={styles.link} onClick={handleForgot} disabled={busy !== null} style={{ alignSelf: 'flex-start' }}>
+              {busy === 'reset' ? 'Sending…' : 'Forgot password?'}
+            </button>
+          )}
+          {notice && <div className={styles.notice} role="status">{notice}</div>}
           {error && <div className={styles.error}>{error}</div>}
           <button type="submit" className={styles.submitBtn} disabled={busy !== null}>
             {busy === 'email'
